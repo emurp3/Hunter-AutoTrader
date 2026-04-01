@@ -1,0 +1,93 @@
+[
+  {
+    "id": "seed-local-wholesale-01",
+    "description": "Wholesale a Facebook Marketplace gaming PC bundle by buying underpriced local listings and reselling as tuned starter rigs.",
+    "estimated_profit": 420,
+    "currency": "USD",
+    "confidence": 0.78,
+    "next_action": "source three seller conversations and validate resale comps tonight",
+    "category": "local-flip",
+    "source": "hunter_seed",
+    "url": "https://www.facebook.com/marketplace/",
+    "timestamp": "2026-03-28T12:00:00Z",
+    "notes": "Focus on complete desktop bundles with monitor included. Favor same-day pickup radius under 30 miles."
+  },
+  {
+    "id": "seed-liquidation-02",
+    "description": "Buy small electronics liquidation lots from regional auction houses and split profitable items into individual eBay listings.",
+    "estimated_profit": 560,
+    "currency": "USD",
+    "confidence": 0.74,
+    "next_action": "screen two auction catalogs for lots with sold-price comps above 2.2x landed cost",
+    "category": "resale",
+    "source": "hunter_seed",
+    "url": "https://www.ebay.com/",
+    "timestamp": "2026-03-28T12:05:00Z",
+    "notes": "Prioritize branded accessories, calculators, graphing devices, and open-box peripherals."
+  },
+  {
+    "id": "seed-leadgen-03",
+    "description": "Launch a simple Google Maps lead list service for mobile detailers and landscapers needing fresh local prospects every week.",
+    "estimated_profit": 300,
+    "currency": "USD",
+    "confidence": 0.81,
+    "next_action": "package a 50-lead pilot offer and outreach to ten operators with Loom proof",
+    "category": "lead-generation",
+    "source": "hunter_seed",
+    "url": "https://www.google.com/maps",
+    "timestamp": "2026-03-28T12:10:00Z",
+    "notes": "Use niche-specific filters, include owner contact attempts, and sell on turnaround speed."
+  },
+  {
+    "id": "seed-content-repack-04",
+    "description": "Repackage public-domain survival manuals and checklists into a premium printable field binder sold through Etsy and Gumroad.",
+    "estimated_profit": 185,
+    "currency": "USD",
+    "confidence": 0.69,
+    "next_action": "assemble a 20-page prototype pack and validate keywords against Etsy demand",
+    "category": "digital-product",
+    "source": "hunter_seed",
+    "url": "https://www.etsy.com/",
+    "timestamp": "2026-03-28T12:15:00Z",
+    "notes": "Position as a clean tactical planner bundle with printable inserts and checklists."
+  },
+  {
+    "id": "seed-b2b-scrape-05",
+    "description": "Sell cleaned supplier and competitor intelligence sheets to local contractors entering adjacent service lines.",
+    "estimated_profit": 260,
+    "currency": "USD",
+    "confidence": 0.72,
+    "next_action": "build one sample intelligence packet for roofers adding gutter services",
+    "category": "research-service",
+    "source": "hunter_seed",
+    "url": "https://www.google.com/search",
+    "timestamp": "2026-03-28T12:20:00Z",
+    "notes": "Deliver vendor lists, local ad density, pricing snapshots, and contact targets."
+  },
+  {
+    "id": "seed-renewal-arbitrage-06",
+    "description": "Offer recurring website plugin and domain renewal audits for small agencies that inherited neglected client stacks.",
+    "estimated_profit": 340,
+    "currency": "USD",
+    "confidence": 0.76,
+    "next_action": "identify five agencies with stale footer years and pitch a flat-fee renewal audit",
+    "category": "service-retainer",
+    "source": "hunter_seed",
+    "url": "https://www.linkedin.com/",
+    "timestamp": "2026-03-28T12:25:00Z",
+    "notes": "Target shops with 10-40 clients where silent renewals and broken subscriptions create easy savings."
+  },
+  {
+    "id": "seed-toolkit-bundle-07",
+    "description": "Bundle AI prompt templates, intake scripts, and SOPs for niche sales reps into a quick-start enablement kit.",
+    "estimated_profit": 225,
+    "currency": "USD",
+    "confidence": 0.71,
+    "next_action": "draft the first outbound sales rep toolkit and test pricing with cold outreach operators",
+    "category": "digital-product",
+    "source": "hunter_seed",
+    "url": "https://www.gumroad.com/",
+    "timestamp": "2026-03-28T12:30:00Z",
+    "notes": "Aim for a low-friction one-time sale with optional customization upsell."
+  }
+]

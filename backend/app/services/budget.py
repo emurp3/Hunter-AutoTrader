@@ -1,0 +1,718 @@
+"""
+Capital and allocation service for Hunter's rolling bankroll model.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
+
+from sqlmodel import Session, select
+
+from app.config import (
+    APPROVAL_REQUIRED_OVER,
+    BUDGET_STRICT_MODE,
+    FLIP_TARGET_MULTIPLIER,
+    MAX_ALLOCATION_PER_OPPORTUNITY,
+    WEEKLY_BUDGET,
+)
+from app.models.action_packet import ActionPacket, PacketStatus
+from app.models.budget import (
+    AllocationCategory,
+    AllocationStatus,
+    BankrollLedgerEntry,
+    BankrollLedgerEntryType,
+    BudgetAllocation,
+    BudgetOutcome,
+    BudgetStatus,
+    ManualCapitalInjectionCreate,
+    WeeklyBudget,
+)
+from app.models.income_source import IncomeSource, SourceStatus
+
+EVALUATION_DAYS = 30
+
+
+def get_open_budget(session: Session) -> Optional[WeeklyBudget]:
+    bankroll = session.exec(
+        select(WeeklyBudget)
+        .where(WeeklyBudget.status == BudgetStatus.open)
+        .order_by(WeeklyBudget.evaluation_start_date.desc())
+    ).first()
+    if bankroll:
+        sync_bankroll(session, bankroll)
+    return bankroll
+
+
+def ensure_bankroll(session: Session, starting_bankroll: Optional[float] = None, notes: Optional[str] = None) -> WeeklyBudget:
+    existing = get_open_budget(session)
+    if existing:
+        return existing
+    return open_weekly_budget(session, starting_bankroll, notes)
+
+
+def get_allocations_for_budget(session: Session, weekly_budget_id: int) -> list[BudgetAllocation]:
+    return list(
+        session.exec(
+            select(BudgetAllocation)
+            .where(BudgetAllocation.weekly_budget_id == weekly_budget_id)
+            .order_by(BudgetAllocation.created_at.desc())
+        ).all()
+    )
+
+
+def get_active_allocation_for_source(session: Session, source_id: str) -> Optional[BudgetAllocation]:
+    return session.exec(
+        select(BudgetAllocation)
+        .where(
+            BudgetAllocation.source_id == source_id,
+            BudgetAllocation.status.in_([AllocationStatus.planned, AllocationStatus.active]),
+        )
+        .order_by(BudgetAllocation.created_at.desc())
+    ).first()
+
+
+def get_outcomes_for_allocation(session: Session, allocation_id: int) -> list[BudgetOutcome]:
+    return list(
+        session.exec(
+            select(BudgetOutcome).where(BudgetOutcome.allocation_id == allocation_id).order_by(BudgetOutcome.recorded_at.desc())
+        ).all()
+    )
+
+
+def get_ledger_entries(session: Session, weekly_budget_id: int, limit: int = 100) -> list[BankrollLedgerEntry]:
+    return list(
+        session.exec(
+            select(BankrollLedgerEntry)
+            .where(BankrollLedgerEntry.weekly_budget_id == weekly_budget_id)
+            .order_by(BankrollLedgerEntry.created_at.desc())
+            .limit(limit)
+        ).all()
+    )
+
+
+def open_weekly_budget(
+    session: Session,
+    starting_budget: Optional[float] = None,
+    notes: Optional[str] = None,
+) -> WeeklyBudget:
+    existing = session.exec(select(WeeklyBudget).where(WeeklyBudget.status == BudgetStatus.open)).first()
+    if existing:
+        raise ValueError(
+            f"An active bankroll already exists (id={existing.id}, evaluation_start={existing.evaluation_start_date})."
+        )
+
+    amount = starting_budget if starting_budget is not None else WEEKLY_BUDGET
+    today = date.today()
+    bankroll = WeeklyBudget(
+        week_start_date=today,
+        week_end_date=today + timedelta(days=EVALUATION_DAYS - 1),
+        starting_budget=amount,
+        remaining_budget=amount,
+        realized_return=0.0,
+        notes=notes or "Initial bankroll activated",
+        starting_bankroll=amount,
+        current_bankroll=amount,
+        evaluation_start_date=today,
+        evaluation_end_date=today + timedelta(days=EVALUATION_DAYS - 1),
+        capital_match_eligible=False,
+        capital_match_amount=0.0,
+        manual_injection_total=0.0,
+    )
+    session.add(bankroll)
+    session.commit()
+    session.refresh(bankroll)
+    return bankroll
+
+
+def recalc_realized_return(session: Session, budget: WeeklyBudget) -> float:
+    allocations = get_allocations_for_budget(session, budget.id)
+    total = 0.0
+    for allocation in allocations:
+        total += sum(outcome.net_result for outcome in get_outcomes_for_allocation(session, allocation.id))
+    return round(total, 2)
+
+
+def recalc_committed_capital(session: Session, budget: WeeklyBudget) -> float:
+    allocations = get_allocations_for_budget(session, budget.id)
+    committed = sum(
+        allocation.amount_allocated
+        for allocation in allocations
+        if allocation.status in (AllocationStatus.planned, AllocationStatus.active)
+    )
+    return round(committed, 2)
+
+
+def recalc_unrealized_exposure(session: Session, budget: WeeklyBudget) -> float:
+    allocations = get_allocations_for_budget(session, budget.id)
+    exposure = sum(
+        allocation.amount_allocated
+        for allocation in allocations
+        if allocation.status == AllocationStatus.active
+    )
+    return round(exposure, 2)
+
+
+def recalc_current_bankroll(session: Session, budget: WeeklyBudget) -> float:
+    realized_profit = recalc_realized_return(session, budget)
+    return round(budget.starting_bankroll + (budget.manual_injection_total or 0.0) + realized_profit, 2)
+
+
+def recalc_remaining(session: Session, budget: WeeklyBudget) -> float:
+    current_bankroll = recalc_current_bankroll(session, budget)
+    committed = recalc_committed_capital(session, budget)
+    return round(max(0.0, current_bankroll - committed), 2)
+
+
+def sync_bankroll(session: Session, budget: WeeklyBudget) -> WeeklyBudget:
+    if budget.evaluation_start_date and (
+        not budget.evaluation_end_date
+        or (budget.evaluation_end_date - budget.evaluation_start_date).days < (EVALUATION_DAYS - 1)
+    ):
+        budget.evaluation_end_date = budget.evaluation_start_date + timedelta(days=EVALUATION_DAYS - 1)
+
+    realized_profit = recalc_realized_return(session, budget)
+    current_bankroll = round(budget.starting_bankroll + (budget.manual_injection_total or 0.0) + realized_profit, 2)
+    committed_capital = recalc_committed_capital(session, budget)
+    available_capital = round(max(0.0, current_bankroll - committed_capital), 2)
+
+    budget.realized_return = realized_profit
+    budget.current_bankroll = current_bankroll
+    budget.remaining_budget = available_capital
+    budget.starting_budget = budget.starting_bankroll
+    budget.week_start_date = budget.evaluation_start_date
+    budget.week_end_date = budget.evaluation_end_date
+
+    review = _compute_month_end_review(budget)
+    budget.capital_match_eligible = review["capital_match_eligible"]
+    budget.capital_match_amount = review["recommended_match_amount"]
+
+    session.add(budget)
+    session.commit()
+    session.refresh(budget)
+    return budget
+
+
+def is_flipped(budget: WeeklyBudget) -> bool:
+    return budget.current_bankroll >= round(budget.starting_bankroll * FLIP_TARGET_MULTIPLIER, 2)
+
+
+def next_budget_recommendation(session: Session, budget: WeeklyBudget) -> dict:
+    review = get_month_end_review(session, budget)
+    suggested = review["next_cycle_bankroll_if_matched"] if review["capital_match_eligible"] else review["ending_bankroll"]
+    return {
+        "suggested_budget": round(suggested, 2),
+        "rationale": (
+            "Commander match eligible based on positive bankroll growth."
+            if review["capital_match_eligible"]
+            else "No capital match recommended yet. Keep compounding current bankroll."
+        ),
+        "based_on_growth_pct": review["growth_pct"],
+    }
+
+
+def get_month_end_review(session: Session, budget: WeeklyBudget) -> dict:
+    sync_bankroll(session, budget)
+    return _compute_month_end_review(budget)
+
+
+def inject_manual_capital(session: Session, payload: ManualCapitalInjectionCreate) -> dict:
+    bankroll = ensure_bankroll(session)
+    bankroll.manual_injection_total = round((bankroll.manual_injection_total or 0.0) + payload.amount, 2)
+    session.add(bankroll)
+    session.commit()
+    sync_bankroll(session, bankroll)
+    _log_bankroll_entry(
+        session,
+        bankroll,
+        entry_type=BankrollLedgerEntryType.manual_injection,
+        amount_delta_current=payload.amount,
+        amount_delta_committed=0.0,
+        amount_delta_available=payload.amount,
+        notes=payload.notes or "Manual capital injection",
+    )
+    return {
+        "injected": payload.amount,
+        "current_bankroll": bankroll.current_bankroll,
+        "available_capital": bankroll.remaining_budget,
+    }
+
+
+def recommend_allocation(source_id: str, session: Session) -> dict:
+    source = session.exec(select(IncomeSource).where(IncomeSource.source_id == source_id)).first()
+    if not source:
+        raise ValueError(f"Income source not found: {source_id}")
+
+    bankroll = ensure_bankroll(session)
+    existing = get_active_allocation_for_source(session, source_id)
+    if existing:
+        return {
+            "source_id": source_id,
+            "recommendation": None,
+            "reason": "already_allocated",
+            "existing_allocation_id": existing.id,
+            "existing_amount": existing.amount_allocated,
+        }
+
+    available_capital = recalc_remaining(session, bankroll)
+    if available_capital <= 0:
+        return {"source_id": source_id, "recommendation": None, "reason": "no_available_capital"}
+
+    estimated_profit = float(source.estimated_profit or 0.0)
+    confidence = float(source.confidence or 0.0)
+    score = float(source.score or 0.0)
+
+    base_fraction = {"elite": 0.18, "high": 0.14, "medium": 0.09, "low": 0.05}.get(
+        source.priority_band or "low", 0.05
+    )
+    confidence_multiplier = 0.7 + (confidence * 0.6)
+    if score >= 85:
+        score_multiplier = 1.15
+    elif score >= 70:
+        score_multiplier = 1.0
+    elif score >= 55:
+        score_multiplier = 0.85
+    else:
+        score_multiplier = 0.65
+
+    recommended = round(estimated_profit * base_fraction * confidence_multiplier * score_multiplier, 2)
+    cap = min(MAX_ALLOCATION_PER_OPPORTUNITY, round(available_capital * 0.35, 2))
+    final = round(min(recommended, cap, available_capital), 2)
+    if final <= 0:
+        return {"source_id": source_id, "recommendation": None, "reason": "insufficient_signal_or_capital"}
+
+    return {
+        "source_id": source_id,
+        "priority_band": source.priority_band,
+        "estimated_profit": source.estimated_profit,
+        "confidence": source.confidence,
+        "score": source.score,
+        "recommended_allocation": final,
+        "available_capital": available_capital,
+        "approval_required": final > APPROVAL_REQUIRED_OVER,
+        "reason": (
+            f"profit x base_fraction({base_fraction}) x confidence_multiplier({confidence_multiplier:.2f}) "
+            f"x score_multiplier({score_multiplier:.2f}), capped at ${cap:.2f} per opportunity"
+        ),
+    }
+
+
+def mark_budget_candidate(source_id: str, session: Session) -> IncomeSource:
+    source = session.exec(select(IncomeSource).where(IncomeSource.source_id == source_id)).first()
+    if not source:
+        raise ValueError(f"Income source not found: {source_id}")
+
+    old_status = source.status
+    source.status = SourceStatus.budgeted
+    session.add(source)
+    session.commit()
+    session.refresh(source)
+
+    from app.models.event import EventType
+    from app.services import events as event_svc
+
+    event_svc.log_event(
+        source_id,
+        EventType.budget_linked,
+        session,
+        old_state=old_status,
+        new_state=SourceStatus.budgeted,
+        summary="Marked as capital candidate",
+    )
+    return source
+
+
+def refresh_budget_recommendations(session: Session) -> dict:
+    packets = session.exec(
+        select(ActionPacket).where(ActionPacket.status.in_((PacketStatus.ready, PacketStatus.draft)))
+    ).all()
+    updated = 0
+    for packet in packets:
+        rec = recommend_allocation(packet.source_id, session)
+        packet.budget_recommendation = rec.get("recommended_allocation")
+        packet.updated_at = datetime.now(timezone.utc)
+        session.add(packet)
+        updated += 1
+    session.commit()
+    return {"packets_updated": updated}
+
+
+def auto_allocate_for_source(source_id: str, session: Session) -> Optional[dict]:
+    try:
+        rec = recommend_allocation(source_id, session)
+    except ValueError:
+        return None
+
+    amount = rec.get("recommended_allocation", 0.0) or 0.0
+    if amount <= 0:
+        return {"skipped": True, "reason": rec.get("reason", "no_recommendation")}
+
+    bankroll = ensure_bankroll(session)
+    available_capital = recalc_remaining(session, bankroll)
+    if BUDGET_STRICT_MODE and amount > available_capital:
+        return {"skipped": True, "reason": f"Insufficient available capital (${available_capital:.2f} remaining)"}
+
+    source = session.exec(select(IncomeSource).where(IncomeSource.source_id == source_id)).first()
+    approval_required = amount > APPROVAL_REQUIRED_OVER
+
+    allocation = BudgetAllocation(
+        weekly_budget_id=bankroll.id,
+        allocation_name=source.description[:120] if source else source_id,
+        category=_allocation_category_for_source(source),
+        amount_allocated=amount,
+        rationale=f"Auto-allocated via packet execution: {rec.get('reason', '')}",
+        expected_return=source.estimated_profit if source else None,
+        source_id=source_id,
+        approval_required=approval_required,
+        approved_by_commander=False,
+        status=AllocationStatus.planned,
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(allocation)
+    session.commit()
+    session.refresh(allocation)
+
+    mark_budget_candidate(source_id, session)
+    _sync_packet_after_allocation(source_id, amount, session)
+    sync_bankroll(session, bankroll)
+    _log_bankroll_entry(
+        session,
+        bankroll,
+        entry_type=BankrollLedgerEntryType.allocation_committed,
+        source_id=source_id,
+        allocation_id=allocation.id,
+        amount_delta_current=0.0,
+        amount_delta_committed=amount,
+        amount_delta_available=-amount,
+        notes=f"Capital committed to {source_id}",
+    )
+
+    from app.models.event import EventType
+    from app.services import events as event_svc
+
+    event_svc.log_event(
+        source_id,
+        EventType.budget_linked,
+        session,
+        summary=f"Capital reserved: ${amount:.2f}",
+        metadata={"allocation_id": allocation.id, "amount": amount},
+    )
+
+    return {
+        "allocation_id": allocation.id,
+        "amount": amount,
+        "approval_required": approval_required,
+    }
+
+
+def auto_allocate_top_packets(session: Session, max_packets: int = 5) -> dict:
+    bankroll = ensure_bankroll(session)
+    refresh_budget_recommendations(session)
+
+    packet_rows = session.exec(
+        select(ActionPacket, IncomeSource)
+        .join(IncomeSource, IncomeSource.source_id == ActionPacket.source_id)
+        .where(ActionPacket.status == PacketStatus.ready)
+        .order_by(IncomeSource.score.desc())
+    ).all()
+
+    allocations: list[dict] = []
+    for packet, source in packet_rows:
+        if len(allocations) >= max_packets:
+            break
+        result = auto_allocate_for_source(source.source_id, session)
+        if not result or result.get("skipped"):
+            continue
+        allocations.append(
+            {
+                "source_id": source.source_id,
+                "description": source.description,
+                "allocation_id": result["allocation_id"],
+                "amount": result["amount"],
+                "approval_required": result["approval_required"],
+            }
+        )
+
+    sync_bankroll(session, bankroll)
+    return {
+        "allocations_made": len(allocations),
+        "allocations": allocations,
+        "total_allocated": round(sum(item["amount"] for item in allocations), 2),
+        "available_capital": bankroll.remaining_budget,
+    }
+
+
+def get_budget_commander_summary(session: Session) -> dict:
+    bankroll = ensure_bankroll(session)
+    sync_bankroll(session, bankroll)
+    allocations = get_allocations_for_budget(session, bankroll.id)
+    committed = recalc_committed_capital(session, bankroll)
+    available = recalc_remaining(session, bankroll)
+    unrealized = recalc_unrealized_exposure(session, bankroll)
+    review = get_month_end_review(session, bankroll)
+
+    alloc_rows = []
+    best = worst = None
+    for allocation in allocations:
+        outcomes = get_outcomes_for_allocation(session, allocation.id)
+        alloc_return = sum(outcome.actual_return for outcome in outcomes)
+        alloc_net = round(sum(outcome.net_result for outcome in outcomes), 2)
+        row = {
+            "id": allocation.id,
+            "allocation_name": allocation.allocation_name,
+            "category": allocation.category.value,
+            "amount_allocated": allocation.amount_allocated,
+            "actual_return": round(alloc_return, 2),
+            "net_result": alloc_net,
+            "status": allocation.status.value,
+            "approval_required": allocation.approval_required,
+            "approved_by_commander": allocation.approved_by_commander,
+            "source_id": allocation.source_id,
+            "started_at": allocation.started_at.isoformat() if allocation.started_at else None,
+            "completed_at": allocation.completed_at.isoformat() if allocation.completed_at else None,
+        }
+        alloc_rows.append(row)
+        if outcomes:
+            if best is None or alloc_net > best["net_result"]:
+                best = row
+            if worst is None or alloc_net < worst["net_result"]:
+                worst = row
+
+    return {
+        "evaluation_start_date": bankroll.evaluation_start_date.isoformat(),
+        "evaluation_end_date": bankroll.evaluation_end_date.isoformat(),
+        "starting_bankroll": bankroll.starting_bankroll,
+        "current_bankroll": bankroll.current_bankroll,
+        "available_capital": available,
+        "committed_capital": committed,
+        "realized_profit": bankroll.realized_return,
+        "unrealized_exposure": unrealized,
+        "capital_match_eligible": review["capital_match_eligible"],
+        "capital_match_amount": review["recommended_match_amount"],
+        "month_end_review": review,
+        "allocations": alloc_rows,
+        "allocations_by_source": [
+            {
+                "source_id": allocation.source_id,
+                "allocation_name": allocation.allocation_name,
+                "amount_allocated": allocation.amount_allocated,
+                "status": allocation.status.value,
+            }
+            for allocation in allocations
+        ],
+        "top_performer": best,
+        "worst_performer": worst,
+        "next_cycle_recommendation": next_budget_recommendation(session, bankroll),
+        "ledger": [
+            {
+                "entry_type": entry.entry_type.value,
+                "source_id": entry.source_id,
+                "allocation_id": entry.allocation_id,
+                "amount_delta_current": entry.amount_delta_current,
+                "amount_delta_committed": entry.amount_delta_committed,
+                "amount_delta_available": entry.amount_delta_available,
+                "notes": entry.notes,
+                "created_at": entry.created_at.isoformat(),
+            }
+            for entry in get_ledger_entries(session, bankroll.id, limit=20)
+        ],
+    }
+
+
+def record_capital_completion(
+    session: Session,
+    allocation: BudgetAllocation,
+    *,
+    source_id: Optional[str],
+    action_packet_id: Optional[int],
+    actual_return: float,
+    notes: Optional[str] = None,
+) -> None:
+    bankroll = ensure_bankroll(session)
+    sync_bankroll(session, bankroll)
+    _log_bankroll_entry(
+        session,
+        bankroll,
+        entry_type=BankrollLedgerEntryType.execution_completed,
+        source_id=source_id,
+        allocation_id=allocation.id,
+        action_packet_id=action_packet_id,
+        amount_delta_current=round(actual_return - allocation.amount_allocated, 2),
+        amount_delta_committed=-allocation.amount_allocated,
+        amount_delta_available=actual_return,
+        notes=notes or "Execution completed and bankroll rolled forward",
+    )
+    sync_bankroll(session, bankroll)
+
+
+def record_capital_failure(
+    session: Session,
+    allocation: BudgetAllocation,
+    *,
+    source_id: Optional[str],
+    action_packet_id: Optional[int],
+    actual_return: float = 0.0,
+    notes: Optional[str] = None,
+) -> None:
+    bankroll = ensure_bankroll(session)
+    sync_bankroll(session, bankroll)
+    _log_bankroll_entry(
+        session,
+        bankroll,
+        entry_type=BankrollLedgerEntryType.execution_failed,
+        source_id=source_id,
+        allocation_id=allocation.id,
+        action_packet_id=action_packet_id,
+        amount_delta_current=round(actual_return - allocation.amount_allocated, 2),
+        amount_delta_committed=-allocation.amount_allocated,
+        amount_delta_available=actual_return,
+        notes=notes or "Execution failed and bankroll absorbed the loss",
+    )
+    sync_bankroll(session, bankroll)
+
+
+def record_capital_release(
+    session: Session,
+    allocation: BudgetAllocation,
+    *,
+    source_id: Optional[str],
+    action_packet_id: Optional[int],
+    notes: Optional[str] = None,
+) -> None:
+    bankroll = ensure_bankroll(session)
+    sync_bankroll(session, bankroll)
+    _log_bankroll_entry(
+        session,
+        bankroll,
+        entry_type=BankrollLedgerEntryType.allocation_released,
+        source_id=source_id,
+        allocation_id=allocation.id,
+        action_packet_id=action_packet_id,
+        amount_delta_current=0.0,
+        amount_delta_committed=-allocation.amount_allocated,
+        amount_delta_available=allocation.amount_allocated,
+        notes=notes or "Allocation released back to available capital",
+    )
+    sync_bankroll(session, bankroll)
+
+
+def record_capital_commit(
+    session: Session,
+    allocation: BudgetAllocation,
+    *,
+    source_id: Optional[str],
+    action_packet_id: Optional[int],
+    notes: Optional[str] = None,
+) -> None:
+    bankroll = ensure_bankroll(session)
+    sync_bankroll(session, bankroll)
+    _log_bankroll_entry(
+        session,
+        bankroll,
+        entry_type=BankrollLedgerEntryType.allocation_committed,
+        source_id=source_id,
+        allocation_id=allocation.id,
+        action_packet_id=action_packet_id,
+        amount_delta_current=0.0,
+        amount_delta_committed=allocation.amount_allocated,
+        amount_delta_available=-allocation.amount_allocated,
+        notes=notes or "Capital committed to allocation",
+    )
+    sync_bankroll(session, bankroll)
+
+
+def _sync_packet_after_allocation(source_id: str, amount: float, session: Session) -> None:
+    packet = session.exec(
+        select(ActionPacket)
+        .where(ActionPacket.source_id == source_id)
+        .order_by(ActionPacket.created_at.desc())
+    ).first()
+    if not packet:
+        return
+    packet.budget_recommendation = amount
+    packet.status = PacketStatus.acknowledged
+    packet.updated_at = datetime.now(timezone.utc)
+    session.add(packet)
+    session.commit()
+
+
+def _allocation_category_for_source(source: Optional[IncomeSource]) -> AllocationCategory:
+    category = (source.category or "").lower() if source else ""
+    if "automation" in category or "tool" in category or "dashboard" in category:
+        return AllocationCategory.tools
+    if (
+        "service" in category
+        or "healthcare" in category
+        or "church" in category
+        or "artist" in category
+    ):
+        return AllocationCategory.services
+    if "flip" in category or "arbitrage" in category:
+        return AllocationCategory.experiments
+    return AllocationCategory.other
+
+
+def _log_bankroll_entry(
+    session: Session,
+    bankroll: WeeklyBudget,
+    *,
+    entry_type: BankrollLedgerEntryType,
+    source_id: Optional[str] = None,
+    allocation_id: Optional[int] = None,
+    action_packet_id: Optional[int] = None,
+    amount_delta_current: float,
+    amount_delta_committed: float,
+    amount_delta_available: float,
+    notes: Optional[str] = None,
+) -> BankrollLedgerEntry:
+    current = recalc_current_bankroll(session, bankroll) + amount_delta_current
+    committed = recalc_committed_capital(session, bankroll) + amount_delta_committed
+    available = max(0.0, round(current - committed, 2))
+    entry = BankrollLedgerEntry(
+        weekly_budget_id=bankroll.id,
+        entry_type=entry_type,
+        source_id=source_id,
+        allocation_id=allocation_id,
+        action_packet_id=action_packet_id,
+        amount_delta_current=round(amount_delta_current, 2),
+        amount_delta_committed=round(amount_delta_committed, 2),
+        amount_delta_available=round(amount_delta_available, 2),
+        notes=notes,
+        current_bankroll_after=round(current, 2),
+        committed_capital_after=round(committed, 2),
+        available_capital_after=available,
+    )
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    return entry
+
+
+def _compute_month_end_review(budget: WeeklyBudget) -> dict:
+    ending_bankroll = budget.current_bankroll
+    net_gain = round(ending_bankroll - budget.starting_bankroll, 2)
+    growth_pct = round((net_gain / budget.starting_bankroll) * 100, 2) if budget.starting_bankroll else 0.0
+    doubling_threshold = round(budget.starting_bankroll * 2, 2)
+    doubled = ending_bankroll >= doubling_threshold
+    progress_to_doubling_threshold = (
+        round((ending_bankroll / doubling_threshold) * 100, 2) if doubling_threshold else 0.0
+    )
+    capital_match_eligible = doubled
+    recommended_match_amount = round(max(0.0, ending_bankroll - budget.starting_bankroll), 2) if doubled else 0.0
+    evaluation_window_closed = date.today() >= budget.evaluation_end_date
+    return {
+        "starting_bankroll": budget.starting_bankroll,
+        "ending_bankroll": ending_bankroll,
+        "net_gain_loss": net_gain,
+        "growth_pct": growth_pct,
+        "doubled_bankroll": doubled,
+        "doubling_threshold": doubling_threshold,
+        "progress_to_doubling_threshold": progress_to_doubling_threshold,
+        "capital_match_eligible": capital_match_eligible,
+        "recommended_match_amount": recommended_match_amount,
+        "next_cycle_bankroll_if_matched": round(ending_bankroll + recommended_match_amount, 2),
+        "evaluation_start_date": budget.evaluation_start_date.isoformat(),
+        "evaluation_end_date": budget.evaluation_end_date.isoformat(),
+        "days_remaining": max(0, (budget.evaluation_end_date - date.today()).days),
+        "evaluation_window_closed": evaluation_window_closed,
+    }

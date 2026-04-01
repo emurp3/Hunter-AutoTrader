@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+sqlmodel
+apscheduler
+alpaca-py
+httpx

@@ -1,0 +1,501 @@
+"""
+AutoTrader intake service with live-source health checks and seed fallback.
+
+Hunter prefers the real AutoTrader export bridge (`data/autotrader.json`), but
+it must stay operational even while AutoTrader is offline. This service:
+
+1. checks whether the live export is missing, empty, stale, invalid, or ready
+2. falls back to `data/seed_opportunities.json` when live data is unusable
+3. records enough state for the Operations dashboard to show whether Hunter is
+   running on live AutoTrader data or a temporary fallback source
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from sqlmodel import Session, select
+
+from app.adapters.base import AutoTraderAdapter
+from app.adapters.file_adapter import AutoTraderSourceError, RealFileAdapter
+from app.adapters.http_stub import HttpAdapter
+from app.models.income_source import IncomeSource, SourceStatus
+from app.services.scoring import score_opportunity
+
+logger = logging.getLogger(__name__)
+
+LIVE_MODULE_NAME = "autotrader"
+SEED_MODULE_NAME = "autotrader_seed"
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_AUTOTRADER_FILE_PATH = BACKEND_ROOT / "data" / "autotrader.json"
+DEFAULT_SEED_FILE_PATH = BACKEND_ROOT / "data" / "seed_opportunities.json"
+DEFAULT_STALE_HOURS = 24
+
+
+class AutoTraderConfigError(RuntimeError):
+    """Raised when AutoTrader source configuration is missing or invalid."""
+
+
+@dataclass
+class IntakeResult:
+    scanned: int = 0
+    inserted: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: int = 0
+    error_details: list[str] = field(default_factory=list)
+    aborted: bool = False
+    abort_reason: str | None = None
+    source_mode: str = "offline"  # live | seed | offline
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    live_data_status: str | None = None
+    live_data_message: str | None = None
+    records_loaded: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scanned": self.scanned,
+            "inserted": self.inserted,
+            "updated": self.updated,
+            "skipped": self.skipped,
+            "errors": self.errors,
+            "error_details": self.error_details,
+            "aborted": self.aborted,
+            "abort_reason": self.abort_reason,
+            "source_mode": self.source_mode,
+            "fallback_used": self.fallback_used,
+            "fallback_reason": self.fallback_reason,
+            "live_data_status": self.live_data_status,
+            "live_data_message": self.live_data_message,
+            "records_loaded": self.records_loaded,
+        }
+
+
+@dataclass
+class _IntakeState:
+    last_scan_at: datetime | None = None
+    last_source_type: str | None = None
+    last_status: str = "never_run"  # never_run | success | fallback | aborted | error
+    last_scanned: int = 0
+    last_inserted: int = 0
+    last_updated: int = 0
+    last_skipped: int = 0
+    last_errors: int = 0
+    last_error: str | None = None
+    source_configured: bool = True
+    source_reachable: bool | None = None
+    live_data_status: str = "missing"  # ready | missing | empty | stale | invalid | unreachable
+    live_data_message: str = "AutoTrader offline / no live data."
+    live_data_path: str | None = str(DEFAULT_AUTOTRADER_FILE_PATH)
+    live_data_updated_at: str | None = None
+    live_data_record_count: int = 0
+    stale_after_hours: int = DEFAULT_STALE_HOURS
+    using_fallback: bool = False
+    fallback_reason: str | None = None
+    fallback_path: str | None = str(DEFAULT_SEED_FILE_PATH)
+    fallback_record_count: int = 0
+    current_data_mode: str = "offline"  # live | seed | offline
+
+
+@dataclass
+class SourceSnapshot:
+    source_type: str
+    status: str
+    message: str
+    findings: list[dict[str, Any]] = field(default_factory=list)
+    path: str | None = None
+    updated_at: str | None = None
+    age_seconds: int | None = None
+    record_count: int = 0
+
+
+_state = _IntakeState()
+
+
+def get_intake_state() -> _IntakeState:
+    return _state
+
+
+def _configured_source_type() -> str:
+    return os.getenv("AUTOTRADER_SOURCE_TYPE", "file").strip().lower() or "file"
+
+
+def _configured_live_path() -> Path:
+    raw = os.getenv("AUTOTRADER_FILE_PATH", "").strip()
+    return Path(raw) if raw else DEFAULT_AUTOTRADER_FILE_PATH
+
+
+def _configured_seed_path() -> Path:
+    raw = os.getenv("HUNTER_SEED_OPPORTUNITIES_PATH", "").strip()
+    return Path(raw) if raw else DEFAULT_SEED_FILE_PATH
+
+
+def _stale_after_hours() -> int:
+    raw = os.getenv("AUTOTRADER_STALE_HOURS", "").strip()
+    if not raw:
+        return DEFAULT_STALE_HOURS
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_STALE_HOURS
+
+
+def get_adapter() -> AutoTraderAdapter:
+    source_type = _configured_source_type()
+
+    if source_type == "file":
+        return RealFileAdapter(path=str(_configured_live_path()))
+
+    if source_type == "http":
+        return HttpAdapter(
+            base_url=os.getenv("AUTOTRADER_HTTP_URL"),
+            api_key=os.getenv("AUTOTRADER_HTTP_API_KEY"),
+        )
+
+    raise AutoTraderConfigError(
+        f"AUTOTRADER_SOURCE_TYPE is '{source_type}'. "
+        "Set it to 'file' or 'http'."
+    )
+
+
+def _read_json_array(path: Path, *, label: str) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise AutoTraderSourceError(f"{label} file not found: {path}")
+
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise AutoTraderSourceError(f"{label} file could not be read: {path} — {exc}") from exc
+
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise AutoTraderSourceError(f"{label} file contains invalid JSON: {path} — {exc}") from exc
+
+    if not isinstance(data, list):
+        raise AutoTraderSourceError(
+            f"{label} file must contain a JSON array. Got {type(data).__name__}."
+        )
+
+    if any(not isinstance(item, dict) for item in data):
+        raise AutoTraderSourceError(f"{label} file must contain only JSON objects.")
+
+    return data
+
+
+def assess_live_source() -> SourceSnapshot:
+    source_type = _configured_source_type()
+    stale_hours = _stale_after_hours()
+
+    if source_type == "file":
+        path = _configured_live_path()
+        if not path.exists():
+            return SourceSnapshot(
+                source_type="file",
+                status="missing",
+                message="AutoTrader offline / no live data. Export file is missing.",
+                path=str(path),
+            )
+
+        try:
+            findings = _read_json_array(path, label="AutoTrader export")
+        except AutoTraderSourceError as exc:
+            return SourceSnapshot(
+                source_type="file",
+                status="invalid",
+                message=f"AutoTrader offline / no live data. {exc}",
+                path=str(path),
+            )
+
+        record_count = len(findings)
+        modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        age_seconds = int((datetime.now(timezone.utc) - modified_at).total_seconds())
+
+        if record_count == 0:
+            return SourceSnapshot(
+                source_type="file",
+                status="empty",
+                message="AutoTrader offline / no live data. Export file is empty.",
+                findings=findings,
+                path=str(path),
+                updated_at=modified_at.isoformat(),
+                age_seconds=age_seconds,
+                record_count=0,
+            )
+
+        if age_seconds > stale_hours * 3600:
+            return SourceSnapshot(
+                source_type="file",
+                status="stale",
+                message=f"AutoTrader offline / no live data. Export is stale ({age_seconds // 3600}h old).",
+                findings=findings,
+                path=str(path),
+                updated_at=modified_at.isoformat(),
+                age_seconds=age_seconds,
+                record_count=record_count,
+            )
+
+        return SourceSnapshot(
+            source_type="file",
+            status="ready",
+            message="AutoTrader live data is healthy.",
+            findings=findings,
+            path=str(path),
+            updated_at=modified_at.isoformat(),
+            age_seconds=age_seconds,
+            record_count=record_count,
+        )
+
+    if source_type == "http":
+        try:
+            findings = get_adapter().fetch_findings()
+        except AutoTraderSourceError as exc:
+            return SourceSnapshot(
+                source_type="http",
+                status="unreachable",
+                message=f"AutoTrader offline / no live data. {exc}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return SourceSnapshot(
+                source_type="http",
+                status="invalid",
+                message=f"AutoTrader offline / no live data. {exc}",
+            )
+
+        if not findings:
+            return SourceSnapshot(
+                source_type="http",
+                status="empty",
+                message="AutoTrader offline / no live data. HTTP source returned no findings.",
+                findings=[],
+                record_count=0,
+            )
+
+        return SourceSnapshot(
+            source_type="http",
+            status="ready",
+            message="AutoTrader live data is healthy.",
+            findings=findings,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            record_count=len(findings),
+        )
+
+    return SourceSnapshot(
+        source_type=source_type,
+        status="invalid",
+        message=f"AutoTrader offline / no live data. Unsupported source type '{source_type}'.",
+    )
+
+
+def load_seed_findings() -> tuple[list[dict[str, Any]], str]:
+    path = _configured_seed_path()
+    findings = _read_json_array(path, label="Hunter seed opportunities")
+    if not findings:
+        raise AutoTraderSourceError(f"Hunter seed opportunities file is empty: {path}")
+    return findings, str(path)
+
+
+def normalize_finding(raw: dict[str, Any], *, source_prefix: str) -> dict[str, Any] | None:
+    raw_id = raw.get("id")
+    if not raw_id:
+        logger.warning("normalize_finding: skipping finding with missing 'id': %s", raw)
+        return None
+
+    description = str(raw.get("description", "")).strip()
+    if not description:
+        logger.warning("normalize_finding: skipping finding %s with empty description", raw_id)
+        return None
+
+    date_raw = raw.get("signal_date") or raw.get("timestamp")
+    date_found = date.today()
+    if date_raw:
+        try:
+            if isinstance(date_raw, str) and "T" in date_raw:
+                date_found = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).date()
+            else:
+                date_found = date.fromisoformat(str(date_raw))
+        except ValueError:
+            logger.warning("normalize_finding: invalid date '%s' for %s — using today", date_raw, raw_id)
+
+    estimated_profit = raw.get("estimated_profit", raw.get("estimated_monthly_return", 0.0))
+    try:
+        estimated_profit = max(0.0, float(estimated_profit))
+    except (TypeError, ValueError):
+        estimated_profit = 0.0
+
+    confidence_raw = raw.get("confidence")
+    confidence: float | None = None
+    if confidence_raw is not None:
+        try:
+            confidence = max(0.0, min(1.0, float(confidence_raw)))
+        except (TypeError, ValueError):
+            confidence = None
+
+    return {
+        "source_id": f"{source_prefix}:{raw_id}",
+        "description": description,
+        "estimated_profit": estimated_profit,
+        "currency": raw.get("currency", "USD"),
+        "status": SourceStatus.new,
+        "date_found": date_found,
+        "next_action": raw.get("next_action") or raw.get("suggested_action"),
+        "notes": raw.get("notes"),
+        "category": raw.get("category"),
+        "confidence": confidence,
+    }
+
+
+_UPDATE_FIELDS = ("estimated_profit", "next_action", "notes", "confidence", "category")
+
+
+def ingest_findings(session: Session, findings: list[dict[str, Any]], *, origin_module: str) -> IntakeResult:
+    result = IntakeResult(scanned=len(findings))
+    source_prefix = "at" if origin_module == LIVE_MODULE_NAME else "seed"
+
+    existing: dict[str, IncomeSource] = {
+        record.source_id: record
+        for record in session.exec(
+            select(IncomeSource).where(IncomeSource.origin_module == origin_module)
+        ).all()
+    }
+
+    for raw in findings:
+        try:
+            normalized = normalize_finding(raw, source_prefix=source_prefix)
+            if normalized is None:
+                result.errors += 1
+                result.error_details.append(f"normalization failed: {raw.get('id', '?')}")
+                continue
+
+            sid = normalized["source_id"]
+
+            if sid in existing:
+                record = existing[sid]
+                changed = False
+                for field_name in _UPDATE_FIELDS:
+                    if getattr(record, field_name) != normalized.get(field_name):
+                        setattr(record, field_name, normalized.get(field_name))
+                        changed = True
+                if changed:
+                    sr = score_opportunity(record, session)
+                    record.score = sr.score
+                    record.priority_band = sr.priority_band
+                    record.score_rationale = sr.rationale
+                    session.add(record)
+                    result.updated += 1
+                else:
+                    result.skipped += 1
+            else:
+                record = IncomeSource(**normalized, origin_module=origin_module)
+                sr = score_opportunity(record, session)
+                record.score = sr.score
+                record.priority_band = sr.priority_band
+                record.score_rationale = sr.rationale
+                session.add(record)
+                result.inserted += 1
+
+        except Exception as exc:  # noqa: BLE001
+            result.errors += 1
+            detail = f"{raw.get('id', '?')}: {exc}"
+            result.error_details.append(detail)
+            logger.error("ingest: error processing finding — %s", detail)
+
+    session.commit()
+
+    if result.inserted > 0:
+        from app.services.orchestrator import process_new_opportunity
+
+        newly_inserted = session.exec(
+            select(IncomeSource).where(
+                IncomeSource.origin_module == origin_module,
+                IncomeSource.status == SourceStatus.new,
+            )
+        ).all()
+        for record in newly_inserted:
+            try:
+                process_new_opportunity(record, session)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("ingest: orchestrator error for %s — %s", record.source_id, exc)
+
+    return result
+
+
+def run_intake(session: Session) -> IntakeResult:
+    live_snapshot = assess_live_source()
+    _state.last_scan_at = datetime.now(timezone.utc)
+    _state.last_source_type = live_snapshot.source_type
+    _state.source_configured = live_snapshot.source_type in ("file", "http")
+    _state.live_data_status = live_snapshot.status
+    _state.live_data_message = live_snapshot.message
+    _state.live_data_path = live_snapshot.path
+    _state.live_data_updated_at = live_snapshot.updated_at
+    _state.live_data_record_count = live_snapshot.record_count
+    _state.stale_after_hours = _stale_after_hours()
+    _state.source_reachable = live_snapshot.status == "ready"
+
+    if live_snapshot.status == "ready":
+        result = ingest_findings(session, live_snapshot.findings, origin_module=LIVE_MODULE_NAME)
+        result.source_mode = "live"
+        result.fallback_used = False
+        result.live_data_status = live_snapshot.status
+        result.live_data_message = live_snapshot.message
+        result.records_loaded = live_snapshot.record_count
+        _state.using_fallback = False
+        _state.fallback_reason = None
+        _state.fallback_path = str(_configured_seed_path())
+        _state.current_data_mode = "live"
+        _state.fallback_record_count = 0
+        _state.last_status = "error" if result.errors and not (result.inserted or result.updated) else "success"
+        _state.last_error = result.error_details[0] if result.error_details else None
+    else:
+        try:
+            seed_findings, seed_path = load_seed_findings()
+        except AutoTraderSourceError as exc:
+            message = f"{live_snapshot.message} Seed fallback unavailable: {exc}"
+            logger.error("run_intake: offline — %s", message)
+            _state.using_fallback = False
+            _state.fallback_reason = str(exc)
+            _state.fallback_path = str(_configured_seed_path())
+            _state.fallback_record_count = 0
+            _state.current_data_mode = "offline"
+            _state.last_status = "aborted"
+            _state.last_error = message
+            return IntakeResult(
+                aborted=True,
+                abort_reason="offline",
+                error_details=[message],
+                source_mode="offline",
+                fallback_used=False,
+                live_data_status=live_snapshot.status,
+                live_data_message=live_snapshot.message,
+            )
+
+        result = ingest_findings(session, seed_findings, origin_module=SEED_MODULE_NAME)
+        result.source_mode = "seed"
+        result.fallback_used = True
+        result.fallback_reason = live_snapshot.message
+        result.live_data_status = live_snapshot.status
+        result.live_data_message = live_snapshot.message
+        result.records_loaded = len(seed_findings)
+        _state.using_fallback = True
+        _state.fallback_reason = live_snapshot.message
+        _state.fallback_path = seed_path
+        _state.fallback_record_count = len(seed_findings)
+        _state.current_data_mode = "seed"
+        _state.last_status = "fallback"
+        _state.last_error = live_snapshot.message
+
+    _state.last_scanned = result.scanned
+    _state.last_inserted = result.inserted
+    _state.last_updated = result.updated
+    _state.last_skipped = result.skipped
+    _state.last_errors = result.errors
+
+    return result

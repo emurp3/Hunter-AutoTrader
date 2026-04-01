@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IncomeSource",
+  "type": "object",
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "description": "Unique identifier for the income source"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human readable description of the revenue source"
+    },
+    "estimated_profit": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Estimated monthly profit from this source"
+    },
+    "currency": {
+      "type": "string",
+      "default": "USD",
+      "description": "Currency code for the estimated profit"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["new", "active", "parked", "exhausted", "rejected", "complete"],
+      "description": "Current status of this source"
+    },
+    "date_found": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when this revenue source was identified"
+    },
+    "next_action": {
+      "type": "string",
+      "description": "Next step Hunter or the secretary should take"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional comments or considerations"
+    }
+  },
+  "required": ["source_id", "description", "estimated_profit", "status", "date_found"]
+}

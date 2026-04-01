@@ -1,0 +1,62 @@
+[
+  {
+    "id": "at-001",
+    "description": "AAPL momentum long — RSI divergence + volume spike on daily chart",
+    "estimated_monthly_return": 180.0,
+    "currency": "USD",
+    "confidence": 0.74,
+    "category": "trading",
+    "signal_date": "2026-03-24",
+    "suggested_action": "Review entry conditions at Monday open; set stop at -8%",
+    "notes": "High ADX trend strength. Earnings not within signal window.",
+    "raw_payload": {"ticker": "AAPL", "strategy": "momentum_long", "timeframe": "1D"}
+  },
+  {
+    "id": "at-002",
+    "description": "MSFT covered call premium — weekly expiry cycle",
+    "estimated_monthly_return": 95.0,
+    "currency": "USD",
+    "confidence": 0.81,
+    "category": "trading",
+    "signal_date": "2026-03-24",
+    "suggested_action": "Sell weekly call 5% OTM on next green open",
+    "notes": "IV rank at 62. Premium decay favors seller this week.",
+    "raw_payload": {"ticker": "MSFT", "strategy": "covered_call", "iv_rank": 62}
+  },
+  {
+    "id": "at-003",
+    "description": "SPY put spread hedge — tail risk protection for active positions",
+    "estimated_monthly_return": 0.0,
+    "currency": "USD",
+    "confidence": 0.90,
+    "category": "trading",
+    "signal_date": "2026-03-24",
+    "suggested_action": "Buy 1-month put spread 3% OTM / 8% OTM to hedge existing longs",
+    "notes": "Cost basis ~$35. Not a profit play — portfolio insurance.",
+    "raw_payload": {"ticker": "SPY", "strategy": "put_spread_hedge", "cost": 35}
+  },
+  {
+    "id": "at-004",
+    "description": "NVDA swing trade setup — breakout from 3-week consolidation",
+    "estimated_monthly_return": 320.0,
+    "currency": "USD",
+    "confidence": 0.66,
+    "category": "trading",
+    "signal_date": "2026-03-25",
+    "suggested_action": "Wait for confirmed close above resistance before entry",
+    "notes": "Lower confidence due to broad market uncertainty. Size accordingly.",
+    "raw_payload": {"ticker": "NVDA", "strategy": "breakout_swing", "timeframe": "1W"}
+  },
+  {
+    "id": "at-005",
+    "description": "TSLA volatility play — straddle ahead of delivery report",
+    "estimated_monthly_return": 210.0,
+    "currency": "USD",
+    "confidence": 0.58,
+    "category": "trading",
+    "signal_date": "2026-03-25",
+    "suggested_action": "Evaluate IV crush risk before committing; paper trade first if unsure",
+    "notes": "Event-driven. Exit before report if premium has decayed 40%.",
+    "raw_payload": {"ticker": "TSLA", "strategy": "straddle", "catalyst": "delivery_report"}
+  }
+]
