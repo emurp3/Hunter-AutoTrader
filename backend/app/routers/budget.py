@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from app.config import APPROVAL_REQUIRED_OVER, BUDGET_STRICT_MODE
+from app.config import APPROVAL_REQUIRED_OVER, BUDGET_STRICT_MODE, HUNTER_OPERATING_ACCOUNT_PROVIDER
 from app.database.config import get_session
+from app.models.marketplace import BankrollReconciliation, BankrollReconciliationCreate
 from app.services import budget as budget_svc
 from app.models.budget import (
     AllocationStatus,
@@ -527,3 +528,92 @@ def budget_weekly_report(session: Session = Depends(get_session)) -> dict:
 
     summary = get_budget_commander_summary(session)
     return {"budget_commander_summary": summary}
+
+
+# ── POST /budget/reconcile ────────────────────────────────────────────────────
+
+@router.post("/reconcile", status_code=201)
+def reconcile_bankroll(
+    payload: BankrollReconciliationCreate,
+    session: Session = Depends(get_session),
+) -> dict:
+    """
+    Manual bankroll reconciliation for Robins Financial (or any operating account).
+
+    Supply the actual balance from your checking account.  Hunter compares it to
+    the internal current_bankroll and stores the result in the reconciliation log.
+
+    Discrepancy bands:
+      reconciled         — within $1.00
+      minor_discrepancy  — $1.01–$10.00
+      major_discrepancy  — >$10.00
+    """
+    reported = payload.reported_balance
+    provider = payload.provider or HUNTER_OPERATING_ACCOUNT_PROVIDER
+
+    open_budget = get_open_budget(session)
+    if not open_budget:
+        internal = 0.0
+        note = "No active bankroll cycle. Internal balance treated as $0."
+    else:
+        internal = round(budget_svc.recalc_current_bankroll(session, open_budget), 2)
+        note = None
+
+    discrepancy = round(reported - internal, 2)
+    abs_disc = abs(discrepancy)
+    discrepancy_pct = round((abs_disc / reported * 100), 2) if reported > 0 else 0.0
+
+    if abs_disc <= 1.00:
+        status = "reconciled"
+    elif abs_disc <= 10.00:
+        status = "minor_discrepancy"
+    else:
+        status = "major_discrepancy"
+
+    record = BankrollReconciliation(
+        provider=provider,
+        reported_balance=reported,
+        internal_balance=internal,
+        discrepancy=discrepancy,
+        discrepancy_pct=discrepancy_pct,
+        status=status,
+        notes=payload.notes or note,
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+
+    return {
+        "reconciliation_id": record.id,
+        "provider": provider,
+        "reported_balance": reported,
+        "internal_balance": internal,
+        "discrepancy": discrepancy,
+        "discrepancy_pct": discrepancy_pct,
+        "status": status,
+        "reconciled_at": record.reconciled_at.isoformat(),
+        "notes": record.notes,
+        "action_required": (
+            None if status == "reconciled"
+            else f"Discrepancy of ${abs_disc:.2f} detected. Review allocations and outcomes for missing entries."
+        ),
+    }
+
+
+@router.get("/reconcile/history")
+def reconcile_history(limit: int = 20, session: Session = Depends(get_session)) -> dict:
+    """Returns the last N bankroll reconciliation records, newest first."""
+    from app.models.marketplace import BankrollReconciliation
+    from sqlmodel import select as _sel
+    records = list(
+        session.exec(
+            _sel(BankrollReconciliation)
+            .order_by(BankrollReconciliation.reconciled_at.desc())
+            .limit(limit)
+        ).all()
+    )
+    return {
+        "count": len(records),
+        "reconciliations": [r.model_dump() for r in records],
+    }
+

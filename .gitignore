@@ -21,6 +21,11 @@ backend.env
 # Build artifacts
 backend/frontend_dist/
 
+# SQLite databases — never commit; production DB lives on Render disk at /data/
+*.db
+*.db-shm
+*.db-wal
+
 *.log
 .DS_Store
 Thumbs.db

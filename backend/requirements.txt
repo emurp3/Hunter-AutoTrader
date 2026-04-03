@@ -6,3 +6,4 @@ sqlmodel
 apscheduler
 alpaca-py
 httpx
+pytz

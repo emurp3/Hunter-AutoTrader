@@ -36,6 +36,33 @@ services:
       # - key: GROK_API_KEY
       #   sync: false
 
+      # Operating account (Robins Financial checking — label only, no credentials)
+      - key: HUNTER_OPERATING_ACCOUNT_PROVIDER
+        value: robins_financial
+      # HUNTER_INITIAL_BANKROLL — set to your actual starting checking balance in USD
+      - key: HUNTER_INITIAL_BANKROLL
+        value: "100"
+
+      # Facebook Marketplace compliant execution lane
+      # MARKETPLACE_FB_LANE_ENABLED — set to true when ready to use the lane
+      - key: MARKETPLACE_FB_LANE_ENABLED
+        value: "false"
+      # MARKETPLACE_FB_PROVIDER — api2cart_facebook_marketplace | autods_facebook_marketplace | manual
+      - key: MARKETPLACE_FB_PROVIDER
+        value: manual
+      # Provider API keys — set these in the Render dashboard, never commit values
+      # - key: API2CART_API_KEY
+      #   sync: false
+      # - key: AUTODS_API_KEY
+      #   sync: false
+      # - key: AUTODS_PARTNER_TOKEN
+      #   sync: false
+      # MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED — set true to enable customer message drafting
+      - key: MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED
+        value: "false"
+      - key: MARKETPLACE_FB_RATE_LIMIT_PER_HOUR
+        value: "5"
+
     disk:
       name: hunter-data
       mountPath: /data

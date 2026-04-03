@@ -51,6 +51,12 @@ class IncomeSource(IncomeSourceBase, table=True):
     score: Optional[float] = Field(default=None, index=True)
     priority_band: Optional[str] = Field(default=None, index=True)   # PriorityBand value
     score_rationale: Optional[str] = Field(default=None)             # human-readable rationale
+    # ── Marketplace lane (additive — null unless assigned) ────────────────────
+    marketplace_lane: Optional[str] = Field(default=None, index=True)
+    marketplace_routing_label: Optional[str] = Field(default=None)
+    marketplace_provider: Optional[str] = Field(default=None)
+    marketplace_execution_state: Optional[str] = Field(default=None)
+    marketplace_blocked_reason: Optional[str] = Field(default=None)
 
 
 class IncomeSourceCreate(IncomeSourceBase):

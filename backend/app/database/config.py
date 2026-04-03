@@ -27,6 +27,7 @@ def create_db_and_tables() -> None:
     import app.models.execution_outcome  # noqa: F401
     import app.models.provider_execution  # noqa: F401
     import app.models.decision           # noqa: F401
+    import app.models.marketplace        # noqa: F401
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_tables()
 
@@ -107,6 +108,17 @@ def _migrate_sqlite_tables() -> None:
                 "action_packet_id": "INTEGER",
                 "lane": "TEXT",
                 "category": "TEXT",
+            },
+        )
+        _ensure_columns(
+            conn,
+            "incomesource",
+            {
+                "marketplace_lane": "TEXT",
+                "marketplace_routing_label": "TEXT",
+                "marketplace_provider": "TEXT",
+                "marketplace_execution_state": "TEXT",
+                "marketplace_blocked_reason": "TEXT",
             },
         )
         conn.execute(

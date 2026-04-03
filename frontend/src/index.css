@@ -2258,6 +2258,17 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   .tx-export-btn {
     margin-left: auto;
   }
+  .ops-main {
+    padding: 0.75rem;
+    gap: 1rem;
+  }
+  .ops-command-deck {
+    padding: 0.85rem;
+    border-radius: 16px;
+  }
+  .ops-section {
+    border-radius: 14px;
+  }
 }
 
 /* ── Mobile: Transaction table — tighten padding, hide sub-label ─────────── */
@@ -2293,4 +2304,94 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   }
   .opp-modal-header { padding: 1rem 1.25rem 0.65rem; }
   .opp-modal-body   { padding: 1rem 1.25rem 1.25rem; }
+}
+
+/* ── Facebook Marketplace lane badges ─────────────────────────────────────── */
+.mkt-lane-badge {
+  display: inline-block;
+  padding: 0.18rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: rgba(82, 130, 224, 0.14);
+  color: #a0bbff;
+  border: 1px solid rgba(82, 130, 224, 0.28);
+  white-space: nowrap;
+}
+
+.mkt-routing-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mkt-routing-badge--listing_candidate   { background: rgba(76,175,129,0.12); color: #7fe8b0; border: 1px solid rgba(76,175,129,0.25); }
+.mkt-routing-badge--repricing_candidate { background: rgba(201,168,76,0.12); color: #e8c96a; border: 1px solid rgba(201,168,76,0.25); }
+.mkt-routing-badge--fulfillment_followup{ background: rgba(82,130,224,0.12); color: #a0bbff; border: 1px solid rgba(82,130,224,0.25); }
+.mkt-routing-badge--customer_message_needed { background: rgba(224,154,82,0.12); color: #f0b87a; border: 1px solid rgba(224,154,82,0.25); }
+.mkt-routing-badge--policy_blocked      { background: rgba(200,80,80,0.12); color: #ff9090; border: 1px solid rgba(200,80,80,0.25); }
+
+.mkt-exec-state {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap;
+}
+.mkt-exec-state--listed, .mkt-exec-state--fulfilled, .mkt-exec-state--completed {
+  color: #7fe8b0; background: rgba(76,175,129,0.1); border-color: rgba(76,175,129,0.22);
+}
+.mkt-exec-state--blocked, .mkt-exec-state--policy_blocked, .mkt-exec-state--failed {
+  color: #ff9090; background: rgba(200,80,80,0.1); border-color: rgba(200,80,80,0.22);
+}
+.mkt-exec-state--listing_prepared, .mkt-exec-state--repriced {
+  color: #e8c96a; background: rgba(201,168,76,0.1); border-color: rgba(201,168,76,0.22);
+}
+
+.opp-card-mkt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.opp-modal-mkt-section {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+.opp-modal-mkt-title {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.4);
+  margin-bottom: 0.5rem;
+}
+.opp-modal-mkt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+.opp-modal-mkt-blocked {
+  font-size: 0.7rem;
+  color: #ff9090;
+  padding: 0.25rem 0.5rem;
+  background: rgba(200,80,80,0.08);
+  border-left: 2px solid rgba(200,80,80,0.4);
+  border-radius: 0 4px 4px 0;
+  margin-top: 0.4rem;
+  word-break: break-word;
 }

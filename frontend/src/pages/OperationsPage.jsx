@@ -354,6 +354,34 @@ function OpportunityModal({ opportunity, onClose }) {
               </div>
             )}
           </div>
+          {opportunity.marketplace_lane && (
+            <div className="opp-modal-mkt-section">
+              <div className="opp-modal-mkt-title">Facebook Marketplace Lane</div>
+              <div className="opp-modal-mkt-row">
+                <span className="mkt-lane-badge">FB Marketplace</span>
+                {opportunity.marketplace_provider && (
+                  <span className="opp-modal-value" style={{ fontSize: '0.7rem' }}>
+                    {opportunity.marketplace_provider.replace(/_/g, ' ')}
+                  </span>
+                )}
+                {opportunity.marketplace_routing_label && (
+                  <span className={`mkt-routing-badge mkt-routing-badge--${opportunity.marketplace_routing_label}`}>
+                    {opportunity.marketplace_routing_label.replace(/_/g, ' ')}
+                  </span>
+                )}
+                {opportunity.marketplace_execution_state && (
+                  <span className={`mkt-exec-state mkt-exec-state--${opportunity.marketplace_execution_state}`}>
+                    {opportunity.marketplace_execution_state.replace(/_/g, ' ')}
+                  </span>
+                )}
+              </div>
+              {opportunity.marketplace_blocked_reason && (
+                <div className="opp-modal-mkt-blocked">
+                  Blocked: {opportunity.marketplace_blocked_reason}
+                </div>
+              )}
+            </div>
+          )}
           {d && (
             <div className="opp-modal-decision">
               <div className="opp-modal-decision-title">Decision</div>
@@ -1801,6 +1829,21 @@ export default function OperationsPage({ onBack }) {
                           <span className="opp-profit">${opportunity.estimated_profit?.toLocaleString()}/mo</span>
                         )}
                       </div>
+                      {opportunity.marketplace_lane && (
+                        <div className="opp-card-mkt-row">
+                          <span className="mkt-lane-badge">FB Marketplace</span>
+                          {opportunity.marketplace_routing_label && (
+                            <span className={`mkt-routing-badge mkt-routing-badge--${opportunity.marketplace_routing_label}`}>
+                              {opportunity.marketplace_routing_label.replace(/_/g, ' ')}
+                            </span>
+                          )}
+                          {opportunity.marketplace_execution_state && (
+                            <span className={`mkt-exec-state mkt-exec-state--${opportunity.marketplace_execution_state}`}>
+                              {opportunity.marketplace_execution_state.replace(/_/g, ' ')}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

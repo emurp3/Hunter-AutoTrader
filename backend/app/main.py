@@ -23,18 +23,43 @@ from app.routers.monitoring import router as monitoring_router
 from app.routers.handoff import router as handoff_router
 from app.routers.leads import router as leads_router
 from app.routers.decisions import router as decisions_router
+from app.routers.marketplace import router as marketplace_router
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
 
+# ── Scheduler timezone — all jobs run at 08:00 America/New_York ──────────────
+# First fire: Monday 2026-04-07 08:00 ET (next Monday from deploy).
+# Subsequent fires: every day at 08:00 ET (daily scan) / every Monday (weekly report).
+# misfire_grace_time=3600: if the app was briefly down at 8 AM it still fires
+# within the hour rather than silently skipping.
+_SCHEDULER_TZ = "America/New_York"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
-    scheduler.add_job(daily_scan_task, "interval", days=1, id="daily_scan")
-    scheduler.add_job(weekly_report_task, "interval", weeks=1, id="weekly_report")
+    scheduler.add_job(
+        daily_scan_task,
+        "cron",
+        hour=8,
+        minute=0,
+        timezone=_SCHEDULER_TZ,
+        id="daily_scan",
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        weekly_report_task,
+        "cron",
+        day_of_week="mon",
+        hour=8,
+        minute=0,
+        timezone=_SCHEDULER_TZ,
+        id="weekly_report",
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
@@ -65,6 +90,7 @@ app.include_router(monitoring_router)
 app.include_router(handoff_router)
 app.include_router(leads_router)
 app.include_router(decisions_router)
+app.include_router(marketplace_router)
 
 # ── Static file serving (production only) ────────────────────────────────────
 # _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).

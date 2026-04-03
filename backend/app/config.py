@@ -254,3 +254,43 @@ SOURCES_DIGITAL_QUERIES: list[str] = _get_csv(
 
 SOURCES_RFP_ENABLED: bool = _get_bool("HUNTER_SOURCES_RFP_ENABLED", True)
 SOURCES_AFFILIATE_ENABLED: bool = _get_bool("HUNTER_SOURCES_AFFILIATE_ENABLED", True)
+
+# ── Facebook Marketplace compliant execution lane ─────────────────────────────
+# MARKETPLACE_FB_LANE_ENABLED — set to true to activate the lane; false disables
+#   all marketplace routing and execution.
+MARKETPLACE_FB_LANE_ENABLED: bool = _get_bool("MARKETPLACE_FB_LANE_ENABLED", False)
+
+# MARKETPLACE_FB_PROVIDER — which provider adapter to use for listing/fulfillment.
+#   Values: api2cart_facebook_marketplace | autods_facebook_marketplace | manual
+#   manual = Hunter prepares the listing packet but does not call any provider API.
+MARKETPLACE_FB_PROVIDER: str = os.getenv("MARKETPLACE_FB_PROVIDER", "manual").lower()
+
+# API2Cart adapter — Facebook Marketplace channel via API2Cart
+# API2CART_API_KEY — your API2Cart key (set in Render dashboard, never hardcode)
+API2CART_API_KEY: str = os.getenv("API2CART_API_KEY", "")
+API2CART_BASE_URL: str = os.getenv("API2CART_BASE_URL", "https://app.api2cart.com/v1.1")
+
+# AutoDS adapter — Facebook Marketplace dropshipping via AutoDS
+# AUTODS_API_KEY — your AutoDS API key (set in Render dashboard, never hardcode)
+AUTODS_API_KEY: str = os.getenv("AUTODS_API_KEY", "")
+AUTODS_PARTNER_TOKEN: str = os.getenv("AUTODS_PARTNER_TOKEN", "")
+AUTODS_BASE_URL: str = os.getenv("AUTODS_BASE_URL", "https://api.autods.com/v2")
+
+# MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED — enable the optional customer-message module.
+#   When true, Hunter can draft approved responses to Marketplace buyer messages.
+MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED: bool = _get_bool(
+    "MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED", False
+)
+# MARKETPLACE_FB_RATE_LIMIT_PER_HOUR — max outbound messages per hour (compliance cap).
+MARKETPLACE_FB_RATE_LIMIT_PER_HOUR: int = int(
+    os.getenv("MARKETPLACE_FB_RATE_LIMIT_PER_HOUR", "5")
+)
+
+# ── Operating account (Robins Financial checking) ─────────────────────────────
+# HUNTER_OPERATING_ACCOUNT_PROVIDER — label for the real-money operating account.
+#   Used in reconciliation records. Not a credentials field.
+HUNTER_OPERATING_ACCOUNT_PROVIDER: str = os.getenv(
+    "HUNTER_OPERATING_ACCOUNT_PROVIDER", "robins_financial"
+)
+# HUNTER_INITIAL_BANKROLL is already defined above as WEEKLY_BUDGET.
+# Set it to your actual Robins checking starting balance before Monday launch.
