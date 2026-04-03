@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from app.database.config import get_session
 from app.models.income_source import IncomeSource
+from app.models.decision import OpportunityDecision
 from app.services.autotrader import get_intake_state, run_intake
+from app.services.source_acquisition import get_latest_results, get_source_status
 
 router = APIRouter(prefix="/autotrader", tags=["autotrader"])
 
@@ -97,3 +99,68 @@ def trigger_intake(session: Session = Depends(get_session)) -> dict:
     """
     result = run_intake(session)
     return result.to_dict()
+
+
+@router.get("/opportunities")
+def autotrader_opportunities(
+    limit: int = Query(default=50, ge=1, le=200),
+    band: str | None = Query(default=None, description="Filter by priority band: elite, high, medium, low"),
+    session: Session = Depends(get_session),
+) -> dict:
+    """
+    Live-scored opportunities from all ingestion sources, ordered by score descending.
+    Combines AutoTrader intake sources and direct source acquisition results.
+    """
+    stmt = select(IncomeSource).order_by(IncomeSource.score.desc()).limit(limit)
+    records = session.exec(stmt).all()
+
+    if band:
+        records = [r for r in records if r.priority_band == band]
+
+    # Bulk-fetch decisions for these source_ids
+    source_ids = [r.source_id for r in records]
+    decision_map: dict[str, OpportunityDecision] = {}
+    if source_ids:
+        decisions = session.exec(
+            select(OpportunityDecision).where(OpportunityDecision.source_id.in_(source_ids))
+        ).all()
+        decision_map = {d.source_id: d for d in decisions}
+
+    in_memory = get_latest_results()
+
+    def _decision_summary(d: OpportunityDecision | None) -> dict | None:
+        if not d:
+            return None
+        return {
+            "action_state": d.action_state,
+            "execution_path": d.execution_path,
+            "execution_ready": d.execution_ready,
+            "approval_required": d.approval_required,
+            "blocked_by": d.blocked_by,
+            "capital_recommendation": d.capital_recommendation,
+        }
+
+    return {
+        "total": len(records),
+        "source_type": get_intake_state().last_source_type or "none",
+        "last_scan_at": get_intake_state().last_scan_at.isoformat() if get_intake_state().last_scan_at else None,
+        "opportunities": [
+            {
+                "source_id": r.source_id,
+                "description": r.description,
+                "score": r.score,
+                "priority_band": r.priority_band,
+                "estimated_profit": r.estimated_profit,
+                "confidence": r.confidence,
+                "category": r.category,
+                "status": r.status.value,
+                "origin_module": r.origin_module,
+                "next_action": r.next_action,
+                "date_found": r.date_found.isoformat() if r.date_found else None,
+                "decision": _decision_summary(decision_map.get(r.source_id)),
+            }
+            for r in records
+        ],
+        "in_memory_count": len(in_memory),
+        "sources_status": get_source_status().get("sources", {}),
+    }

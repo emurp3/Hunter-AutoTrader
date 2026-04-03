@@ -1,5 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.database.config import create_db_and_tables
 from app.routers.autotrader import router as autotrader_router
@@ -14,7 +18,16 @@ from app.routers.execution import router as execution_router
 from app.routers.advisors import router as advisors_router
 from app.routers.sources import router as sources_router
 from app.routers.performance import router as performance_router
+from app.routers.system import router as system_router
+from app.routers.monitoring import router as monitoring_router
+from app.routers.handoff import router as handoff_router
+from app.routers.leads import router as leads_router
+from app.routers.decisions import router as decisions_router
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
 
 
 @asynccontextmanager
@@ -34,6 +47,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── API routers ───────────────────────────────────────────────────────────────
+app.include_router(system_router)        # /system — health + readiness (first for priority)
 app.include_router(opportunities_router)
 app.include_router(reports_router)
 app.include_router(budget_router)
@@ -46,8 +61,66 @@ app.include_router(sources_router)
 app.include_router(execution_router)
 app.include_router(performance_router)
 app.include_router(advisors_router)
+app.include_router(monitoring_router)
+app.include_router(handoff_router)
+app.include_router(leads_router)
+app.include_router(decisions_router)
+
+# ── Static file serving (production only) ────────────────────────────────────
+# _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).
+# When absent, local dev uses the Vite dev server as before.
+if _FRONTEND_DIST.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
+        name="assets",
+    )
+    app.mount(
+        "/media",
+        StaticFiles(directory=str(_FRONTEND_DIST / "media")),
+        name="media",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """Catch-all: serve index.html for all unmatched paths (SPA client-side routing)."""
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))
+
+else:
+    @app.get("/")
+    def root():
+        return {"message": "Hunter v0.2.0 — autonomous operations engine running"}
 
 
-@app.get("/")
-def root():
-    return {"message": "Hunter v0.2.0 — autonomous operations engine running"}
+# ── ASGI middleware: strip /api prefix ───────────────────────────────────────
+# Must be the LAST thing in this module — wraps the entire app including
+# lifespan. Rewrites /api/... → /... so the frontend's const API = '/api'
+# works in production (same origin, no proxy) while all backend routes
+# remain unchanged. Local dev uses the Vite proxy instead; this middleware
+# is still present but harmless (direct curl hits /api/... and it strips).
+
+class _StripApiPrefix:
+    """
+    Pure ASGI middleware. Strips the /api prefix from HTTP request paths.
+    Passes lifespan and websocket scopes through unchanged.
+    Both scope["path"] and scope["raw_path"] are rewritten for consistency.
+    """
+
+    __slots__ = ("_app",)
+
+    def __init__(self, inner_app):
+        self._app = inner_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path: str = scope.get("path", "")
+            if path.startswith("/api"):
+                scope = dict(scope)
+                scope["path"] = path[4:] or "/"
+                raw: bytes = scope.get("raw_path", b"")
+                if raw.startswith(b"/api"):
+                    scope["raw_path"] = raw[4:] or b"/"
+        await self._app(scope, receive, send)
+
+
+app = _StripApiPrefix(app)

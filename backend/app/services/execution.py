@@ -701,7 +701,7 @@ def _release_or_flag_allocation(
         budget.remaining_budget = round((budget.remaining_budget or 0.0) + allocation.amount_allocated, 2)
         session.add(budget)
 
-    allocation.status = AllocationStatus.canceled if canceled else AllocationStatus.canceled
+    allocation.status = AllocationStatus.canceled if canceled else AllocationStatus.failed
     allocation.updated_at = now
     if canceled:
         allocation.canceled_at = now

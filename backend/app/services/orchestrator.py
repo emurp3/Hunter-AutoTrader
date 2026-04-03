@@ -101,12 +101,22 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
         summary=f"Action packet generated (id={packet.id})",
     )
 
+    # Decision engine — route to action state + execution path
+    decision_id = None
+    try:
+        from app.services import decision as decision_svc
+        decision = decision_svc.decide(source, session)
+        decision_id = decision.id
+    except Exception:
+        pass  # Decision failure must not block the pipeline
+
     return {
         "source_id": source.source_id,
         "score": result.score,
         "priority_band": result.priority_band,
         "alerts_raised": alerts_raised,
         "packet_id": packet.id,
+        "decision_id": decision_id,
     }
 
 

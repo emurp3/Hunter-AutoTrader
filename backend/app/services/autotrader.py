@@ -124,7 +124,15 @@ def get_intake_state() -> _IntakeState:
 
 
 def _configured_source_type() -> str:
-    return os.getenv("AUTOTRADER_SOURCE_TYPE", "file").strip().lower() or "file"
+    # Re-read from .env files on every call so changes take effect without restart.
+    # dotenv_values() reads the file but does not modify os.environ.
+    from dotenv import dotenv_values as _dv
+    for _p in (BACKEND_ROOT / ".env", BACKEND_ROOT.parent / "backend.env"):
+        if _p.exists():
+            _val = _dv(str(_p)).get("AUTOTRADER_SOURCE_TYPE", "").strip().lower()
+            if _val:
+                return _val
+    return os.getenv("AUTOTRADER_SOURCE_TYPE", "").strip().lower() or ""
 
 
 def _configured_live_path() -> Path:
@@ -159,9 +167,12 @@ def get_adapter() -> AutoTraderAdapter:
             api_key=os.getenv("AUTOTRADER_HTTP_API_KEY"),
         )
 
+    if source_type == "live":
+        raise AutoTraderConfigError("live mode: use run_intake() directly — no adapter required.")
+
     raise AutoTraderConfigError(
-        f"AUTOTRADER_SOURCE_TYPE is '{source_type}'. "
-        "Set it to 'file' or 'http'."
+        f"AUTOTRADER_SOURCE_TYPE is '{source_type!r}'. "
+        "Set it to 'live', 'file', or 'http'."
     )
 
 
@@ -285,6 +296,36 @@ def assess_live_source() -> SourceSnapshot:
             findings=findings,
             updated_at=datetime.now(timezone.utc).isoformat(),
             record_count=len(findings),
+        )
+
+    if source_type == "live":
+        # live mode health check: verify at least one source adapter is enabled
+        from app.config import (
+            SOURCES_GIG_ENABLED, SOURCES_GITHUB_ENABLED, SOURCES_MARKETPLACE_ENABLED,
+            SOURCES_SOCIAL_ENABLED, SOURCES_LOCAL_ENABLED, SOURCES_DIGITAL_ENABLED,
+        )
+        any_enabled = any([
+            SOURCES_GIG_ENABLED, SOURCES_GITHUB_ENABLED, SOURCES_MARKETPLACE_ENABLED,
+            SOURCES_SOCIAL_ENABLED, SOURCES_LOCAL_ENABLED, SOURCES_DIGITAL_ENABLED,
+        ])
+        if not any_enabled:
+            return SourceSnapshot(
+                source_type="live",
+                status="invalid",
+                message="AutoTrader live: all source adapters are disabled.",
+            )
+        return SourceSnapshot(
+            source_type="live",
+            status="ready",
+            message="AutoTrader live source acquisition pipeline is active.",
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    if not source_type:
+        return SourceSnapshot(
+            source_type="none",
+            status="missing",
+            message="AUTOTRADER_SOURCE_TYPE is not set. Set it to 'live', 'file', or 'http'.",
         )
 
     return SourceSnapshot(
@@ -427,11 +468,75 @@ def ingest_findings(session: Session, findings: list[dict[str, Any]], *, origin_
     return result
 
 
+def _run_live_intake(session: Session) -> IntakeResult:
+    """Bridge AutoTrader intake to the Hunter source acquisition pipeline."""
+    from app.services.source_acquisition import run_source_acquisition
+
+    _state.last_scan_at = datetime.now(timezone.utc)
+    _state.last_source_type = "live"
+    _state.source_configured = True
+
+    try:
+        acq = run_source_acquisition(session)
+        errors = acq.get("errors", [])
+
+        result = IntakeResult(
+            scanned=acq.get("found", 0),
+            inserted=acq.get("inserted", 0),
+            updated=acq.get("updated", 0),
+            skipped=acq.get("skipped", 0),
+            errors=len(errors),
+            error_details=errors,
+            source_mode="live",
+            fallback_used=False,
+            live_data_status="ready",
+            live_data_message="Live source acquisition completed.",
+            records_loaded=acq.get("found", 0),
+        )
+
+        _state.live_data_status = "ready"
+        _state.live_data_message = f"Live source acquisition: {result.inserted} new, {result.updated} updated."
+        _state.source_reachable = True
+        _state.using_fallback = False
+        _state.current_data_mode = "live"
+        _state.last_status = "partial" if errors else "success"
+        _state.last_scanned = result.scanned
+        _state.last_inserted = result.inserted
+        _state.last_updated = result.updated
+        _state.last_skipped = result.skipped
+        _state.last_errors = result.errors
+        _state.last_error = errors[0] if errors else None
+
+        return result
+
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        logger.error("_run_live_intake failed: %s", msg)
+        _state.live_data_status = "error"
+        _state.live_data_message = msg
+        _state.source_reachable = False
+        _state.current_data_mode = "offline"
+        _state.last_status = "error"
+        _state.last_error = msg
+
+        return IntakeResult(
+            aborted=True,
+            abort_reason="source_acquisition_failed",
+            error_details=[msg],
+            source_mode="offline",
+            live_data_status="error",
+            live_data_message=msg,
+        )
+
+
 def run_intake(session: Session) -> IntakeResult:
+    if _configured_source_type() == "live":
+        return _run_live_intake(session)
+
     live_snapshot = assess_live_source()
     _state.last_scan_at = datetime.now(timezone.utc)
     _state.last_source_type = live_snapshot.source_type
-    _state.source_configured = live_snapshot.source_type in ("file", "http")
+    _state.source_configured = live_snapshot.source_type in ("file", "http", "live")
     _state.live_data_status = live_snapshot.status
     _state.live_data_message = live_snapshot.message
     _state.live_data_path = live_snapshot.path

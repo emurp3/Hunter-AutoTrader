@@ -16,6 +16,7 @@ class EventType(str, Enum):
     strategy_activated = "strategy_activated"
     executed = "executed"
     outcome_logged = "outcome_logged"
+    score_updated = "score_updated"
     performance_updated = "performance_updated"
     closed = "closed"
     error = "error"

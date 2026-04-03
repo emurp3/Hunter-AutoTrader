@@ -119,22 +119,50 @@ AUTOTRADER_HTTP_URL: str | None = os.getenv("AUTOTRADER_HTTP_URL")
 # Optional: Bearer token for the http adapter.
 AUTOTRADER_HTTP_API_KEY: str | None = os.getenv("AUTOTRADER_HTTP_API_KEY")
 
-# ── Brokerage execution (Alpaca Markets) ─────────────────────────────────────
-# Controlled brokerage execution provider configuration.
+# ── Execution mode ────────────────────────────────────────────────────────────
+# ONE OPERATOR ACTION to go live: set EXECUTION_MODE=live in .env
+# sandbox = paper trading (default)
+# live    = real capital (requires LIVE_* credentials)
+EXECUTION_MODE: str = _resolve_env_value("EXECUTION_MODE", "sandbox").lower()
+
+# ── Sandbox credentials (Alpaca Paper) ───────────────────────────────────────
+SANDBOX_API_KEY: str = _resolve_env_value("SANDBOX_API_KEY", "", prefer_non_empty=True)
+SANDBOX_SECRET_KEY: str = _resolve_env_value("SANDBOX_SECRET_KEY", "", prefer_non_empty=True)
+SANDBOX_BASE_URL: str = _resolve_env_value("SANDBOX_BASE_URL", "https://paper-api.alpaca.markets")
+SANDBOX_ACCOUNT_ID: str = _resolve_env_value("SANDBOX_ACCOUNT_ID", "")
+
+# ── Live credentials (Alpaca Live) — prewired, not activated ─────────────────
+LIVE_API_KEY: str = _resolve_env_value("LIVE_API_KEY", "", prefer_non_empty=True)
+LIVE_SECRET_KEY: str = _resolve_env_value("LIVE_SECRET_KEY", "", prefer_non_empty=True)
+LIVE_BASE_URL: str = _resolve_env_value("LIVE_BASE_URL", "https://api.alpaca.markets")
+LIVE_ACCOUNT_ID: str = _resolve_env_value("LIVE_ACCOUNT_ID", "")
+
+# ── Brokerage execution (Alpaca Markets) — legacy + derived ──────────────────
 EXECUTION_PROVIDER: str = _resolve_env_value("EXECUTION_PROVIDER", "alpaca").lower()
-ALPACA_ENABLED: bool = _resolve_env_value("ALPACA_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
-ALPACA_API_KEY: str = _resolve_env_value("ALPACA_API_KEY", "", prefer_non_empty=True)
-ALPACA_SECRET_KEY: str = _resolve_env_value("ALPACA_SECRET_KEY", "", prefer_non_empty=True)
-ALPACA_PAPER: bool = _resolve_env_value("ALPACA_PAPER", "true").lower() in {"1", "true", "yes", "on"}
-ALPACA_BASE_URL: str = _resolve_env_value("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_ENABLED: bool = _resolve_env_value("ALPACA_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+# Resolve active credentials from mode
+_is_sandbox = EXECUTION_MODE == "sandbox"
+ALPACA_API_KEY: str = (SANDBOX_API_KEY or _resolve_env_value("ALPACA_API_KEY", "", prefer_non_empty=True)) if _is_sandbox else LIVE_API_KEY
+ALPACA_SECRET_KEY: str = (SANDBOX_SECRET_KEY or _resolve_env_value("ALPACA_SECRET_KEY", "", prefer_non_empty=True)) if _is_sandbox else LIVE_SECRET_KEY
+ALPACA_PAPER: bool = _is_sandbox  # paper=True enforced in sandbox; paper=False in live
+ALPACA_BASE_URL: str = SANDBOX_BASE_URL if _is_sandbox else LIVE_BASE_URL
+
 ALPACA_EFFECTIVE_SOURCES = {
+    "execution_mode": EXECUTION_MODE,
     "execution_provider": _effective_env_source("EXECUTION_PROVIDER"),
     "alpaca_enabled": _effective_env_source("ALPACA_ENABLED"),
-    "alpaca_paper": _effective_env_source("ALPACA_PAPER"),
-    "alpaca_base_url": _effective_env_source("ALPACA_BASE_URL"),
-    "alpaca_api_key": _effective_env_source("ALPACA_API_KEY", prefer_non_empty=True),
-    "alpaca_secret_key": _effective_env_source("ALPACA_SECRET_KEY", prefer_non_empty=True),
+    "alpaca_paper": "derived_from_execution_mode",
+    "alpaca_base_url": "derived_from_execution_mode",
+    "alpaca_api_key": _effective_env_source("SANDBOX_API_KEY" if _is_sandbox else "LIVE_API_KEY", prefer_non_empty=True),
+    "alpaca_secret_key": _effective_env_source("SANDBOX_SECRET_KEY" if _is_sandbox else "LIVE_SECRET_KEY", prefer_non_empty=True),
 }
+
+# ── Lead intelligence ─────────────────────────────────────────────────────────
+APOLLO_API_KEY: str = os.getenv("APOLLO_API_KEY", "")
+APOLLO_BASE_URL: str = os.getenv("APOLLO_BASE_URL", "https://api.apollo.io/v1")
+COMMONROOM_API_KEY: str = os.getenv("COMMONROOM_API_KEY", "")
+COMMONROOM_BASE_URL: str = os.getenv("COMMONROOM_BASE_URL", "https://api.commonroom.io/community/v1")
 
 # ── Advisor API keys ──────────────────────────────────────────────────────────
 VENICE_API_KEY: str = os.getenv("VENICE_API_KEY", "")

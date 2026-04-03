@@ -26,6 +26,7 @@ def create_db_and_tables() -> None:
     import app.models.advisor        # noqa: F401
     import app.models.execution_outcome  # noqa: F401
     import app.models.provider_execution  # noqa: F401
+    import app.models.decision           # noqa: F401
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_tables()
 
@@ -77,6 +78,21 @@ def _migrate_sqlite_tables() -> None:
                 "failed_at": "TIMESTAMP",
                 "canceled_at": "TIMESTAMP",
                 "updated_at": "TIMESTAMP",
+            },
+        )
+        _ensure_columns(
+            conn,
+            "opportunitydecision",
+            {
+                "feedback_adjustment": "REAL DEFAULT 0.0",
+                "approval_required": "BOOLEAN DEFAULT 0",
+                "approval_reason": "TEXT",
+                "execution_ready": "BOOLEAN DEFAULT 0",
+                "blocked_by": "TEXT",
+                "capital_recommendation": "REAL",
+                "action_payload_json": "TEXT",
+                "reviewed_at": "TIMESTAMP",
+                "reviewer_note": "TEXT",
             },
         )
         _ensure_columns(

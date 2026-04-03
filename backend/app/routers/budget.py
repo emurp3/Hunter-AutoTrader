@@ -452,6 +452,67 @@ def mark_candidate(source_id: str, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+# ── GET /budget/transactions ─────────────────────────────────────────────────
+
+@router.get("/transactions")
+def list_transactions(
+    limit: int = 200,
+    session: Session = Depends(get_session),
+) -> dict:
+    """
+    Unified transaction log: all allocations across all budget cycles,
+    with their outcomes merged in. Sorted newest first.
+    """
+    from sqlmodel import select as _select
+    from app.models.budget import BudgetAllocation, BudgetOutcome, WeeklyBudget
+
+    allocations = session.exec(
+        _select(BudgetAllocation).order_by(BudgetAllocation.created_at.desc()).limit(limit)
+    ).all()
+
+    all_outcomes = session.exec(_select(BudgetOutcome)).all()
+    outcomes_by_alloc: dict[int, list[BudgetOutcome]] = {}
+    for o in all_outcomes:
+        outcomes_by_alloc.setdefault(o.allocation_id, []).append(o)
+
+    budget_names: dict[int, str] = {}
+    budgets = session.exec(_select(WeeklyBudget)).all()
+    for b in budgets:
+        budget_names[b.id] = (
+            b.week_start_date.isoformat()
+            if hasattr(b.week_start_date, "isoformat")
+            else str(b.week_start_date)
+        )
+
+    rows = []
+    for a in allocations:
+        outcomes = outcomes_by_alloc.get(a.id, [])
+        actual_return = round(sum(o.actual_return for o in outcomes), 2)
+        net_result = round(sum(o.net_result for o in outcomes), 2)
+        rows.append({
+            "id": a.id,
+            "timestamp": a.created_at.isoformat() if a.created_at else None,
+            "allocation_name": a.allocation_name,
+            "source_id": a.source_id,
+            "category": a.category,
+            "amount_committed": float(a.amount_allocated),
+            "expected_return": float(a.expected_return) if a.expected_return else None,
+            "actual_return": actual_return if outcomes else None,
+            "net_result": net_result if outcomes else None,
+            "status": a.status if isinstance(a.status, str) else a.status.value,
+            "approval_required": a.approval_required,
+            "approved_by_commander": a.approved_by_commander,
+            "budget_cycle": budget_names.get(a.weekly_budget_id, "—"),
+            "outcome_count": len(outcomes),
+            "outcome_notes": outcomes[0].outcome_notes if outcomes else None,
+        })
+
+    return {
+        "total": len(rows),
+        "transactions": rows,
+    }
+
+
 # ── GET /budget/weekly-report ─────────────────────────────────────────────────
 
 @router.get("/weekly-report")

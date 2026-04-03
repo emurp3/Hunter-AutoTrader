@@ -30,25 +30,59 @@ class MarketplaceScannerAdapter(SourceAdapter):
         headers = {"User-Agent": SOURCES_USER_AGENT, "Accept": "application/rss+xml, application/xml, text/xml"}
         raw_items: list[dict[str, Any]] = []
 
+        # DealNews public RSS feeds — category-specific, no auth required
+        _DEALNEWS_FEEDS = [
+            ("https://www.dealnews.com/c196/Electronics/?rss=1", "electronics"),
+            ("https://www.dealnews.com/c172/Computers/?rss=1", "computers"),
+            ("https://www.dealnews.com/c174/Tools-Hardware/?rss=1", "tools"),
+            ("https://www.dealnews.com/c244/Sports-Outdoors/?rss=1", "sporting-goods"),
+            ("https://www.dealnews.com/c260/Home-Garden/?rss=1", "home-goods"),
+        ]
+
         with httpx.Client(timeout=SOURCE_REQUEST_TIMEOUT_SECONDS, headers=headers, follow_redirects=True) as client:
+            # Slickdeals — keyword-driven search RSS
             for query in SOURCES_MARKETPLACE_QUERIES:
                 url = (
                     "https://slickdeals.net/newsearch.php"
                     f"?q={quote_plus(query)}&searcharea=deals&searchin=first&rss=1"
                 )
-                response = client.get(url)
-                response.raise_for_status()
-                root = ET.fromstring(response.text)
-                for item in root.findall(".//item"):
-                    raw_items.append(
-                        {
-                            "query": query,
-                            "title": unescape((item.findtext("title") or "").strip()),
-                            "link": (item.findtext("link") or "").strip(),
-                            "pubDate": (item.findtext("pubDate") or "").strip(),
-                            "description": unescape((item.findtext("description") or "").strip()),
-                        }
-                    )
+                try:
+                    response = client.get(url)
+                    response.raise_for_status()
+                    root = ET.fromstring(response.text)
+                    for item in root.findall(".//item"):
+                        raw_items.append(
+                            {
+                                "_feed": "slickdeals",
+                                "query": query,
+                                "title": unescape((item.findtext("title") or "").strip()),
+                                "link": (item.findtext("link") or "").strip(),
+                                "pubDate": (item.findtext("pubDate") or "").strip(),
+                                "description": unescape((item.findtext("description") or "").strip()),
+                            }
+                        )
+                except (httpx.HTTPError, ET.ParseError):
+                    pass
+
+            # DealNews — category RSS feeds
+            for feed_url, category_hint in _DEALNEWS_FEEDS:
+                try:
+                    response = client.get(feed_url)
+                    response.raise_for_status()
+                    root = ET.fromstring(response.text)
+                    for item in root.findall(".//item"):
+                        raw_items.append(
+                            {
+                                "_feed": "dealnews",
+                                "query": category_hint,
+                                "title": unescape((item.findtext("title") or "").strip()),
+                                "link": (item.findtext("link") or "").strip(),
+                                "pubDate": (item.findtext("pubDate") or "").strip(),
+                                "description": unescape((item.findtext("description") or "").strip()),
+                            }
+                        )
+                except (httpx.HTTPError, ET.ParseError):
+                    pass
 
         return raw_items
 
@@ -70,24 +104,25 @@ class MarketplaceScannerAdapter(SourceAdapter):
         next_action = (
             f"Validate resale comps for {category}, confirm shipping/tax impact, and move fast if spread holds."
         )
+        feed = raw.get("_feed") or "slickdeals"
         listing_hash = hashlib.sha1(link.encode("utf-8")).hexdigest()[:12]
 
         return SourceOpportunity(
-            source_id=f"marketplace:slickdeals:{listing_hash}",
+            source_id=f"marketplace:{feed}:{listing_hash}",
             title=title,
             description=f"{title} [deal ${price:.0f}]",
             estimated_profit=estimated_profit,
             currency="USD",
             confidence=confidence,
             next_action=next_action,
-        origin_module="marketplace_scanner",
-        category=category,
-        lane="arbitrage_deals",
-        source_url=link,
+            origin_module="marketplace_scanner",
+            category=category,
+            lane="arbitrage_deals",
+            source_url=link,
             timestamp=timestamp,
-            source_name="slickdeals_rss",
+            source_name=f"{feed}_rss",
             signal_type="arbitrage",
-            metadata={"query": query, "deal_price": price},
+            metadata={"query": query, "deal_price": price, "feed": feed},
         )
 
 

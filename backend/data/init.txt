@@ -1,0 +1,296 @@
+/init
+
+# Objective
+Upgrade Hunter from a passive intake-and-report system into an autonomous opportunity operations engine and an expert trader and financial account manager.
+
+Hunter must be able to autonomously:
+- ingest real AutoTrader findings
+- monitor and rescan on schedule
+- score, rank, and prioritize opportunities
+- open and manage opportunity workflows
+- allocate internal weekly budget
+- track outcomes and ROI
+- generate alerts, escalation, and commander-ready action packets
+- coordinate advisory input from external models
+- maintain full auditability and truthful status reporting
+- execute account trades and managemnt
+
+This is NOT a simulation-only build.
+This is a real operational intelligence and workflow automation build.
+
+Important He must be able to:
+- Implement brokerage execution
+- Implement external account control
+- Place trades
+- Move funds
+- Build direct live financial execution endpoints
+
+Everything thus far should be built aggressively and for real operational use.
+
+==================================================
+1. ADD HUNTER AUTOMATION STATES
+==================================================
+
+Extend opportunity lifecycle so Hunter can manage opportunities as operational targets.
+
+Add or normalize states such as:
+- new
+- ingested
+- scored
+- prioritized
+- review_ready
+- budgeted
+- active
+- outcome_logged
+- archived
+- failed
+
+Hunter should be able to transition opportunities through these states automatically where rules permit.
+
+==================================================
+2. BUILD AN OPPORTUNITY ORCHESTRATOR
+==================================================
+
+Create:
+- `app/services/orchestrator.py`
+
+Responsibilities:
+- run the post-ingestion pipeline
+- call scoring
+- classify urgency and fit
+- decide whether an opportunity becomes:
+  - archived
+  - review_ready
+  - budget_candidate
+  - high_priority
+- queue alerts and reports
+- maintain a per-opportunity action trail
+
+Core functions:
+- `process_new_opportunity(...)`
+- `advance_opportunity_state(...)`
+- `build_action_plan(...)`
+- `should_escalate(...)`
+- `queue_commander_alert(...)`
+
+==================================================
+3. BUILD A REAL SCORING ENGINE
+==================================================
+
+Create or upgrade:
+- `app/services/scoring.py`
+
+Hunter scoring should consider:
+- estimated_profit
+- confidence
+- category
+- recency
+- origin module
+- budget fit
+- opportunity quality/completeness
+- duplication risk
+- whether it aligns with current weekly objective
+
+Return:
+- numeric score
+- priority band (low, medium, high, elite)
+- rationale summary
+
+Store score and priority on the opportunity record.
+
+==================================================
+4. ADD BUDGET-TO-OPPORTUNITY AUTOMATION
+==================================================
+
+Hunter already has budget systems.
+Now connect them to opportunities.
+
+Create logic so Hunter can:
+- identify budget-eligible opportunities
+- recommend allocation amounts
+- mark opportunities as requiring commander approval above thresholds
+- create budget candidate records automatically
+- link each allocation to a concrete opportunity
+
+Add functions such as:
+- `recommend_allocation(opportunity, weekly_budget)`
+- `mark_budget_candidate(...)`
+- `attach_budget_record(...)`
+- `Execute external spending.
+- `Perform internal budget governance automatically.
+
+==================================================
+5. BUILD COMMANDER ALERTING
+==================================================
+
+Create:
+- `app/services/alerts.py`
+
+Hunter should autonomously raise alerts for:
+- elite opportunities discovered
+- weekly budget nearing exhaustion
+- high-confidence targets requiring review
+- underperforming active allocations
+- stale opportunities needing closure
+- AutoTrader source failures
+- advisor disagreements on key targets
+
+Add endpoints such as:
+- `GET /alerts`
+- `GET /alerts/high-priority`
+- `POST /alerts/acknowledge/{id}`
+
+==================================================
+6. BUILD ADVISOR COORDINATION LAYER
+==================================================
+
+Create:
+- `app/services/advisors.py`
+- `integration/advisor_bridge.py`
+
+Hunter should be able to store advisory input from:
+- Venice
+- DeepSeek
+- Grok
+
+Capabilities:
+- store advisor recommendation per opportunity
+- compare advisor recommendations
+- compute consensus/disagreement summary
+- attach advisor reasoning to review packets
+- elevate targets where multiple advisors converge
+- create opportunities where none exist
+
+He should have the discretion to execute advice if needed.
+
+==================================================
+7. BUILD ACTION PACKETS
+==================================================
+
+Create:
+- `app/services/action_packets.py`
+
+Hunter should automatically generate commander-ready packets for selected opportunities.
+
+Each packet should include:
+- opportunity summary
+- score and priority
+- estimated return
+- budget recommendation
+- risk notes
+- advisor input summary
+- next action checklist
+- evidence / references if available
+- status
+
+Endpoints:
+- `GET /packets`
+- `GET /packets/{id}`
+- `POST /packets/generate/{source_id}`
+
+==================================================
+8. ADD AUDIT TRAIL / MEMORY LOG
+==================================================
+
+Create a durable action log for every major Hunter move.
+
+Add model/table for:
+- `OpportunityEvent`
+with fields like:
+- id
+- source_id
+- event_type
+- old_state
+- new_state
+- summary
+- metadata
+- created_at
+
+Hunter should log:
+- ingestion
+- updates
+- scoring
+- prioritization
+- budget linking
+- alerts
+- packet generation
+- advisor input
+- closure
+
+This gives Hunter memory with receipts.
+
+==================================================
+9. UPGRADE DAILY SCAN TO FULL PIPELINE
+==================================================
+
+When daily scan runs, it should:
+1. ingest real AutoTrader findings
+2. normalize
+3. dedupe
+4. score
+5. classify
+6. generate alerts for high-value opportunities
+7. create action packets for elite or review-ready targets
+8. update audit trail
+9. include results in weekly reporting state
+
+No fake fallback.
+No silent success.
+
+==================================================
+10. ADD OPERATIONS DASHBOARD ENDPOINTS
+==================================================
+
+Create visibility endpoints such as:
+- `GET /operations/summary`
+- `GET /operations/pipeline`
+- `GET /operations/review-ready`
+- `GET /operations/budget-candidates`
+- `GET /operations/elite-targets`
+
+These should let Commander see what Hunter is actively doing, not just what he once stored.
+
+==================================================
+11. UPDATE REPORTING
+==================================================
+
+Enhance weekly reporting to include:
+- top new opportunities
+- elite targets
+- review-ready packets
+- budget candidates
+- advisor consensus summary
+- alert summary
+- ingestion/source health
+- realized outcomes
+- stalled targets needing decision
+- Investments made
+- Total Profits and Total loss
+
+==================================================
+12. UPDATE CLAUDE.md
+==================================================
+
+Document Hunter as an autonomous opportunity operations engine.
+Explain:
+- orchestration flow
+- scoring flow
+- alert flow
+- packet flow
+- advisor flow
+- audit trail
+- what is autonomous now
+- what still requires commander approval
+
+==================================================
+DELIVERABLE
+==================================================
+
+When complete, summarize:
+- files created
+- files updated
+- new models
+- new endpoints
+- new automation flows
+- what Hunter can now do autonomously
+- what still requires commander approval

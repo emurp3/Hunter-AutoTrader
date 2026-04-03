@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: hunter
+    runtime: python
+    rootDir: .
+    buildCommand: chmod +x build.sh && ./build.sh
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/system/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.9"
+
+      # Database — points to the persistent Render Disk
+      - key: HUNTER_DB_PATH
+        value: /data/hunter.db
+      - key: HUNTER_REPORTS_PATH
+        value: /data/reports
+
+      # Execution mode (sandbox = paper trading, never live without explicit change)
+      - key: EXECUTION_MODE
+        value: sandbox
+      - key: AUTOTRADER_SOURCE_TYPE
+        value: live
+
+      # Alpaca paper trading credentials — set these in the Render dashboard
+      - key: SANDBOX_API_KEY
+        sync: false
+      - key: SANDBOX_SECRET_KEY
+        sync: false
+
+      # Optional: advisor AI keys — set in Render dashboard if used
+      # - key: VENICE_API_KEY
+      #   sync: false
+      # - key: DEEPSEEK_API_KEY
+      #   sync: false
+      # - key: GROK_API_KEY
+      #   sync: false
+
+    disk:
+      name: hunter-data
+      mountPath: /data
+      sizeGB: 1

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const API = '/api'
 
@@ -291,6 +291,108 @@ function StatusDot({ ok, label }) {
   )
 }
 
+function OpportunityModal({ opportunity, onClose }) {
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  if (!opportunity) return null
+  const d = opportunity.decision
+  return (
+    <div className="opp-modal-overlay" onClick={onClose}>
+      <div className="opp-modal" onClick={e => e.stopPropagation()}>
+        <div className="opp-modal-header">
+          <span className={`opp-band opp-band--${opportunity.priority_band ?? 'low'}`}>
+            {opportunity.priority_band?.toUpperCase() ?? 'LOW'}
+          </span>
+          <span className="opp-modal-score">Score {opportunity.score?.toFixed(1) ?? '—'}</span>
+          <button className="opp-modal-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="opp-modal-body">
+          <div className="opp-modal-desc">{opportunity.description}</div>
+          <div className="opp-modal-grid">
+            <div className="opp-modal-field">
+              <span className="opp-modal-label">Source ID</span>
+              <span className="opp-modal-value opp-modal-mono">{opportunity.source_id}</span>
+            </div>
+            <div className="opp-modal-field">
+              <span className="opp-modal-label">Category</span>
+              <span className="opp-modal-value">{opportunity.category ?? '—'}</span>
+            </div>
+            <div className="opp-modal-field">
+              <span className="opp-modal-label">Status</span>
+              <span className="opp-modal-value">{opportunity.status ?? '—'}</span>
+            </div>
+            <div className="opp-modal-field">
+              <span className="opp-modal-label">Origin</span>
+              <span className="opp-modal-value">{opportunity.origin_module?.replace(/_/g, ' ') ?? '—'}</span>
+            </div>
+            <div className="opp-modal-field">
+              <span className="opp-modal-label">Est. Monthly Profit</span>
+              <span className="opp-modal-value opp-modal-profit">
+                {opportunity.estimated_profit != null ? `$${Number(opportunity.estimated_profit).toLocaleString()}` : '—'}
+              </span>
+            </div>
+            <div className="opp-modal-field">
+              <span className="opp-modal-label">Confidence</span>
+              <span className="opp-modal-value">
+                {opportunity.confidence != null ? `${(opportunity.confidence * 100).toFixed(0)}%` : '—'}
+              </span>
+            </div>
+            {opportunity.date_found && (
+              <div className="opp-modal-field">
+                <span className="opp-modal-label">Found</span>
+                <span className="opp-modal-value">{new Date(opportunity.date_found).toLocaleDateString()}</span>
+              </div>
+            )}
+            {opportunity.next_action && (
+              <div className="opp-modal-field opp-modal-field--full">
+                <span className="opp-modal-label">Next Action</span>
+                <span className="opp-modal-value">{opportunity.next_action}</span>
+              </div>
+            )}
+          </div>
+          {d && (
+            <div className="opp-modal-decision">
+              <div className="opp-modal-decision-title">Decision</div>
+              <div className="opp-modal-grid">
+                <div className="opp-modal-field">
+                  <span className="opp-modal-label">Action State</span>
+                  <span className={`opp-modal-state opp-modal-state--${d.action_state}`}>{d.action_state?.replace(/_/g, ' ').toUpperCase()}</span>
+                </div>
+                <div className="opp-modal-field">
+                  <span className="opp-modal-label">Execution Path</span>
+                  <span className="opp-modal-value">{d.execution_path?.replace(/_/g, ' ') ?? '—'}</span>
+                </div>
+                <div className="opp-modal-field">
+                  <span className="opp-modal-label">Capital Rec.</span>
+                  <span className="opp-modal-value">
+                    {d.capital_recommendation != null ? `$${Number(d.capital_recommendation).toLocaleString()}` : '—'}
+                  </span>
+                </div>
+                <div className="opp-modal-field">
+                  <span className="opp-modal-label">Execution Ready</span>
+                  <span className={`opp-modal-value ${d.execution_ready ? 'opp-modal-yes' : 'opp-modal-no'}`}>
+                    {d.execution_ready ? 'Yes' : 'No'}
+                  </span>
+                </div>
+                {d.blocked_by && (
+                  <div className="opp-modal-field">
+                    <span className="opp-modal-label">Blocked By</span>
+                    <span className="opp-modal-value opp-modal-blocked">{d.blocked_by}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function formatRelativeDate(value) {
   if (!value) {
     return 'No recent event'
@@ -313,6 +415,24 @@ function formatCurrency(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`
+}
+
+function exportCsv(rows) {
+  const cols = ['timestamp', 'source_id', 'allocation_name', 'category', 'amount_committed', 'expected_return', 'actual_return', 'net_result', 'status', 'budget_cycle']
+  const header = cols.join(',')
+  const body = rows.map(r =>
+    cols.map(c => {
+      const v = r[c] ?? ''
+      return `"${String(v).replace(/"/g, '""')}"`
+    }).join(',')
+  ).join('\n')
+  const blob = new Blob([header + '\n' + body], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `hunter-transactions-${new Date().toISOString().slice(0,10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 async function requestJson(path, options = {}) {
@@ -354,6 +474,10 @@ async function loadOperationalData() {
     eventsResult,
     executionStatusResult,
     performanceSummaryResult,
+    readinessResult,
+    dailyReportResult,
+    liveOpportunitiesResult,
+    transactionsResult,
   ] = await Promise.allSettled([
     requestJson('/operations/summary'),
     requestJson('/alerts/?active_only=true'),
@@ -368,6 +492,10 @@ async function loadOperationalData() {
     requestJson('/operations/events?limit=8'),
     requestJson('/execution/status'),
     requestJson('/performance/summary'),
+    requestJson('/system/readiness'),
+    requestJson('/reports/daily'),
+    requestJson('/autotrader/opportunities?limit=20'),
+    requestJson('/budget/transactions?limit=200'),
   ])
 
   if (
@@ -398,6 +526,10 @@ async function loadOperationalData() {
     executionStatus: executionStatusResult.status === 'fulfilled' ? executionStatusResult.value : null,
     performanceSummary:
       performanceSummaryResult.status === 'fulfilled' ? performanceSummaryResult.value : null,
+    readiness: readinessResult.status === 'fulfilled' ? readinessResult.value : null,
+    dailyReport: dailyReportResult.status === 'fulfilled' ? dailyReportResult.value : null,
+    liveOpportunities: liveOpportunitiesResult.status === 'fulfilled' ? liveOpportunitiesResult.value : null,
+    transactions: transactionsResult.status === 'fulfilled' ? transactionsResult.value : null,
   }
 }
 
@@ -415,6 +547,15 @@ export default function OperationsPage({ onBack }) {
   const [events, setEvents] = useState(fallbackData.events)
   const [executionStatus, setExecutionStatus] = useState(fallbackData.executionStatus)
   const [performanceSummary, setPerformanceSummary] = useState(fallbackData.performanceSummary)
+  const [readiness, setReadiness] = useState(null)
+  const [dailyReport, setDailyReport] = useState(null)
+  const [liveOpportunities, setLiveOpportunities] = useState(null)
+  const [transactions, setTransactions] = useState(null)
+  const [selectedOpportunity, setSelectedOpportunity] = useState(null)
+  const [txSortKey, setTxSortKey] = useState('timestamp')
+  const [txSortDir, setTxSortDir] = useState('desc')
+  const [txPage, setTxPage] = useState(0)
+  const TX_PAGE_SIZE = 15
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [usingFallback, setUsingFallback] = useState(false)
@@ -442,6 +583,10 @@ export default function OperationsPage({ onBack }) {
     setEvents(data.events)
     setExecutionStatus(data.executionStatus ?? fallbackData.executionStatus)
     setPerformanceSummary(data.performanceSummary ?? fallbackData.performanceSummary)
+    setReadiness(data.readiness ?? null)
+    setDailyReport(data.dailyReport ?? null)
+    setLiveOpportunities(data.liveOpportunities ?? null)
+    setTransactions(data.transactions ?? null)
   }
 
   useEffect(() => {
@@ -532,6 +677,31 @@ export default function OperationsPage({ onBack }) {
           : 'critical'
 
   const readyPackets = packets.filter((packet) => packet.status === 'ready')
+
+  const txSortedRows = useMemo(() => {
+    const rows = transactions?.transactions ?? []
+    return [...rows].sort((a, b) => {
+      const av = a[txSortKey] ?? ''
+      const bv = b[txSortKey] ?? ''
+      if (av < bv) return txSortDir === 'asc' ? -1 : 1
+      if (av > bv) return txSortDir === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [transactions, txSortKey, txSortDir])
+
+  const txPageRows = txSortedRows.slice(txPage * TX_PAGE_SIZE, (txPage + 1) * TX_PAGE_SIZE)
+  const txPageCount = Math.ceil(txSortedRows.length / TX_PAGE_SIZE)
+
+  function txSort(key) {
+    if (txSortKey === key) setTxSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setTxSortKey(key); setTxSortDir('desc') }
+    setTxPage(0)
+  }
+
+  function txSortArrow(key) {
+    if (txSortKey !== key) return ' ↕'
+    return txSortDir === 'asc' ? ' ↑' : ' ↓'
+  }
   const fundedPackets = packets.filter(
     (packet) => packet.status === 'acknowledged' || packet.status === 'executed',
   )
@@ -766,12 +936,29 @@ export default function OperationsPage({ onBack }) {
 
   return (
     <div className="ops-root">
+      <OpportunityModal opportunity={selectedOpportunity} onClose={() => setSelectedOpportunity(null)} />
       <header className="ops-header">
         <button className="ops-back" onClick={onBack}>
           ← Hunter
         </button>
         <h1 className="ops-title">Operations Dashboard</h1>
         <div className="ops-header-meta">
+          {readiness && (
+            <span
+              className={`ops-status-badge ops-status-badge--${
+                readiness.execution_mode === 'live' ? 'live-mode' : 'sandbox-mode'
+              }`}
+            >
+              {readiness.execution_mode === 'live' ? 'LIVE' : 'SANDBOX'}
+            </span>
+          )}
+          {readiness && (
+            <span
+              className={`ops-status-badge ops-status-badge--${readiness.sandbox_ready ? 'ready' : 'not-ready'}`}
+            >
+              {readiness.sandbox_ready ? 'BROKER CONNECTED' : 'BROKER OFFLINE'}
+            </span>
+          )}
           <span className={`ops-status-badge ops-status-badge--${usingFallback ? 'fallback' : 'live'}`}>
             {endpointStatus}
           </span>
@@ -833,6 +1020,59 @@ export default function OperationsPage({ onBack }) {
               </div>
             </div>
           </section>
+
+          {readiness && (
+            <section className="ops-readiness-panel">
+              <div className="ops-readiness-header">
+                <h3>System Readiness</h3>
+                <span className={`readiness-mode-badge readiness-mode-badge--${readiness.execution_mode}`}>
+                  {readiness.execution_mode?.toUpperCase()} MODE
+                </span>
+                <span
+                  className={`readiness-status-badge readiness-status-badge--${
+                    readiness.sandbox_ready ? 'ready' : 'blocked'
+                  }`}
+                >
+                  {readiness.sandbox_ready ? 'Sandbox Ready' : 'Not Ready'}
+                </span>
+              </div>
+
+              {readiness.blockers?.length > 0 && (
+                <div className="ops-readiness-blockers">
+                  <div className="ops-readiness-group-label">Blockers</div>
+                  {readiness.blockers.map((b, i) => (
+                    <div key={i} className="ops-readiness-blocker">{b}</div>
+                  ))}
+                </div>
+              )}
+
+              <div className="ops-readiness-modules">
+                {Object.entries(readiness.modules ?? {}).map(([key, mod]) => (
+                  <div
+                    key={key}
+                    className={`ops-readiness-module ops-readiness-module--${
+                      mod.status === 'connected' || mod.status === 'ok' || mod.status === 'ready' || mod.status === 'open'
+                        ? 'ok'
+                        : mod.status === 'partial' || mod.status === 'prewired'
+                        ? 'partial'
+                        : 'offline'
+                    }`}
+                  >
+                    <span className="ops-readiness-module-name">{key.replace('_', ' ')}</span>
+                    <span className="ops-readiness-module-status">{mod.status}</span>
+                  </div>
+                ))}
+              </div>
+
+              {readiness.warnings?.length > 0 && (
+                <div className="ops-readiness-warnings">
+                  {readiness.warnings.slice(0, 3).map((w, i) => (
+                    <div key={i} className="ops-readiness-warning">{w}</div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {usingFallback && (
             <div className="ops-no-data">
@@ -1518,35 +1758,135 @@ export default function OperationsPage({ onBack }) {
             </section>
           )}
 
-          {top10.length > 0 && (
-            <section className="ops-section">
+          {(() => {
+            const displayOpps = liveOpportunities?.opportunities?.length
+              ? liveOpportunities.opportunities
+              : top10
+            const isLive = Boolean(liveOpportunities?.opportunities?.length)
+            return displayOpps.length > 0 ? (
+              <section className="ops-section">
+                <div className="ops-section-header">
+                  <h2>
+                    Top Opportunities <span className="ops-count">{displayOpps.length}</span>
+                  </h2>
+                  <span className={`ops-data-source-badge ops-data-source-badge--${isLive ? 'live' : 'cached'}`}>
+                    {isLive
+                      ? `Live · ${liveOpportunities.source_type ?? 'sources'}`
+                      : 'Pipeline cache'}
+                  </span>
+                </div>
+                <div className="opp-grid">
+                  {displayOpps.map((opportunity) => (
+                    <div
+                      key={opportunity.source_id}
+                      className={`opp-card opp-card--${opportunity.priority_band ?? 'low'} opp-card--clickable`}
+                      onClick={() => setSelectedOpportunity(opportunity)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setSelectedOpportunity(opportunity) }}
+                    >
+                      <div className="opp-card-header">
+                        <span className={`opp-band opp-band--${opportunity.priority_band ?? 'low'}`}>
+                          {opportunity.priority_band?.toUpperCase() ?? 'LOW'}
+                        </span>
+                        <span className="opp-score">{opportunity.score?.toFixed(0) ?? '—'}</span>
+                      </div>
+                      <div className="opp-desc">{opportunity.description}</div>
+                      <div className="opp-footer">
+                        <span className="opp-status">{opportunity.status}</span>
+                        {opportunity.origin_module && (
+                          <span className="opp-origin">{opportunity.origin_module.replace('_', ' ')}</span>
+                        )}
+                        {opportunity.estimated_profit != null && (
+                          <span className="opp-profit">${opportunity.estimated_profit?.toLocaleString()}/mo</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null
+          })()}
+
+          <section className="ops-section">
+            <div className="ops-section-header">
               <h2>
-                Top Opportunities <span className="ops-count">{top10.length}</span>
+                Transaction Log{' '}
+                {txSortedRows.length > 0 && (
+                  <span className="ops-count">{txSortedRows.length}</span>
+                )}
               </h2>
-              <div className="opp-grid">
-                {top10.map((opportunity) => (
-                  <div
-                    key={opportunity.source_id}
-                    className={`opp-card opp-card--${opportunity.priority_band ?? 'low'}`}
-                  >
-                    <div className="opp-card-header">
-                      <span className={`opp-band opp-band--${opportunity.priority_band ?? 'low'}`}>
-                        {opportunity.priority_band?.toUpperCase() ?? 'LOW'}
-                      </span>
-                      <span className="opp-score">{opportunity.score?.toFixed(0) ?? '—'}</span>
-                    </div>
-                    <div className="opp-desc">{opportunity.description}</div>
-                    <div className="opp-footer">
-                      <span className="opp-status">{opportunity.status}</span>
-                      {opportunity.estimated_profit != null && (
-                        <span className="opp-profit">${opportunity.estimated_profit?.toLocaleString()}/mo</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+              {txSortedRows.length > 0 && (
+                <button className="tx-export-btn" onClick={() => exportCsv(txSortedRows)}>
+                  Export CSV
+                </button>
+              )}
+            </div>
+            {txSortedRows.length === 0 ? (
+              <div className="tx-empty">
+                {transactions === null
+                  ? 'Loading transactions...'
+                  : 'No transactions recorded yet. Allocate capital to see the log here.'}
               </div>
-            </section>
-          )}
+            ) : (
+              <>
+                <div className="tx-table-wrap">
+                  <table className="tx-table">
+                    <thead>
+                      <tr>
+                        <th onClick={() => txSort('timestamp')} className="tx-th tx-th--sortable">Timestamp{txSortArrow('timestamp')}</th>
+                        <th onClick={() => txSort('allocation_name')} className="tx-th tx-th--sortable">Opportunity{txSortArrow('allocation_name')}</th>
+                        <th onClick={() => txSort('amount_committed')} className="tx-th tx-th--sortable tx-th--num">Committed{txSortArrow('amount_committed')}</th>
+                        <th onClick={() => txSort('actual_return')} className="tx-th tx-th--sortable tx-th--num">Realized P&L{txSortArrow('actual_return')}</th>
+                        <th onClick={() => txSort('status')} className="tx-th tx-th--sortable">Status{txSortArrow('status')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {txPageRows.map(row => (
+                        <tr key={row.id} className="tx-row">
+                          <td className="tx-td tx-td--ts">
+                            {row.timestamp ? new Date(row.timestamp).toLocaleString() : '—'}
+                          </td>
+                          <td className="tx-td">
+                            <div className="tx-opp-name">{row.allocation_name || '—'}</div>
+                            {row.source_id && (
+                              <div className="tx-source-id">{row.source_id}</div>
+                            )}
+                          </td>
+                          <td className="tx-td tx-td--num">
+                            {row.amount_committed != null ? `$${Number(row.amount_committed).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                          </td>
+                          <td className={`tx-td tx-td--num ${row.actual_return == null ? '' : row.actual_return >= 0 ? 'tx-pos' : 'tx-neg'}`}>
+                            {row.actual_return != null
+                              ? `${row.actual_return >= 0 ? '+' : ''}$${Math.abs(row.actual_return).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                              : '—'}
+                          </td>
+                          <td className="tx-td">
+                            <span className={`tx-status tx-status--${row.status}`}>{row.status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {txPageCount > 1 && (
+                  <div className="tx-pagination">
+                    <button
+                      className="tx-page-btn"
+                      disabled={txPage === 0}
+                      onClick={() => setTxPage(p => p - 1)}
+                    >← Prev</button>
+                    <span className="tx-page-info">Page {txPage + 1} of {txPageCount}</span>
+                    <button
+                      className="tx-page-btn"
+                      disabled={txPage >= txPageCount - 1}
+                      onClick={() => setTxPage(p => p + 1)}
+                    >Next →</button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
 
           {pipeline && (
             <section className="ops-section">
