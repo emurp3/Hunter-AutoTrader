@@ -9,7 +9,22 @@ load_dotenv(BACKEND_ROOT.parent / "backend.env")
 load_dotenv(BACKEND_ROOT / ".env")
 load_dotenv(BACKEND_ROOT.parent / "config" / ".env")
 
-_db_path = os.getenv("HUNTER_DB_PATH", "./hunter.db")
+_db_path_raw = os.getenv("HUNTER_DB_PATH", "./hunter.db")
+
+# Ensure the database directory exists.
+# On Render with a persistent disk, /data is mounted before the app starts.
+# On plans without a disk (or on first boot before the disk is attached),
+# we fall back to a local path so the app still starts.
+_db_dir = os.path.dirname(os.path.abspath(_db_path_raw))
+if _db_dir and _db_dir != "/" and not os.path.isdir(_db_dir):
+    try:
+        os.makedirs(_db_dir, exist_ok=True)
+    except OSError:
+        # Directory could not be created (read-only parent).
+        # Fall back to a writable local path inside the backend directory.
+        _db_path_raw = os.path.join(str(BACKEND_ROOT), "hunter.db")
+
+_db_path = _db_path_raw
 DATABASE_URL = f"sqlite:///{_db_path}"
 
 engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
