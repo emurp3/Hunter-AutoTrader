@@ -1,13 +1,54 @@
-from fastapi import APIRouter, Depends, Query
+import logging
+import threading
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlmodel import Session, select
 
-from app.database.config import get_session
+from app.database.config import engine, get_session
 from app.models.income_source import IncomeSource
 from app.models.decision import OpportunityDecision
 from app.services.autotrader import get_intake_state, run_intake
 from app.services.source_acquisition import get_latest_results, get_source_status
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/autotrader", tags=["autotrader"])
+
+# ── Background intake guard ────────────────────────────────────────────────────
+# Prevents concurrent intake runs (e.g. manual trigger racing the scheduler).
+_intake_lock = threading.Lock()
+_intake_running = False
+
+
+def _run_intake_background() -> None:
+    """
+    Opens its own DB session (never reuses a request session) and runs the full
+    intake pipeline. Called as a BackgroundTask — response has already been sent.
+    """
+    global _intake_running
+    try:
+        with Session(engine) as session:
+            result = run_intake(session)
+        if result.aborted:
+            logger.error(
+                "background intake aborted — reason=%s details=%s",
+                result.abort_reason,
+                result.error_details,
+            )
+        else:
+            logger.info(
+                "background intake complete — scanned=%d inserted=%d updated=%d skipped=%d errors=%d",
+                result.scanned,
+                result.inserted,
+                result.updated,
+                result.skipped,
+                result.errors,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("background intake raised an unexpected error: %s", exc)
+    finally:
+        with _intake_lock:
+            _intake_running = False
 
 
 @router.get("/status")
@@ -16,6 +57,7 @@ def autotrader_status() -> dict:
 
     return {
         "source_configured": state.source_configured,
+        "intake_running": _intake_running,
         "config": {
             "source_type": state.last_source_type or "file",
             "file_path": state.live_data_path,
@@ -91,14 +133,27 @@ def intake_summary(session: Session = Depends(get_session)) -> dict:
     }
 
 
-@router.post("/run-intake", status_code=200)
-def trigger_intake(session: Session = Depends(get_session)) -> dict:
+@router.post("/run-intake", status_code=202)
+def trigger_intake(background_tasks: BackgroundTasks) -> dict:
     """
-    Manually trigger the AutoTrader intake pipeline.
-    Returns full result including aborted/abort_reason if source is unavailable.
+    Queue the AutoTrader intake pipeline. Returns 202 immediately.
+    Actual work runs in a background thread with its own DB session.
+    Poll GET /autotrader/status for progress and results.
     """
-    result = run_intake(session)
-    return result.to_dict()
+    global _intake_running
+    with _intake_lock:
+        if _intake_running:
+            return {
+                "status": "already_running",
+                "message": "Intake is already in progress. Poll /autotrader/status for updates.",
+            }
+        _intake_running = True
+
+    background_tasks.add_task(_run_intake_background)
+    return {
+        "status": "accepted",
+        "message": "Intake queued. Running in background. Poll /autotrader/status for results.",
+    }
 
 
 @router.get("/opportunities")

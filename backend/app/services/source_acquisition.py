@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -103,30 +104,51 @@ def get_latest_results(origin_module: str | None = None) -> list[dict[str, Any]]
     return _state.latest_results
 
 
+def _run_adapter_safe(
+    adapter,
+) -> tuple[str, list[SourceOpportunity], dict[str, Any], str | None]:
+    """
+    Run one source adapter in isolation.
+    Returns (name, results, health_dict, error_message_or_None).
+    Never raises — all exceptions are captured as error_message.
+    """
+    try:
+        results = adapter.run()
+        return adapter.source_name(), results, adapter.health_status(), None
+    except Exception as exc:  # noqa: BLE001
+        health = adapter.health_status()
+        health.update({"status": "error", "live": False, "last_error": str(exc)})
+        return adapter.source_name(), [], health, f"{adapter.source_name()} failed: {exc}"
+
+
 def run_source_acquisition(session: Session) -> dict[str, Any]:
     adapters = _build_adapters()
     all_results: list[SourceOpportunity] = []
     health_map: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
 
-    for adapter in adapters:
-        try:
-            results = adapter.run()
+    # Run all adapters concurrently — each adapter is I/O-bound and DB-free.
+    # Results are collected in the main thread; DB writes happen after the pool
+    # closes so SQLite session access remains single-threaded.
+    with ThreadPoolExecutor(max_workers=len(adapters)) as pool:
+        futures = [pool.submit(_run_adapter_safe, adapter) for adapter in adapters]
+        for future in as_completed(futures):
+            name, results, health, error_msg = future.result()
             all_results.extend(results)
-            health_map[adapter.source_name()] = adapter.health_status()
-        except Exception as exc:  # noqa: BLE001
-            message = f"{adapter.source_name()} failed: {exc}"
-            errors.append(message)
-            alert_svc.raise_alert(
-                alert_type=AlertType.source_failure,
-                title=f"Source acquisition failure — {adapter.source_name()}",
-                body=message,
-                session=session,
-                priority=AlertPriority.medium,
-            )
-            health = adapter.health_status()
-            health.update({"status": "error", "live": False, "last_error": str(exc)})
-            health_map[adapter.source_name()] = health
+            health_map[name] = health
+            if error_msg:
+                errors.append(error_msg)
+
+    # Raise failure alerts sequentially now that the parallel work is done
+    for error_msg in errors:
+        adapter_name = error_msg.split(" failed:")[0]
+        alert_svc.raise_alert(
+            alert_type=AlertType.source_failure,
+            title=f"Source acquisition failure — {adapter_name}",
+            body=error_msg,
+            session=session,
+            priority=AlertPriority.medium,
+        )
 
     deduped = _dedupe_results(all_results)[:SOURCES_MAX_RESULTS_PER_RUN]
     persist_summary = _persist_results(session, deduped)
