@@ -1,5 +1,6 @@
 """
-Alpaca paper-trading adapter.
+Alpaca brokerage adapter — supports both paper (sandbox) and live mode.
+Active mode is controlled by EXECUTION_MODE in the environment.
 """
 
 from __future__ import annotations

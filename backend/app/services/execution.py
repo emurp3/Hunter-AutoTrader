@@ -76,7 +76,7 @@ def get_execution_provider_status(session: Session) -> dict:
         return {**base_status, "mode": "disabled", "connected": False, "detail": f"Unsupported execution provider: {provider}"}
 
     if not ALPACA_ENABLED:
-        return {**base_status, "connected": False, "detail": "Alpaca execution is disabled. Set ALPACA_ENABLED=true to activate paper trading."}
+        return {**base_status, "connected": False, "detail": "Alpaca execution is disabled. Set ALPACA_ENABLED=true to activate."}
 
     try:
         adapter = get_alpaca_adapter()
@@ -268,7 +268,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
         source_id=packet.source_id,
         allocation_id=allocation.id,
         provider="alpaca",
-        provider_mode="paper",
+        provider_mode="paper" if ALPACA_PAPER else "live",
         external_order_id=result.order_id,
         symbol=result.symbol,
         order_side=result.side,
@@ -295,7 +295,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
             "packet_id": packet.id,
             "allocation_id": allocation.id,
             "provider": "alpaca",
-            "mode": "paper",
+            "mode": "paper" if ALPACA_PAPER else "live",
             "external_order_id": result.order_id,
             "symbol": result.symbol,
             "side": result.side,
@@ -307,7 +307,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
     alert_svc.raise_alert(
         alert_type=AlertType.execution_completed,
         title=f"Paper order submitted - packet {packet.id}",
-        body=f"Alpaca paper order {result.order_id} for {result.symbol} is {result.status}.",
+        body=f"Alpaca {'paper ' if ALPACA_PAPER else 'live '}order {result.order_id} for {result.symbol} is {result.status}.",
         session=session,
         priority=AlertPriority.medium,
         source_id=packet.source_id,

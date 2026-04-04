@@ -338,7 +338,7 @@ def sandbox_readiness(session: Session = Depends(get_session)):
             "sandbox_account_connected": sandbox_connected,
             "sandbox_account_id": sandbox_brokerage.get("account_id"),
             "live_account_config_present": bool(LIVE_API_KEY and LIVE_SECRET_KEY),
-            "live_account_connected": False,  # not attempted — live mode not active
+            "live_account_connected": EXECUTION_MODE == "live" and bool(LIVE_API_KEY and LIVE_SECRET_KEY),
         },
         "quotas": {
             "strategy_deployment": strategy_quota,
