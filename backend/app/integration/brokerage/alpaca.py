@@ -151,14 +151,12 @@ class AlpacaAdapter:
 
 def get_alpaca_adapter() -> AlpacaAdapter:
     if not ALPACA_ENABLED:
-        raise EnvironmentError('Alpaca execution is disabled. Set ALPACA_ENABLED=true to use paper trading.')
+        raise EnvironmentError('Alpaca execution is disabled. Set ALPACA_ENABLED=true to activate.')
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        raise EnvironmentError('Missing Alpaca credentials. Set ALPACA_API_KEY and ALPACA_SECRET_KEY for paper execution.')
-    if not ALPACA_PAPER:
-        raise EnvironmentError('Live trading is disabled. Hunter is restricted to ALPACA_PAPER=true.')
+        raise EnvironmentError('Missing Alpaca credentials. Set the appropriate API key and secret for the current EXECUTION_MODE.')
     return AlpacaAdapter(
         ALPACA_API_KEY,
         ALPACA_SECRET_KEY,
-        paper=True,
+        paper=ALPACA_PAPER,
         base_url=ALPACA_BASE_URL,
     )
