@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.config import (
@@ -388,4 +389,52 @@ def activate_live_mode():
         ),
         "warning": "Live mode uses real capital. Confirm with Commander Murph before proceeding.",
         "status": "not_activated",
+    }
+
+
+# ── Worker notifications ───────────────────────────────────────────────────────
+
+class NotifyRequest(BaseModel):
+    title: str
+    body: str
+    priority: str = "medium"      # low | medium | high | critical
+    alert_type: str = "review_required"
+    source_id: str | None = None
+    worker_id: str | None = None
+
+
+@router.post("/notify", status_code=201)
+def worker_notify(body: NotifyRequest, session: Session = Depends(get_session)):
+    """
+    Receive a Commander notification from the assistant worker.
+
+    Used for login attempts, checkpoint detections, platform events, and
+    any condition the worker needs to surface to Commander Murph immediately.
+    Credentials are NEVER included in notification payloads.
+    """
+    from app.services import alerts as alert_svc
+    from app.models.alert import AlertType, AlertPriority
+
+    # Map priority string to AlertPriority (default medium)
+    priority_map = {
+        "low": AlertPriority.low,
+        "medium": AlertPriority.medium,
+        "high": AlertPriority.high,
+        "critical": AlertPriority.critical,
+    }
+    priority = priority_map.get(body.priority, AlertPriority.medium)
+
+    alert = alert_svc.raise_alert(
+        alert_type=body.alert_type,
+        title=body.title,
+        body=body.body,
+        session=session,
+        priority=priority,
+        source_id=body.source_id,
+    )
+    return {
+        "status": "notified",
+        "alert_id": alert.id,
+        "title": body.title,
+        "priority": priority,
     }
