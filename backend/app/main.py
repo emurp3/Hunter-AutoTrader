@@ -24,6 +24,7 @@ from app.routers.handoff import router as handoff_router
 from app.routers.leads import router as leads_router
 from app.routers.decisions import router as decisions_router
 from app.routers.marketplace import router as marketplace_router
+from app.routers.tasks import router as tasks_router
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -91,6 +92,7 @@ app.include_router(handoff_router)
 app.include_router(leads_router)
 app.include_router(decisions_router)
 app.include_router(marketplace_router)
+app.include_router(tasks_router)
 
 # ── Static file serving (production only) ────────────────────────────────────
 # _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).

@@ -110,6 +110,17 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
     except Exception:
         pass  # Decision failure must not block the pipeline
 
+    # Auto-dispatch: high/elite sources get a task queued immediately
+    task_id = None
+    if result.priority_band in (PriorityBand.elite, PriorityBand.high):
+        try:
+            from app.services.tasks import auto_dispatch_for_source
+            task = auto_dispatch_for_source(source.source_id, session)
+            if task:
+                task_id = task.task_id
+        except Exception:
+            pass  # Dispatch failure must not block the pipeline
+
     return {
         "source_id": source.source_id,
         "score": result.score,
@@ -117,6 +128,7 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
         "alerts_raised": alerts_raised,
         "packet_id": packet.id,
         "decision_id": decision_id,
+        "task_id": task_id,
     }
 
 
