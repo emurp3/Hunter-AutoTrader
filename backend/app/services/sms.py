@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM_NUMBER: str = os.getenv("TWILIO_FROM_NUMBER", "")
+TWILIO_FROM_NUMBER: str = os.getenv("TWILIO_FROM_NUMBER", "+13502250005")
 COMMANDER_PHONE: str = os.getenv("COMMANDER_PHONE", "+14782319790")
 
 # Alert priorities that trigger SMS
