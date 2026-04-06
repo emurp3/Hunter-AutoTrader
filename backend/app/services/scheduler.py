@@ -170,6 +170,9 @@ async def daily_scan_task() -> None:
         for detail in result.error_details:
             logger.warning("daily_scan_task: finding error — %s", detail)
 
+        if result.inserted == 0 and result.source_mode == "live":
+            logger.info("daily_scan_task: intake_dry — creation lane auto-triggered (see autotrader service log)")
+
     # ── Step 2: Weekly quota enforcement ─────────────────────────────────────
     logger.info("daily_scan_task: [2/2] enforcing weekly quotas")
     with Session(engine) as session:

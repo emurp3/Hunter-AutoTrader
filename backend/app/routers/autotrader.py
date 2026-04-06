@@ -187,6 +187,39 @@ def trigger_intake(background_tasks: BackgroundTasks) -> dict:
     }
 
 
+@router.post("/run-creation", status_code=200)
+def trigger_creation_lane(session: Session = Depends(get_session)) -> dict:
+    """
+    Manually trigger the creation lane. Inserts up to HUNTER_CREATION_LANE_COUNT
+    grounded opportunities (one per lane: marketplace, service, digital) using
+    date-seeded rotation. Idempotent within the same calendar day.
+    """
+    from app.services.creation import run_creation_lane, get_creation_status
+    result = run_creation_lane(session, trigger_reason="manual")
+    status = get_creation_status()
+    return {
+        "status": "ok",
+        "trigger_reason": "manual",
+        "created": result.created,
+        "skipped": result.skipped,
+        "errors": result.errors,
+        "error_details": result.error_details,
+        "last_run_at": status["last_run_at"],
+        "opportunities": result.opportunities,
+        "message": (
+            f"Creation lane: {result.created} new opportunity(ies) inserted, "
+            f"{result.skipped} already existed today."
+        ),
+    }
+
+
+@router.get("/creation-status")
+def creation_status() -> dict:
+    """Return the last creation lane run state."""
+    from app.services.creation import get_creation_status
+    return get_creation_status()
+
+
 @router.get("/opportunities")
 def autotrader_opportunities(
     limit: int = Query(default=50, ge=1, le=200),

@@ -603,4 +603,16 @@ def run_intake(session: Session) -> IntakeResult:
     _state.last_skipped = result.skipped
     _state.last_errors = result.errors
 
+    # ── Creation lane — auto-trigger when live intake found nothing new ───────
+    if not result.aborted and result.inserted == 0 and result.source_mode == "live":
+        try:
+            from app.services.creation import run_creation_lane
+            _cr = run_creation_lane(session, trigger_reason="intake_dry")
+            logger.info(
+                "creation_lane: auto-triggered (intake_dry) — created=%d skipped=%d",
+                _cr.created, _cr.skipped,
+            )
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("creation_lane: auto-trigger failed — %s", _exc)
+
     return result
