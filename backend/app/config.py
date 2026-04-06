@@ -286,6 +286,14 @@ MARKETPLACE_FB_RATE_LIMIT_PER_HOUR: int = int(
     os.getenv("MARKETPLACE_FB_RATE_LIMIT_PER_HOUR", "5")
 )
 
+# ── Email notifications (SMTP) ───────────────────────────────────────────────
+SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Hunter")
+COMMANDER_EMAIL: str = os.getenv("COMMANDER_EMAIL", "beautillion1@aol.com")
+
 # ── SMS notifications (Twilio) ───────────────────────────────────────────────
 # Set these in Render dashboard. SMS fires on high/critical alerts only.
 TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")

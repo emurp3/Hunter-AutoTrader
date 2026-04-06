@@ -34,10 +34,15 @@ def raise_alert(
     session.commit()
     session.refresh(alert)
 
-    # SMS Commander on high/critical alerts — non-blocking, never raises
+    # Notify Commander on high/critical alerts — non-blocking, never raises
     try:
         from app.services.sms import send_alert_sms
         send_alert_sms(title, body, priority)
+    except Exception:
+        pass
+    try:
+        from app.services.email_notify import send_alert_email
+        send_alert_email(title, body, priority)
     except Exception:
         pass
 
