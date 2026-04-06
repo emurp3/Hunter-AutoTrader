@@ -36,7 +36,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ── Output path (must match DEFAULT_AUTOTRADER_FILE_PATH in autotrader service) ──
-_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+# __file__ = backend/app/services/trading_candidates.py
+# parents[0] = backend/app/services/
+# parents[1] = backend/app/
+# parents[2] = backend/
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
 AUTOTRADER_JSON_PATH = _BACKEND_ROOT / "data" / "autotrader.json"
 
 # ── Default watchlist — liquid momentum candidates ────────────────────────────
@@ -112,8 +116,9 @@ def _env_watchlist() -> list[str]:
 
 def _screen_watchlist(symbols: list[str]) -> list[dict[str, Any]]:
     """
-    Fetch daily bars for all symbols, apply momentum filter, return candidates.
+    Fetch daily bars for all symbols, apply momentum/mean-reversion filter, return candidates.
     Uses Alpaca's StockHistoricalDataClient with the effective live credentials.
+    Evaluates both bullish (buy) and oversold-reversion (buy dip) setups.
     """
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
@@ -131,7 +136,7 @@ def _screen_watchlist(symbols: list[str]) -> list[dict[str, Any]]:
     )
 
     end = datetime.now(timezone.utc)
-    start = end - timedelta(days=40)  # ~28 trading days
+    start = end - timedelta(days=45)  # ~30 trading days
 
     request = StockBarsRequest(
         symbol_or_symbols=symbols,
@@ -145,24 +150,29 @@ def _screen_watchlist(symbols: list[str]) -> list[dict[str, Any]]:
 
     date_str = end.strftime("%Y%m%d")
     candidates: list[dict[str, Any]] = []
+    symbol_results: list[str] = []
 
     for symbol in symbols:
         bar_list = bars_data.get(symbol, [])
         if len(bar_list) < _MIN_BARS:
-            logger.debug("generate_trading_candidates: %s — only %d bars, skipping", symbol, len(bar_list))
+            symbol_results.append(f"{symbol}:no_data({len(bar_list)})")
             continue
 
         try:
             candidate = _evaluate_symbol(symbol, bar_list, date_str)
             if candidate:
                 candidates.append(candidate)
+                symbol_results.append(f"{symbol}:pass({candidate['confidence']})")
+            else:
+                symbol_results.append(f"{symbol}:filtered")
         except Exception as exc:
+            symbol_results.append(f"{symbol}:error")
             logger.debug("generate_trading_candidates: %s evaluation error — %s", symbol, exc)
             continue
 
     logger.info(
-        "generate_trading_candidates: screened %d symbols, %d passed momentum filter",
-        len(symbols), len(candidates),
+        "generate_trading_candidates: screened %d symbols, %d passed | %s",
+        len(symbols), len(candidates), " ".join(symbol_results),
     )
     return candidates
 
@@ -173,8 +183,11 @@ def _evaluate_symbol(
     date_str: str,
 ) -> dict[str, Any] | None:
     """
-    Apply momentum filter to one symbol's bar data.
-    Returns a candidate dict if the signal qualifies, None otherwise.
+    Evaluate one symbol for two signal types:
+      1. Momentum:        price > SMA5 > SMA20  (trending up)
+      2. Mean-reversion:  price < SMA20 * 0.92  (>8% below 20d avg, oversold bounce)
+
+    Both are BUY setups. Returns a candidate dict or None.
     """
     closes = [float(b.close) for b in bar_list]
     current_price = closes[-1]
@@ -183,29 +196,37 @@ def _evaluate_symbol(
     sma20_window = closes[-20:] if len(closes) >= 20 else closes
     sma20 = sum(sma20_window) / len(sma20_window)
 
-    # Momentum signal: price trending above both moving averages
-    if not (current_price > sma5 > sma20):
-        return None
+    deviation_pct = (current_price - sma20) / sma20  # positive = above SMA20
 
-    momentum_pct = (current_price - sma20) / sma20  # e.g. 0.035 = 3.5%
+    # ── Signal 1: Momentum (bullish trend) ────────────────────────────────────
+    if current_price > sma5 > sma20:
+        signal = "momentum"
+        # Confidence from momentum strength: 2% above SMA20 → 0.78, 7% → 0.93
+        raw_conf = 0.70 + deviation_pct * 4.0
+        confidence = round(min(0.93, max(0.60, raw_conf)), 3)
 
-    # Volume confirmation: recent 5-bar avg vs full-window avg
-    volumes = [float(b.volume) for b in bar_list]
-    avg_vol_recent = sum(volumes[-5:]) / 5
-    avg_vol_full = sum(volumes) / len(volumes)
-    volume_signal = avg_vol_recent >= avg_vol_full * 0.85  # not a volume collapse
+    # ── Signal 2: Mean-reversion (oversold bounce) ────────────────────────────
+    elif deviation_pct <= -0.08:
+        signal = "mean_reversion"
+        # Deeper discount = higher confidence the bounce will come
+        # -8% → 0.76, -15% → 0.92, -20%+ capped at 0.92
+        raw_conf = 0.68 + abs(deviation_pct) * 1.5
+        confidence = round(min(0.92, max(0.60, raw_conf)), 3)
 
-    if not volume_signal:
-        return None
-
-    # Confidence: scaled from momentum strength [0.75, 0.93]
-    raw_conf = 0.70 + momentum_pct * 4.0
-    confidence = round(min(0.93, max(0.60, raw_conf)), 3)
+    else:
+        return None  # no signal
 
     if confidence < _MIN_CONFIDENCE:
         return None
 
-    # estimated_profit: linear scale $15–$22 across confidence range 0.75–0.93
+    # Volume confirmation: recent 5-bar avg should not be collapsing
+    volumes = [float(b.volume) for b in bar_list]
+    avg_vol_recent = sum(volumes[-5:]) / 5
+    avg_vol_full = sum(volumes) / len(volumes)
+    if avg_vol_recent < avg_vol_full * 0.60:  # volume has dried up > 40% — skip
+        return None
+
+    # estimated_profit: $15–$22 scaled by confidence (all within $25 cap)
     profit_range = _PROFIT_MAX - _PROFIT_MIN
     conf_range = 0.93 - 0.75
     estimated_profit = round(
@@ -214,12 +235,15 @@ def _evaluate_symbol(
     )
     estimated_profit = max(_PROFIT_MIN, min(_PROFIT_MAX, estimated_profit))
 
+    signal_desc = (
+        f"above 5d SMA ${sma5:.2f} and 20d SMA ${sma20:.2f}"
+        if signal == "momentum"
+        else f"{abs(deviation_pct)*100:.1f}% below 20d SMA ${sma20:.2f} — oversold bounce setup"
+    )
+
     return {
         "id": f"at-{symbol.lower()}-{date_str}",
-        "description": (
-            f"Momentum signal: {symbol} ${current_price:.2f} "
-            f"— above 5d SMA ${sma5:.2f} and 20d SMA ${sma20:.2f}"
-        ),
+        "description": f"{signal.replace('_',' ').title()} signal: {symbol} ${current_price:.2f} — {signal_desc}",
         "estimated_profit": estimated_profit,
         "currency": "USD",
         "confidence": confidence,
@@ -229,8 +253,8 @@ def _evaluate_symbol(
         "url": f"https://finance.yahoo.com/quote/{symbol}",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "notes": (
-            f"symbol: {symbol} | side: buy | "
+            f"symbol: {symbol} | side: buy | signal: {signal} | "
             f"price: {current_price:.2f} | sma5: {sma5:.2f} | sma20: {sma20:.2f} | "
-            f"momentum: {momentum_pct:.4f}"
+            f"deviation: {deviation_pct:.4f}"
         ),
     }
