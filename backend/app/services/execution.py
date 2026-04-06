@@ -802,7 +802,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
         return None
 
     side = _extract_trade_side(source)
-    order = TradeOrder(symbol=symbol, side=side, notional=notional, order_type="market")
+    order = TradeOrder(symbol=symbol, side=side, notional=notional, order_type="market", time_in_force="day")
 
     try:
         result = place_trade(order, session, source_id=source_id)
