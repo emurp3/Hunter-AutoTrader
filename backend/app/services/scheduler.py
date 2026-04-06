@@ -27,6 +27,7 @@ from app.database.config import engine
 from app.models.income_source import IncomeSource
 from app.models.strategy import Strategy, StrategyStatus
 from app.services.autotrader import run_intake
+from app.services.trading_candidates import generate_trading_candidates
 from app.services.budget import get_budget_commander_summary
 from app.services import strategies as strategy_svc
 from app.services import alerts as alert_svc
@@ -140,6 +141,11 @@ async def daily_scan_task() -> None:
       2. Strategy quota check (auto-promote candidates, alert if shortfall)
     """
     logger.info("daily_scan_task: starting")
+
+    # ── Step 0: Generate fresh trading candidates → autotrader.json ──────────
+    logger.info("daily_scan_task: [0/2] generating trading candidates")
+    n_candidates = generate_trading_candidates()
+    logger.info("daily_scan_task: trading candidates generated — count=%d", n_candidates)
 
     # ── Step 1: AutoTrader intake ─────────────────────────────────────────────
     logger.info("daily_scan_task: [1/2] running AutoTrader intake")

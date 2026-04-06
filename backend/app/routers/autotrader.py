@@ -133,6 +133,29 @@ def intake_summary(session: Session = Depends(get_session)) -> dict:
     }
 
 
+@router.post("/generate-candidates", status_code=200)
+def trigger_generate_candidates() -> dict:
+    """
+    Manually run the trading candidate generator. Screens the Alpaca watchlist,
+    applies momentum filter, and writes qualifying entries to autotrader.json.
+    Returns count of candidates written and the output path.
+    Idempotent — safe to call multiple times. Overwrites previous file.
+    """
+    from app.services.trading_candidates import AUTOTRADER_JSON_PATH, generate_trading_candidates
+    count = generate_trading_candidates()
+    return {
+        "status": "ok",
+        "candidates_written": count,
+        "output_path": str(AUTOTRADER_JSON_PATH),
+        "message": (
+            f"{count} trading candidate(s) written to autotrader.json. "
+            "Run POST /autotrader/run-intake to ingest them."
+            if count > 0
+            else "No candidates passed the momentum filter. autotrader.json not updated."
+        ),
+    }
+
+
 @router.post("/run-intake", status_code=202)
 def trigger_intake(background_tasks: BackgroundTasks) -> dict:
     """
