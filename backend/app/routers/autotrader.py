@@ -137,21 +137,29 @@ def intake_summary(session: Session = Depends(get_session)) -> dict:
 def trigger_generate_candidates() -> dict:
     """
     Manually run the trading candidate generator. Screens the Alpaca watchlist,
-    applies momentum filter, and writes qualifying entries to autotrader.json.
-    Returns count of candidates written and the output path.
+    applies momentum/mean-reversion filter, writes qualifying entries to autotrader.json.
+    Returns full diagnostic: per-symbol result, count written, output path.
     Idempotent — safe to call multiple times. Overwrites previous file.
     """
-    from app.services.trading_candidates import AUTOTRADER_JSON_PATH, generate_trading_candidates
-    count = generate_trading_candidates()
+    from app.services.trading_candidates import (
+        AUTOTRADER_JSON_PATH,
+        generate_trading_candidates_detailed,
+    )
+    result = generate_trading_candidates_detailed()
+    count = result["candidates_written"]
     return {
         "status": "ok",
         "candidates_written": count,
+        "symbols_screened": result["symbols_screened"],
+        "symbols_with_data": result["symbols_with_data"],
+        "symbol_results": result["symbol_results"],
         "output_path": str(AUTOTRADER_JSON_PATH),
+        "error": result.get("error"),
         "message": (
             f"{count} trading candidate(s) written to autotrader.json. "
             "Run POST /autotrader/run-intake to ingest them."
             if count > 0
-            else "No candidates passed the momentum filter. autotrader.json not updated."
+            else "No candidates passed the momentum/mean-reversion filter. autotrader.json not updated."
         ),
     }
 

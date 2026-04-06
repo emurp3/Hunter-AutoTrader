@@ -79,18 +79,48 @@ def generate_trading_candidates(
     candidates to autotrader.json. Returns count of candidates written.
     Never raises — logs warnings on all failures.
     """
+    result = generate_trading_candidates_detailed(watchlist=watchlist, output_path=output_path)
+    return result["candidates_written"]
+
+
+def generate_trading_candidates_detailed(
+    watchlist: list[str] | None = None,
+    output_path: Path | None = None,
+) -> dict:
+    """
+    Full generation run with diagnostic detail. Returns a dict with:
+      candidates_written, symbols_screened, symbols_with_data,
+      symbol_results, error (if any).
+    Never raises.
+    """
     symbols = watchlist or _env_watchlist() or DEFAULT_WATCHLIST
     path = output_path or AUTOTRADER_JSON_PATH
 
     try:
-        candidates = _screen_watchlist(symbols)
+        candidates, symbol_results, symbols_with_data = _screen_watchlist(symbols)
     except Exception as exc:
-        logger.warning("generate_trading_candidates: screening failed — %s", exc)
-        return 0
+        msg = str(exc)
+        logger.warning("generate_trading_candidates: screening failed — %s", msg)
+        return {
+            "candidates_written": 0,
+            "symbols_screened": len(symbols),
+            "symbols_with_data": 0,
+            "symbol_results": {},
+            "error": msg,
+        }
 
     if not candidates:
-        logger.info("generate_trading_candidates: 0 candidates passed momentum filter — autotrader.json not updated")
-        return 0
+        logger.info(
+            "generate_trading_candidates: 0 candidates — symbols_with_data=%d/%d",
+            symbols_with_data, len(symbols),
+        )
+        return {
+            "candidates_written": 0,
+            "symbols_screened": len(symbols),
+            "symbols_with_data": symbols_with_data,
+            "symbol_results": symbol_results,
+            "error": None,
+        }
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,10 +130,23 @@ def generate_trading_candidates(
             len(candidates), path,
         )
     except Exception as exc:
-        logger.warning("generate_trading_candidates: failed to write %s — %s", path, exc)
-        return 0
+        msg = str(exc)
+        logger.warning("generate_trading_candidates: failed to write %s — %s", path, msg)
+        return {
+            "candidates_written": 0,
+            "symbols_screened": len(symbols),
+            "symbols_with_data": symbols_with_data,
+            "symbol_results": symbol_results,
+            "error": f"write failed: {msg}",
+        }
 
-    return len(candidates)
+    return {
+        "candidates_written": len(candidates),
+        "symbols_screened": len(symbols),
+        "symbols_with_data": symbols_with_data,
+        "symbol_results": symbol_results,
+        "error": None,
+    }
 
 
 def _env_watchlist() -> list[str]:
@@ -114,11 +157,10 @@ def _env_watchlist() -> list[str]:
     return [t.strip().upper() for t in raw.split(",") if t.strip()]
 
 
-def _screen_watchlist(symbols: list[str]) -> list[dict[str, Any]]:
+def _screen_watchlist(symbols: list[str]) -> tuple[list[dict[str, Any]], dict[str, str], int]:
     """
-    Fetch daily bars for all symbols, apply momentum/mean-reversion filter, return candidates.
-    Uses Alpaca's StockHistoricalDataClient with the effective live credentials.
-    Evaluates both bullish (buy) and oversold-reversion (buy dip) setups.
+    Fetch daily bars for all symbols, apply momentum/mean-reversion filter.
+    Returns (candidates, symbol_results_dict, symbols_with_data_count).
     """
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
@@ -128,7 +170,7 @@ def _screen_watchlist(symbols: list[str]) -> list[dict[str, Any]]:
 
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         logger.warning("generate_trading_candidates: Alpaca credentials not available — skipping")
-        return []
+        return [], {}, 0
 
     client = StockHistoricalDataClient(
         api_key=ALPACA_API_KEY,
@@ -138,43 +180,62 @@ def _screen_watchlist(symbols: list[str]) -> list[dict[str, Any]]:
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=45)  # ~30 trading days
 
-    request = StockBarsRequest(
-        symbol_or_symbols=symbols,
-        timeframe=TimeFrame.Day,
-        start=start,
-        end=end,
-    )
+    # Try IEX feed first (free tier), fall back to default if it raises
+    try:
+        from alpaca.data.enums import DataFeed
+        request = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=end,
+            feed=DataFeed.IEX,
+        )
+    except Exception:
+        request = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start,
+            end=end,
+        )
 
     bars_response = client.get_stock_bars(request)
     bars_data: dict[str, list] = bars_response.data  # {symbol: [Bar, ...]}
 
     date_str = end.strftime("%Y%m%d")
     candidates: list[dict[str, Any]] = []
-    symbol_results: list[str] = []
+    symbol_results: dict[str, str] = {}
+    symbols_with_data = 0
 
     for symbol in symbols:
         bar_list = bars_data.get(symbol, [])
         if len(bar_list) < _MIN_BARS:
-            symbol_results.append(f"{symbol}:no_data({len(bar_list)})")
+            symbol_results[symbol] = f"no_data:{len(bar_list)}_bars"
             continue
+
+        symbols_with_data += 1
+        last_close = float(bar_list[-1].close)
 
         try:
             candidate = _evaluate_symbol(symbol, bar_list, date_str)
             if candidate:
                 candidates.append(candidate)
-                symbol_results.append(f"{symbol}:pass({candidate['confidence']})")
+                symbol_results[symbol] = f"pass:conf={candidate['confidence']}"
             else:
-                symbol_results.append(f"{symbol}:filtered")
+                sma20_window = [float(b.close) for b in bar_list[-20:]]
+                sma20 = sum(sma20_window) / len(sma20_window)
+                dev = (last_close - sma20) / sma20
+                symbol_results[symbol] = f"filtered:price={last_close:.2f},dev={dev:.3f}"
         except Exception as exc:
-            symbol_results.append(f"{symbol}:error")
+            symbol_results[symbol] = f"error:{exc}"
             logger.debug("generate_trading_candidates: %s evaluation error — %s", symbol, exc)
             continue
 
     logger.info(
-        "generate_trading_candidates: screened %d symbols, %d passed | %s",
-        len(symbols), len(candidates), " ".join(symbol_results),
+        "generate_trading_candidates: screened=%d with_data=%d passed=%d | %s",
+        len(symbols), symbols_with_data, len(candidates),
+        " ".join(f"{k}:{v}" for k, v in symbol_results.items()),
     )
-    return candidates
+    return candidates, symbol_results, symbols_with_data
 
 
 def _evaluate_symbol(
