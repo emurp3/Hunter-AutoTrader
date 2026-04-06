@@ -428,7 +428,7 @@ _ORIGIN_TO_TASK_TYPE: dict[str, str] = {
 
 _CATEGORY_TO_TASK_TYPE: dict[str, str] = {
     "marketplace": "marketplace_listing",
-    "service": "service_pitch",
+    "service": "service_outreach",
     "gig": "gig_application",
     "github": "github_bounty",
     "rfp": "rfp_response",
@@ -519,6 +519,31 @@ def auto_dispatch_for_source(source_id: str, session: Session) -> Optional[Task]
             "estimated_profit": source.estimated_profit,  # expected margin
             "category": _fb_category,
             "description": source.notes or source.description,
+        }
+
+    if task_type == "service_outreach":
+        import re as _sre
+        import os as _sos
+
+        def _sf(notes: str | None, key: str) -> str | None:
+            if not notes:
+                return None
+            m = _sre.search(rf'\b{_sre.escape(key)}:\s*([^|]+)', notes)
+            return m.group(1).strip() if m else None
+
+        _notes = source.notes or ""
+        _next = source.next_action or ""
+        # Extract quoted search term from next_action (e.g. "church near me")
+        _sq_match = _sre.search(r'["\']([^"\']{5,60})["\']', _next)
+        _search_query = _sq_match.group(1) if _sq_match else (source.description or "")[:50]
+
+        spec["service_outreach"] = {
+            "business_type": _sf(_notes, "target_buyer") or source.category,
+            "execution_path": _sf(_notes, "execution_path") or "local_pitch",
+            "contact_url": _sf(_notes, "contact_url"),
+            "contact_email": _sf(_notes, "contact_email"),
+            "search_query": _search_query,
+            "location": _sos.getenv("HUNTER_SERVICE_LOCATION", ""),
         }
 
     band_priority = {"elite": 15, "high": 10, "medium": 5, "low": 3}
