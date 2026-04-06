@@ -618,7 +618,8 @@ def _record_terminal_attempt(
 
 
 def _close_loop(task: Task, outcome: dict[str, Any], session: Session) -> None:
-    """Advance source status and raise execution_completed alert."""
+    """Advance source status, advance linked packet to active, and raise execution_completed alert."""
+    now = datetime.now(timezone.utc)
     # Advance source to active when task succeeds and source is in a pre-active state
     if task.source_id:
         try:
@@ -644,6 +645,27 @@ def _close_loop(task: Task, outcome: dict[str, Any], session: Session) -> None:
                 )
         except Exception:
             pass  # Source advancement must not block alert
+
+    # Advance the source's most-recent planned packet to active so the dashboard
+    # reflects real in-flight work. Does not touch realized profit.
+    if task.source_id:
+        try:
+            from app.models.action_packet import ActionPacket, ExecutionState
+            packet = session.exec(
+                select(ActionPacket)
+                .where(
+                    ActionPacket.source_id == task.source_id,
+                    ActionPacket.execution_state == ExecutionState.planned,
+                )
+                .order_by(ActionPacket.created_at.desc())
+            ).first()
+            if packet:
+                packet.execution_state = ExecutionState.active
+                packet.execution_started_at = now
+                session.add(packet)
+                session.commit()
+        except Exception:
+            pass  # Packet advancement must not block alert
 
     alert_svc.raise_alert(
         alert_type=AlertType.execution_completed,
