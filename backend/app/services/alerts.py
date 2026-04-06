@@ -33,6 +33,14 @@ def raise_alert(
     session.add(alert)
     session.commit()
     session.refresh(alert)
+
+    # SMS Commander on high/critical alerts — non-blocking, never raises
+    try:
+        from app.services.sms import send_alert_sms
+        send_alert_sms(title, body, priority)
+    except Exception:
+        pass
+
     return alert
 
 

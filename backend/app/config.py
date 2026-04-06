@@ -286,6 +286,13 @@ MARKETPLACE_FB_RATE_LIMIT_PER_HOUR: int = int(
     os.getenv("MARKETPLACE_FB_RATE_LIMIT_PER_HOUR", "5")
 )
 
+# ── SMS notifications (Twilio) ───────────────────────────────────────────────
+# Set these in Render dashboard. SMS fires on high/critical alerts only.
+TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER: str = os.getenv("TWILIO_FROM_NUMBER", "")
+COMMANDER_PHONE: str = os.getenv("COMMANDER_PHONE", "+14782319790")
+
 # ── Operating account (Robins Financial checking) ─────────────────────────────
 # HUNTER_OPERATING_ACCOUNT_PROVIDER — label for the real-money operating account.
 #   Used in reconciliation records. Not a credentials field.
