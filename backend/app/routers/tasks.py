@@ -57,17 +57,31 @@ class CompleteRequest(BaseModel):
     worker_id: str
     outcome: dict[str, Any] = {}
     notes: str = ""
+    screenshot_path: Optional[str] = None
+    page_url: Optional[str] = None
+    trace_reference: Optional[str] = None
+    engine: Optional[str] = None
 
 
 class EscalateRequest(BaseModel):
     worker_id: str
     escalation_type: EscalationType
     reason: str
+    screenshot_path: Optional[str] = None
+    page_url: Optional[str] = None
+    error_text: Optional[str] = None
+    trace_reference: Optional[str] = None
+    engine: Optional[str] = None
 
 
 class FailRequest(BaseModel):
     worker_id: str
     reason: str
+    screenshot_path: Optional[str] = None
+    page_url: Optional[str] = None
+    error_text: Optional[str] = None
+    trace_reference: Optional[str] = None
+    engine: Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -115,6 +129,15 @@ def claim(body: ClaimRequest, session: Session = Depends(get_session)):
     return {"task": task}
 
 
+@router.get("/monitor")
+def monitor(session: Session = Depends(get_session)):
+    """
+    Queue depth, tasks by status, attempts by engine (24h),
+    recent failures and escalations (24h).
+    """
+    return task_svc.get_monitor_data(session)
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, session: Session = Depends(get_session)):
     """Inspect a task by task_id."""
@@ -151,7 +174,17 @@ def heartbeat(task_id: str, body: HeartbeatRequest, session: Session = Depends(g
 def complete(task_id: str, body: CompleteRequest, session: Session = Depends(get_session)):
     """Record a successful outcome and close the task."""
     try:
-        task = task_svc.complete_task(task_id, body.outcome, session, notes=body.notes)
+        task = task_svc.complete_task(
+            task_id,
+            body.outcome,
+            session,
+            notes=body.notes,
+            screenshot_path=body.screenshot_path,
+            page_url=body.page_url,
+            trace_reference=body.trace_reference,
+            engine=body.engine,
+            worker_id_override=body.worker_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return task
@@ -161,7 +194,18 @@ def complete(task_id: str, body: CompleteRequest, session: Session = Depends(get
 def escalate(task_id: str, body: EscalateRequest, session: Session = Depends(get_session)):
     """Hard-stop escalation. Raises a Commander alert immediately."""
     try:
-        task = task_svc.escalate_task(task_id, body.escalation_type, body.reason, session)
+        task = task_svc.escalate_task(
+            task_id,
+            body.escalation_type,
+            body.reason,
+            session,
+            screenshot_path=body.screenshot_path,
+            page_url=body.page_url,
+            error_text=body.error_text,
+            trace_reference=body.trace_reference,
+            engine=body.engine,
+            worker_id_override=body.worker_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return task
@@ -171,7 +215,17 @@ def escalate(task_id: str, body: EscalateRequest, session: Session = Depends(get
 def fail(task_id: str, body: FailRequest, session: Session = Depends(get_session)):
     """Mark task as permanently failed (attempts exhausted, no escalation condition)."""
     try:
-        task = task_svc.fail_task(task_id, body.reason, session)
+        task = task_svc.fail_task(
+            task_id,
+            body.reason,
+            session,
+            screenshot_path=body.screenshot_path,
+            page_url=body.page_url,
+            error_text=body.error_text,
+            trace_reference=body.trace_reference,
+            engine=body.engine,
+            worker_id_override=body.worker_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return task

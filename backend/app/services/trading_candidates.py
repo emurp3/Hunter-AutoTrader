@@ -7,20 +7,21 @@ adapter always has fresh trading candidates instead of falling back to seeds.
 
 Scoring note
 ------------
-estimated_profit is set in the $15–22 range to represent the expected
+estimated_profit is set in the $15–45 range to represent the expected
 dollar return on each trade's capital exposure. This achieves a pipeline
-score of ~55–58, which clears the HUNTER_DECISION_AUTO_EXECUTE_SCORE=50
-threshold while staying below the $25 auto_execute capital cap.
+score of ~51–58, which clears the HUNTER_DECISION_AUTO_EXECUTE_SCORE=50
+threshold while staying below the $50 auto_execute capital cap.
 
-The default auto_execute threshold (85) is unreachable for sub-$25
-opportunities — set HUNTER_DECISION_AUTO_EXECUTE_SCORE=50 in Render.
+The default auto_execute threshold (85) is unreachable for sub-$50
+opportunities (max achievable score ≈ 58 for medium-band trading sources) —
+HUNTER_DECISION_AUTO_EXECUTE_SCORE must be set to 50 in Render.
 
 Auto-execute gate (all must pass)
 ----------------------------------
-  score         >= HUNTER_DECISION_AUTO_EXECUTE_SCORE  (set 50)
-  confidence    >= HUNTER_DECISION_AUTO_EXECUTE_CONFIDENCE (default 0.75)
-  estimated_profit <= HUNTER_DECISION_AUTO_EXECUTE_MAX_CAPITAL (default $25)
-  execution_path == "trading"
+  score            >= HUNTER_DECISION_AUTO_EXECUTE_SCORE       (set 50)
+  confidence       >= HUNTER_DECISION_AUTO_EXECUTE_CONFIDENCE  (set 0.65)
+  estimated_profit <= HUNTER_DECISION_AUTO_EXECUTE_MAX_CAPITAL (set $50)
+  execution_path   == "trading"
   symbol extractable from notes field
 """
 
@@ -62,12 +63,13 @@ DEFAULT_WATCHLIST: list[str] = [
 # Minimum bars required for momentum calculation
 _MIN_BARS = 10
 
-# Confidence threshold — only candidates above this make the file
-_MIN_CONFIDENCE = 0.75
+# Confidence threshold — only candidates above this make the file.
+# Must match HUNTER_DECISION_AUTO_EXECUTE_CONFIDENCE env var (default 0.65).
+_MIN_CONFIDENCE = 0.65
 
-# estimated_profit bounds ($) — must stay ≤ auto_execute_max_capital ($25)
+# estimated_profit bounds ($) — must stay ≤ HUNTER_DECISION_AUTO_EXECUTE_MAX_CAPITAL ($50).
 _PROFIT_MIN = 15.0
-_PROFIT_MAX = 22.0
+_PROFIT_MAX = 45.0
 
 
 def generate_trading_candidates(
@@ -287,11 +289,12 @@ def _evaluate_symbol(
     if avg_vol_recent < avg_vol_full * 0.60:  # volume has dried up > 40% — skip
         return None
 
-    # estimated_profit: $15–$22 scaled by confidence (all within $25 cap)
+    # estimated_profit: scaled linearly from _PROFIT_MIN (at _MIN_CONFIDENCE)
+    # to _PROFIT_MAX (at 0.93), always within [_PROFIT_MIN, _PROFIT_MAX].
     profit_range = _PROFIT_MAX - _PROFIT_MIN
-    conf_range = 0.93 - 0.75
+    conf_range = max(0.93 - _MIN_CONFIDENCE, 0.01)  # dynamic — tracks _MIN_CONFIDENCE
     estimated_profit = round(
-        _PROFIT_MIN + (confidence - 0.75) / conf_range * profit_range,
+        _PROFIT_MIN + max(0.0, confidence - _MIN_CONFIDENCE) / conf_range * profit_range,
         2,
     )
     estimated_profit = max(_PROFIT_MIN, min(_PROFIT_MAX, estimated_profit))

@@ -22,7 +22,9 @@ from app.models.task import (
     TaskStatus,
 )
 from app.models.alert import AlertPriority, AlertType
+from app.models.event import EventType
 from app.services import alerts as alert_svc
+from app.services import events as event_svc
 
 # Worker must heartbeat within this window or the task is re-claimable.
 _LEASE_SECONDS = 120
@@ -83,6 +85,17 @@ def dispatch_task(
     session.add(task)
     session.commit()
     session.refresh(task)
+
+    if source_id:
+        try:
+            event_svc.log_event(
+                source_id, EventType.state_change, session,
+                summary=f"Task dispatched: {task_type} (task_id={task.task_id})",
+                metadata={"task_id": task.task_id, "task_type": task_type},
+            )
+        except Exception:
+            pass
+
     return task
 
 
@@ -152,9 +165,32 @@ def complete_task(
     session: Session,
     *,
     notes: str = "",
+    screenshot_path: Optional[str] = None,
+    page_url: Optional[str] = None,
+    error_text: Optional[str] = None,
+    trace_reference: Optional[str] = None,
+    engine: Optional[str] = None,
+    worker_id_override: Optional[str] = None,
 ) -> Task:
     task = _get_task_or_raise(task_id, session)
     now = datetime.now(timezone.utc)
+
+    # Record attempt with artifacts
+    _record_terminal_attempt(
+        task=task,
+        session=session,
+        status="completed",
+        now=now,
+        engine=engine,
+        worker_id_override=worker_id_override,
+        outcome=outcome,
+        screenshot_path=screenshot_path,
+        page_url=page_url,
+        error_text=error_text,
+        trace_reference=trace_reference,
+        summary_reason=notes,
+    )
+
     task.status = TaskStatus.completed
     task.outcome = json.dumps(outcome)
     task.outcome_notes = notes
@@ -164,6 +200,14 @@ def complete_task(
     session.add(task)
     session.commit()
     session.refresh(task)
+
+    if task.source_id:
+        event_svc.log_event(
+            task.source_id, EventType.state_change, session,
+            summary=f"Task completed: {task.task_type} (task_id={task_id})",
+            metadata={"task_id": task_id, "outcome": outcome},
+        )
+
     _close_loop(task, outcome, session)
     return task
 
@@ -175,10 +219,34 @@ def escalate_task(
     escalation_type: EscalationType,
     reason: str,
     session: Session,
+    *,
+    screenshot_path: Optional[str] = None,
+    page_url: Optional[str] = None,
+    error_text: Optional[str] = None,
+    trace_reference: Optional[str] = None,
+    engine: Optional[str] = None,
+    worker_id_override: Optional[str] = None,
 ) -> Task:
     """Hard-stop escalation — raises Commander alert immediately."""
     task = _get_task_or_raise(task_id, session)
     now = datetime.now(timezone.utc)
+
+    _record_terminal_attempt(
+        task=task,
+        session=session,
+        status="escalated",
+        now=now,
+        engine=engine,
+        worker_id_override=worker_id_override,
+        screenshot_path=screenshot_path,
+        page_url=page_url,
+        error_text=error_text,
+        trace_reference=trace_reference,
+        summary_reason=reason,
+        is_escalation=True,
+        escalation_type=escalation_type,
+    )
+
     task.status = TaskStatus.escalated
     task.must_escalate = True
     task.escalation_type = escalation_type
@@ -189,6 +257,13 @@ def escalate_task(
     session.add(task)
     session.commit()
     session.refresh(task)
+
+    if task.source_id:
+        event_svc.log_event(
+            task.source_id, EventType.alert_raised, session,
+            summary=f"Task escalated [{escalation_type}]: {reason[:100]} (task_id={task_id})",
+            metadata={"task_id": task_id, "escalation_type": str(escalation_type)},
+        )
 
     alert_svc.raise_alert(
         alert_type=AlertType.review_required,
@@ -203,10 +278,36 @@ def escalate_task(
 
 # ── Fail ──────────────────────────────────────────────────────────────────────
 
-def fail_task(task_id: str, reason: str, session: Session) -> Task:
+def fail_task(
+    task_id: str,
+    reason: str,
+    session: Session,
+    *,
+    screenshot_path: Optional[str] = None,
+    page_url: Optional[str] = None,
+    error_text: Optional[str] = None,
+    trace_reference: Optional[str] = None,
+    engine: Optional[str] = None,
+    worker_id_override: Optional[str] = None,
+) -> Task:
     """Max attempts exhausted and no escalation condition applies."""
     task = _get_task_or_raise(task_id, session)
     now = datetime.now(timezone.utc)
+
+    _record_terminal_attempt(
+        task=task,
+        session=session,
+        status="failed",
+        now=now,
+        engine=engine,
+        worker_id_override=worker_id_override,
+        screenshot_path=screenshot_path,
+        page_url=page_url,
+        error_text=error_text or reason,
+        trace_reference=trace_reference,
+        summary_reason=reason,
+    )
+
     task.status = TaskStatus.failed
     task.outcome_notes = reason
     task.failed_at = now
@@ -215,6 +316,13 @@ def fail_task(task_id: str, reason: str, session: Session) -> Task:
     session.add(task)
     session.commit()
     session.refresh(task)
+
+    if task.source_id:
+        event_svc.log_event(
+            task.source_id, EventType.alert_raised, session,
+            summary=f"Task failed after {task.attempts} attempts: {reason[:100]} (task_id={task_id})",
+            metadata={"task_id": task_id, "attempts": task.attempts},
+        )
 
     alert_svc.raise_alert(
         alert_type=AlertType.execution_failed,
@@ -410,8 +518,79 @@ def _get_task_or_raise(task_id: str, session: Session) -> Task:
     return task
 
 
+def _record_terminal_attempt(
+    *,
+    task: Task,
+    session: Session,
+    status: str,
+    now: datetime,
+    engine: Optional[str] = None,
+    worker_id_override: Optional[str] = None,
+    outcome: Optional[dict[str, Any]] = None,
+    screenshot_path: Optional[str] = None,
+    page_url: Optional[str] = None,
+    error_text: Optional[str] = None,
+    trace_reference: Optional[str] = None,
+    summary_reason: Optional[str] = None,
+    is_escalation: bool = False,
+    escalation_type: Optional[EscalationType] = None,
+) -> TaskAttempt:
+    """Create a closed TaskAttempt record for a terminal transition."""
+    try:
+        eng = ExecutionEngine(engine) if engine else ExecutionEngine.playwright
+    except ValueError:
+        eng = ExecutionEngine.playwright
+
+    attempt = TaskAttempt(
+        task_id=task.task_id,
+        attempt_number=task.attempts,
+        engine=eng,
+        worker_id=worker_id_override or task.worker_id or "",
+        status=status,
+        started_at=getattr(task, "executing_at", None) or now,
+        completed_at=now,
+        outcome=json.dumps(outcome) if outcome else None,
+        screenshot_path=screenshot_path,
+        page_url=page_url,
+        error_text=error_text,
+        summary_reason=summary_reason,
+        trace_reference=trace_reference,
+        is_escalation=is_escalation,
+        escalation_type=escalation_type,
+    )
+    session.add(attempt)
+    session.flush()  # persist without outer commit — outer caller commits
+    return attempt
+
+
 def _close_loop(task: Task, outcome: dict[str, Any], session: Session) -> None:
-    """Raises execution_completed alert and links back into the audit trail."""
+    """Advance source status and raise execution_completed alert."""
+    # Advance source to active when task succeeds and source is in a pre-active state
+    if task.source_id:
+        try:
+            from app.models.income_source import IncomeSource, SourceStatus
+            source = session.exec(
+                select(IncomeSource).where(IncomeSource.source_id == task.source_id)
+            ).first()
+            if source and source.status in (
+                SourceStatus.review_ready,
+                SourceStatus.budgeted,
+                SourceStatus.scored,
+                SourceStatus.prioritized,
+            ):
+                old_status = source.status
+                source.status = SourceStatus.active
+                session.add(source)
+                session.commit()
+                event_svc.log_event(
+                    task.source_id, EventType.state_change, session,
+                    old_state=old_status,
+                    new_state=SourceStatus.active,
+                    summary=f"Source activated via task completion: {task.task_type}",
+                )
+        except Exception:
+            pass  # Source advancement must not block alert
+
     alert_svc.raise_alert(
         alert_type=AlertType.execution_completed,
         title=f"Task Completed — {task.task_type}",
@@ -423,3 +602,74 @@ def _close_loop(task: Task, outcome: dict[str, Any], session: Session) -> None:
         priority=AlertPriority.medium,
         source_id=task.source_id,
     )
+
+
+# ── Monitor ───────────────────────────────────────────────────────────────────
+
+def get_monitor_data(session: Session) -> dict:
+    """
+    Queue depth, task counts by status, attempts by engine (24h),
+    recent failures and escalations (24h). Used by GET /tasks/monitor.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=24)
+
+    all_tasks = session.exec(select(Task)).all()
+    by_status: dict[str, int] = {}
+    for t in all_tasks:
+        key = t.status.value if hasattr(t.status, "value") else str(t.status)
+        by_status[key] = by_status.get(key, 0) + 1
+
+    queue_depth = by_status.get("dispatched", 0) + by_status.get("retrying", 0)
+
+    recent_attempts = session.exec(select(TaskAttempt)).all()
+    by_engine: dict[str, int] = {}
+    for a in recent_attempts:
+        if a.started_at and a.started_at >= cutoff:
+            key = a.engine.value if hasattr(a.engine, "value") else str(a.engine)
+            by_engine[key] = by_engine.get(key, 0) + 1
+
+    recent_failures = [
+        t for t in all_tasks
+        if t.status == TaskStatus.failed
+        and t.failed_at
+        and t.failed_at >= cutoff
+    ]
+    recent_failures.sort(key=lambda t: t.failed_at, reverse=True)
+
+    recent_escalations = [
+        t for t in all_tasks
+        if t.status == TaskStatus.escalated
+        and t.escalated_at
+        and t.escalated_at >= cutoff
+    ]
+    recent_escalations.sort(key=lambda t: t.escalated_at, reverse=True)
+
+    return {
+        "queue_depth": queue_depth,
+        "by_status": by_status,
+        "total_tasks": len(all_tasks),
+        "attempts_by_engine_24h": by_engine,
+        "recent_failures": [
+            {
+                "task_id": t.task_id,
+                "task_type": t.task_type,
+                "source_id": t.source_id,
+                "failed_at": t.failed_at.isoformat() if t.failed_at else None,
+                "outcome_notes": t.outcome_notes,
+                "attempts": t.attempts,
+            }
+            for t in recent_failures[:10]
+        ],
+        "recent_escalations": [
+            {
+                "task_id": t.task_id,
+                "task_type": t.task_type,
+                "source_id": t.source_id,
+                "escalated_at": t.escalated_at.isoformat() if t.escalated_at else None,
+                "escalation_type": str(t.escalation_type) if t.escalation_type else None,
+                "escalation_reason": t.escalation_reason,
+            }
+            for t in recent_escalations[:10]
+        ],
+    }
