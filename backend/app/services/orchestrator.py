@@ -121,6 +121,19 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
         except Exception:
             pass  # Dispatch failure must not block the pipeline
 
+    # Auto-trade: execution_ready trading decisions fire Alpaca orders immediately
+    trade_placed = False
+    if decision_id:
+        try:
+            from app.services import decision as decision_svc
+            from app.services.execution import auto_place_trade_for_source
+            dec = decision_svc.get_decision(source.source_id, session)
+            if dec and dec.execution_ready and dec.execution_path == "trading":
+                trade_result = auto_place_trade_for_source(source.source_id, session)
+                trade_placed = trade_result is not None
+        except Exception:
+            pass  # Trade placement failure must not block the pipeline
+
     return {
         "source_id": source.source_id,
         "score": result.score,
@@ -129,6 +142,7 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
         "packet_id": packet.id,
         "decision_id": decision_id,
         "task_id": task_id,
+        "trade_placed": trade_placed,
     }
 
 

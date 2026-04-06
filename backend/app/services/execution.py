@@ -227,7 +227,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
     packet = _get_packet_or_raise(packet_id, session)
     allocation = _get_allocation(packet.source_id, session)
     if not allocation:
-        raise ValueError("Funded allocation is required before paper execution can be submitted.")
+        raise ValueError("Funded allocation is required before execution can be submitted.")
     if allocation.status not in (AllocationStatus.planned, AllocationStatus.active):
         raise ValueError(f"Allocation is not executable in its current state: {allocation.status}")
 
@@ -290,7 +290,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
         packet.source_id,
         EventType.executed,
         session,
-        summary=f"Paper order submitted via Alpaca for packet {packet.id}",
+        summary=f"Order submitted via Alpaca ({'paper' if ALPACA_PAPER else 'live'}) for packet {packet.id}",
         metadata={
             "packet_id": packet.id,
             "allocation_id": allocation.id,
@@ -306,7 +306,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
     )
     alert_svc.raise_alert(
         alert_type=AlertType.execution_completed,
-        title=f"Paper order submitted - packet {packet.id}",
+        title=f"Order submitted ({'paper' if ALPACA_PAPER else 'live'}) - packet {packet.id}",
         body=f"Alpaca {'paper ' if ALPACA_PAPER else 'live '}order {result.order_id} for {result.symbol} is {result.status}.",
         session=session,
         priority=AlertPriority.medium,
@@ -748,6 +748,96 @@ def _validate_order_against_allocation(order: TradeOrder, allocation: BudgetAllo
         raise ValueError(
             f"Requested exposure ${requested_exposure:.2f} exceeds allocation cap ${allocation.amount_allocated:.2f}."
         )
+
+
+def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[TradeResult]:
+    """
+    Auto-place an Alpaca market order for an execution_ready trading source.
+    Called from the orchestrator pipeline — never raises, returns None on skip/failure.
+
+    Guards (all must pass):
+      - ALPACA_ENABLED=True
+      - Decision exists with execution_ready=True and execution_path="trading"
+      - A symbol is extractable from source description/notes
+      - A funded allocation or capital_recommendation > 0 is available
+    """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    if not ALPACA_ENABLED:
+        _logger.debug("auto_place_trade: ALPACA_ENABLED=False — skipping %s", source_id)
+        return None
+
+    from sqlmodel import select as _select
+    from app.models.decision import ExecutionPath, OpportunityDecision
+
+    decision = session.exec(
+        _select(OpportunityDecision).where(OpportunityDecision.source_id == source_id)
+    ).first()
+    if not decision or not decision.execution_ready:
+        return None
+    if decision.execution_path != ExecutionPath.trading:
+        return None
+
+    source = session.exec(
+        _select(IncomeSource).where(IncomeSource.source_id == source_id)
+    ).first()
+    if not source:
+        return None
+
+    symbol = _extract_trade_symbol(source)
+    if not symbol:
+        _logger.warning("auto_place_trade: no symbol found for source %s — skipping", source_id)
+        return None
+
+    allocation = _get_allocation(source_id, session)
+    notional: Optional[float] = None
+    if allocation and allocation.status in (AllocationStatus.planned, AllocationStatus.active):
+        notional = float(allocation.amount_allocated)
+    elif decision.capital_recommendation and decision.capital_recommendation > 0:
+        notional = float(decision.capital_recommendation)
+
+    if not notional or notional <= 0:
+        _logger.warning("auto_place_trade: no notional amount for source %s — skipping", source_id)
+        return None
+
+    side = _extract_trade_side(source)
+    order = TradeOrder(symbol=symbol, side=side, notional=notional, order_type="market")
+
+    try:
+        result = place_trade(order, session, source_id=source_id)
+        _logger.info(
+            "auto_place_trade: %s %s $%.2f notional — order_id=%s status=%s mode=%s",
+            side.upper(), symbol, notional, result.order_id, result.status,
+            "paper" if ALPACA_PAPER else "live",
+        )
+        return result
+    except Exception as exc:
+        _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
+        return None
+
+
+def _extract_trade_symbol(source: IncomeSource) -> Optional[str]:
+    """Extract a ticker symbol from source description or notes. Returns None if not found."""
+    import re
+    for text in (source.notes or "", source.description or ""):
+        # Explicit key-value: symbol: AAPL  or  ticker: AAPL
+        m = re.search(r"\b(?:symbol|ticker)\s*[:=]\s*([A-Z]{1,5})\b", text, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+        # Dollar-prefixed: $AAPL
+        m = re.search(r"\$([A-Z]{1,5})\b", text)
+        if m:
+            return m.group(1).upper()
+    return None
+
+
+def _extract_trade_side(source: IncomeSource) -> str:
+    """Infer trade side from source text. Defaults to 'buy'."""
+    text = f"{source.description or ''} {source.notes or ''}".lower()
+    if any(kw in text for kw in ("short sell", "short-sell", " sell ", "sell signal")):
+        return "sell"
+    return "buy"
 
 
 def _format_provider_error(exc: Exception) -> str:
