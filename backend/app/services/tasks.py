@@ -428,6 +428,7 @@ _ORIGIN_TO_TASK_TYPE: dict[str, str] = {
 
 _CATEGORY_TO_TASK_TYPE: dict[str, str] = {
     "marketplace": "marketplace_listing",
+    "service": "service_pitch",
     "gig": "gig_application",
     "github": "github_bounty",
     "rfp": "rfp_response",
@@ -484,11 +485,39 @@ def auto_dispatch_for_source(source_id: str, session: Session) -> Optional[Task]
     }
 
     if task_type == "marketplace_listing":
+        import re as _re
+
+        def _note_field(notes: str | None, key: str) -> str | None:
+            if not notes:
+                return None
+            m = _re.search(rf'\b{_re.escape(key)}:\s*([^|]+)', notes)
+            return m.group(1).strip() if m else None
+
+        _notes = source.notes or ""
+        _listing_price_str = _note_field(_notes, "listing_price")
+        _listing_title = _note_field(_notes, "listing_title") or source.description[:80]
+        _cost_basis_str = _note_field(_notes, "cost_basis")
+        _fb_category = _note_field(_notes, "fb_category") or source.category or "General"
+
+        try:
+            _listing_price = float(_listing_price_str)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            # Fallback: infer listing price assuming ~30% margin
+            _listing_price = round((source.estimated_profit or 0) / 0.30, 0)
+
+        try:
+            _cost_basis = float(_cost_basis_str) if _cost_basis_str else None  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            _cost_basis = None
+
         spec["platform"] = "facebook_marketplace"
         spec["listing"] = {
-            "title": source.description,
-            "price": source.estimated_profit,
-            "category": source.category or "General",
+            "title": _listing_title,
+            "listing_price": _listing_price,   # actual sale price — used by MarketplaceListingSkill
+            "price": _listing_price,            # alias — fill_details reads this
+            "cost_basis": _cost_basis,          # acquisition cost (informational)
+            "estimated_profit": source.estimated_profit,  # expected margin
+            "category": _fb_category,
             "description": source.notes or source.description,
         }
 

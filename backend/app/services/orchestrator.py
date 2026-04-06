@@ -110,9 +110,13 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
     except Exception:
         pass  # Decision failure must not block the pipeline
 
-    # Auto-dispatch: high/elite sources get a task queued immediately
+    # Auto-dispatch: high/elite always; also medium-band creation_lane opportunities
     task_id = None
-    if result.priority_band in (PriorityBand.elite, PriorityBand.high):
+    _should_dispatch = result.priority_band in (PriorityBand.elite, PriorityBand.high) or (
+        result.priority_band == PriorityBand.medium
+        and getattr(source, "origin_module", None) == "creation_lane"
+    )
+    if _should_dispatch:
         try:
             from app.services.tasks import auto_dispatch_for_source
             task = auto_dispatch_for_source(source.source_id, session)
