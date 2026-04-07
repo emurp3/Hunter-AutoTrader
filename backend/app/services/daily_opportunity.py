@@ -540,4 +540,15 @@ def _ensure_pipeline_source(opp: DailyOpportunity, session: Session) -> IncomeSo
 
         process_new_opportunity(source, session)
 
+    # Daily opportunities should always have a surfaced packet and a linked
+    # strategy candidate even when their score lands below the normal
+    # high/elite auto-strategy threshold used by the generic orchestrator.
+    from app.services.action_packets import generate_packet, get_packet
+    from app.services.strategies import create_strategy_from_opportunity
+
+    if not get_packet(source.source_id, session):
+        generate_packet(source.source_id, session)
+
+    create_strategy_from_opportunity(source.source_id, session)
+
     return source
