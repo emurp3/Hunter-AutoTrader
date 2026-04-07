@@ -147,10 +147,10 @@ async def daily_scan_task() -> None:
     # ── Step 0: Daily advisor opportunity ─────────────────────────────────────
     logger.info("daily_scan_task: [0/3] generating daily advisor opportunity")
     try:
-        from app.services.daily_opportunity import generate_today_opportunity, get_day_owner
+        from app.services.daily_opportunity import generate_today_opportunity_and_sync, get_day_owner
         with Session(engine) as session:
             assigned = get_day_owner()
-            opp = generate_today_opportunity(session)
+            opp = generate_today_opportunity_and_sync(session)
             logger.info(
                 "daily_scan_task: daily opportunity — id=%d assigned=%s actual=%s lane=%s profit=$%.2f confidence=%.0f%%",
                 opp.id, assigned, opp.actual_advisor, opp.lane,

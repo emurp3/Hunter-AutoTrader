@@ -33,6 +33,7 @@ from app.models.daily_opportunity import (
     ExecutabilityClass,
     OpportunityStatus,
 )
+from app.models.income_source import IncomeSource, SourceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,16 @@ def get_today_opportunity(session: Session) -> Optional[DailyOpportunity]:
     return session.exec(stmt).first()
 
 
+def get_pipeline_source_id(target_date: Optional[date] = None) -> str:
+    """Stable IncomeSource id used to surface the daily opportunity in the main pipeline."""
+    d = target_date or date.today()
+    return f"daily-opp-{d.isoformat()}"
+
+
+def get_source_id_for_opportunity(opp: DailyOpportunity) -> str:
+    return get_pipeline_source_id(opp.opp_date)
+
+
 def generate_today_opportunity(session: Session) -> DailyOpportunity:
     """
     Generate today's opportunity using the assigned advisor (with fallback).
@@ -185,6 +196,21 @@ def generate_today_opportunity(session: Session) -> DailyOpportunity:
         "daily_opportunity: generated — id=%d advisor=%s lane=%s executability=%s profit=$%.2f",
         opp.id, opp.actual_advisor, opp.lane, opp.executability, opp.expected_profit,
     )
+    return opp
+
+
+def generate_today_opportunity_and_sync(session: Session) -> DailyOpportunity:
+    """
+    Generate today's daily opportunity and mirror it into the existing
+    IncomeSource-based pipeline so the dashboard and quotas can see it.
+    """
+    existing = get_today_opportunity(session)
+    if existing:
+        _ensure_pipeline_source(existing, session)
+        return existing
+
+    opp = generate_today_opportunity(session)
+    _ensure_pipeline_source(opp, session)
     return opp
 
 
@@ -449,3 +475,69 @@ def _refresh_winner(ref_date: date, session: Session) -> None:
         r.updated_at = datetime.now(timezone.utc)
         session.add(r)
     session.commit()
+
+
+def _ensure_pipeline_source(opp: DailyOpportunity, session: Session) -> IncomeSource:
+    """
+    Mirror the daily opportunity into the main IncomeSource pipeline so the
+    existing dashboard, strategy, and packet flows can reuse it.
+    """
+    source_id = get_source_id_for_opportunity(opp)
+    source = session.exec(
+        select(IncomeSource).where(IncomeSource.source_id == source_id)
+    ).first()
+
+    notes_parts = [
+        f"daily_opportunity_id={opp.id}",
+        f"assigned_advisor={opp.assigned_advisor}",
+        f"actual_advisor={opp.actual_advisor}",
+        f"lane={opp.lane}",
+        f"executability={opp.executability}",
+        f"status={opp.status}",
+        f"rationale={opp.rationale}",
+    ]
+    if opp.handoff_path:
+        notes_parts.append(f"handoff_path={opp.handoff_path}")
+    if opp.human_dependency_reason:
+        notes_parts.append(f"human_dependency_reason={opp.human_dependency_reason}")
+    if opp.required_human_actions:
+        notes_parts.append(f"required_human_actions={opp.required_human_actions}")
+    notes = "\n".join(notes_parts)
+
+    created = False
+    if not source:
+        source = IncomeSource(
+            source_id=source_id,
+            description=opp.title,
+            estimated_profit=max(0.0, opp.expected_profit),
+            currency="USD",
+            status=SourceStatus.new,
+            date_found=opp.opp_date,
+            next_action=opp.required_action,
+            notes=notes,
+            origin_module="daily_opportunity",
+            category=opp.lane,
+            confidence=opp.confidence,
+        )
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+        created = True
+    else:
+        source.description = opp.title
+        source.estimated_profit = max(0.0, opp.expected_profit)
+        source.next_action = opp.required_action
+        source.notes = notes
+        source.origin_module = source.origin_module or "daily_opportunity"
+        source.category = opp.lane
+        source.confidence = opp.confidence
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+
+    if created or source.score is None:
+        from app.services.orchestrator import process_new_opportunity
+
+        process_new_opportunity(source, session)
+
+    return source

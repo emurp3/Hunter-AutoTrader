@@ -27,7 +27,11 @@ def get_today(session: Session = Depends(get_session)):
             "assigned_advisor": daily_opp_svc.get_day_owner(),
             "message": "No opportunity generated yet today. POST /advisors/daily-opportunity/generate to create one.",
         }
-    return {"exists": True, "opportunity": opp}
+    return {
+        "exists": True,
+        "source_id": daily_opp_svc.get_source_id_for_opportunity(opp),
+        "opportunity": opp,
+    }
 
 
 @router.post("/daily-opportunity/generate", status_code=201)
@@ -37,9 +41,10 @@ def generate_today(session: Session = Depends(get_session)):
     Idempotent — returns existing opportunity if already generated today.
     """
     try:
-        opp = daily_opp_svc.generate_today_opportunity(session)
+        opp = daily_opp_svc.generate_today_opportunity_and_sync(session)
         return {
             "opportunity": opp,
+            "source_id": daily_opp_svc.get_source_id_for_opportunity(opp),
             "assigned_advisor": opp.assigned_advisor,
             "actual_advisor": opp.actual_advisor,
         }
