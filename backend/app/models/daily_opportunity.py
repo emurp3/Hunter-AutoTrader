@@ -27,6 +27,12 @@ class OpportunityStatus(str, Enum):
     skipped = "skipped"       # not acted on that day
 
 
+class ExecutabilityClass(str, Enum):
+    fully_executable = "fully_executable"   # Hunter/HVA completes end-to-end autonomously
+    semi_executable  = "semi_executable"    # automated start, one human step (e.g. final payment)
+    manual_only      = "manual_only"        # requires physical presence, offline negotiation, or pickup
+
+
 class DailyOpportunity(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     opp_date: date = Field(index=True)                    # calendar date this opportunity owns
@@ -43,6 +49,12 @@ class DailyOpportunity(SQLModel, table=True):
     actual_profit: Optional[float] = Field(default=None)  # filled in when outcome is known
     outcome_notes: Optional[str] = Field(default=None)
     raw_response_json: Optional[str] = Field(default=None)
+    # ── Executability classification (added v0.2.1) ────────────────────────────
+    executability: str = Field(default=ExecutabilityClass.manual_only)
+    # Why a human is required (null when fully_executable)
+    human_dependency_reason: Optional[str] = Field(default=None)
+    # Pipe-delimited list of specific human actions needed (null when fully_executable)
+    required_human_actions: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = Field(default=None)
 

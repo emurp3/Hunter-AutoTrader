@@ -138,6 +138,15 @@ def _migrate_sqlite_tables() -> None:
                 "marketplace_blocked_reason": "TEXT",
             },
         )
+        _ensure_columns(
+            conn,
+            "dailyopportunity",
+            {
+                "executability": "TEXT DEFAULT 'manual_only'",
+                "human_dependency_reason": "TEXT",
+                "required_human_actions": "TEXT",
+            },
+        )
         conn.execute(
             """
             UPDATE weeklybudget

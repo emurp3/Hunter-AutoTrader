@@ -30,6 +30,7 @@ from sqlmodel import Session, select
 from app.models.daily_opportunity import (
     AdvisorWeeklyScore,
     DailyOpportunity,
+    ExecutabilityClass,
     OpportunityStatus,
 )
 
@@ -77,6 +78,22 @@ _ADVISOR_CONFIG = {
 
 _OPPORTUNITY_SYSTEM_PROMPT = """You are Hunter's chief profit advisor. Your job is to identify ONE specific, executable profit opportunity for today.
 
+CRITICAL — executability ranking:
+Hunter is an automated system (AI + HVA worker). Opportunities are ranked by how much Hunter can do WITHOUT human intervention:
+  fully_executable  = Hunter/HVA completes the entire workflow autonomously (preferred)
+  semi_executable   = automated start with ONE unavoidable human step (e.g. final cash handoff)
+  manual_only       = requires physical pickup, offline negotiation, or in-person presence (penalized)
+
+Strongly prefer fully_executable > semi_executable > manual_only.
+DO NOT suggest opportunities that require physical pickup, in-person sourcing, or manual negotiation
+unless no fully_executable or semi_executable option exists.
+
+Hunter's autonomous execution paths (these are fully_executable or semi_executable):
+  - trading          → Alpaca API, fully automated
+  - service_outreach → automated email/DM outreach via HVA, semi_executable
+  - digital_product_launch → spec + publish to Gumroad/Etsy via HVA, semi_executable
+  - marketplace_listing → HVA posts listing, but PHYSICAL PICKUP makes this manual_only
+
 Rules:
 - Be concrete. Name the actual product, service, platform, or trade.
 - Profit must be achievable within 24-48 hours with under $100 capital.
@@ -91,16 +108,23 @@ Response format:
   "required_action": "The exact first step Hunter must take right now",
   "expected_profit": 25.00,
   "confidence": 0.75,
-  "handoff_path": "marketplace_listing | service_outreach | trading | digital_product_launch | manual"
+  "handoff_path": "marketplace_listing | service_outreach | trading | digital_product_launch | manual",
+  "executability": "fully_executable" | "semi_executable" | "manual_only",
+  "human_dependency_reason": "null if fully_executable, else short reason why a human must act",
+  "required_human_actions": "null if fully_executable, else pipe-separated list: action1 | action2"
 }"""
 
 _OPPORTUNITY_USER_PROMPT = """Today is {today}. It is {weekday}.
 
 Hunter has $100 weekly budget, operates in the US, and can execute across:
-- Trading (paper/live Alpaca)
-- Marketplace (Facebook Marketplace, OfferUp, Craigslist flips)
-- Service (local business outreach, website builds, gig work)
-- Digital (Etsy templates, Gumroad, simple digital products)
+- Trading (paper/live Alpaca) — FULLY AUTONOMOUS
+- Service outreach (automated email/DM to local businesses via HVA) — SEMI-AUTONOMOUS
+- Digital products (Etsy templates, Gumroad PDFs, spec-to-launch via HVA) — SEMI-AUTONOMOUS
+- Marketplace listing (HVA posts ad, but physical pickup is always required) — MANUAL
+
+Today's priority: identify an opportunity Hunter can execute without physical presence.
+Prefer trading or digital/service lanes. Marketplace is acceptable ONLY if the item can be
+shipped (no in-person pickup needed).
 
 Identify the single best profit opportunity for today. Be decisive. No hedging."""
 
@@ -147,6 +171,9 @@ def generate_today_opportunity(session: Session) -> DailyOpportunity:
         handoff_path=result.get("handoff_path"),
         status=OpportunityStatus.pending,
         raw_response_json=result.get("raw_json"),
+        executability=result.get("executability", ExecutabilityClass.manual_only),
+        human_dependency_reason=result.get("human_dependency_reason"),
+        required_human_actions=result.get("required_human_actions"),
     )
     session.add(opp)
     session.commit()
@@ -155,8 +182,8 @@ def generate_today_opportunity(session: Session) -> DailyOpportunity:
     _upsert_weekly_score(assigned, session, generated=1)
 
     logger.info(
-        "daily_opportunity: generated — id=%d advisor=%s lane=%s profit=$%.2f",
-        opp.id, opp.actual_advisor, opp.lane, opp.expected_profit,
+        "daily_opportunity: generated — id=%d advisor=%s lane=%s executability=%s profit=$%.2f",
+        opp.id, opp.actual_advisor, opp.lane, opp.executability, opp.expected_profit,
     )
     return opp
 
@@ -228,15 +255,27 @@ def get_opportunity_history(session: Session, limit: int = 30) -> list[DailyOppo
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
+_EXECUTABILITY_RANK = {
+    ExecutabilityClass.fully_executable: 0,
+    ExecutabilityClass.semi_executable: 1,
+    ExecutabilityClass.manual_only: 2,
+}
+
+
 def _call_with_fallback(assigned: str, target_date: date) -> dict:
     """
-    Try the assigned advisor. On failure or missing key, fall back through
-    Grok → Venice → DeepSeek while preserving the assigned label for scoring.
+    Try the assigned advisor first, then fall back through Grok → Venice → DeepSeek.
+    Prefers executability: fully_executable > semi_executable > manual_only.
+    If all reachable advisors return manual_only, returns the first manual result
+    rather than calling every advisor twice.
     """
     attempt_order = [assigned] + [a for a in _FALLBACK_ORDER if a != assigned]
 
     today_str = target_date.strftime("%Y-%m-%d")
     weekday_str = target_date.strftime("%A")
+
+    best_result: dict | None = None   # best candidate seen so far
+    best_rank = 99                    # lower = better (see _EXECUTABILITY_RANK)
 
     for advisor in attempt_order:
         cfg = _ADVISOR_CONFIG.get(advisor)
@@ -249,10 +288,23 @@ def _call_with_fallback(assigned: str, target_date: date) -> dict:
         try:
             result = _call_advisor_api(advisor, cfg, today_str, weekday_str)
             result["actual_advisor"] = advisor
-            return result
+            rank = _EXECUTABILITY_RANK.get(result.get("executability"), 2)
+            logger.info(
+                "daily_opportunity: %s → executability=%s rank=%d",
+                advisor, result.get("executability"), rank,
+            )
+            if rank < best_rank:
+                best_rank = rank
+                best_result = result
+            # Stop early if we already have a fully_executable opportunity
+            if best_rank == 0:
+                break
         except Exception as exc:
             logger.warning("daily_opportunity: %s failed — %s", advisor, exc)
             continue
+
+    if best_result:
+        return best_result
 
     # All advisors unavailable — return a safe structural placeholder
     logger.error("daily_opportunity: all advisors unavailable — using placeholder")
@@ -265,6 +317,9 @@ def _call_with_fallback(assigned: str, target_date: date) -> dict:
         "expected_profit": 0.0,
         "confidence": 0.0,
         "handoff_path": "manual",
+        "executability": ExecutabilityClass.manual_only,
+        "human_dependency_reason": "No advisor APIs reachable.",
+        "required_human_actions": "Check GROK_API_KEY, VENICE_API_KEY, DEEPSEEK_API_KEY in Render.",
         "raw_json": None,
     }
 
@@ -319,6 +374,19 @@ def _call_advisor_api(advisor: str, cfg: dict, today_str: str, weekday_str: str)
     confidence = float(parsed.get("confidence", 0.5))
     confidence = max(0.0, min(1.0, confidence))
 
+    # ── Executability classification ───────────────────────────────────────────
+    valid_exec = {e.value for e in ExecutabilityClass}
+    raw_exec = parsed.get("executability", "manual_only")
+    executability = raw_exec if raw_exec in valid_exec else ExecutabilityClass.manual_only
+
+    human_dep = parsed.get("human_dependency_reason")
+    if human_dep and str(human_dep).lower() in ("null", "none", ""):
+        human_dep = None
+
+    req_human = parsed.get("required_human_actions")
+    if req_human and str(req_human).lower() in ("null", "none", ""):
+        req_human = None
+
     return {
         "title": str(parsed.get("title", "Untitled opportunity"))[:200],
         "lane": lane,
@@ -327,6 +395,9 @@ def _call_advisor_api(advisor: str, cfg: dict, today_str: str, weekday_str: str)
         "expected_profit": float(parsed.get("expected_profit", 0.0)),
         "confidence": confidence,
         "handoff_path": parsed.get("handoff_path"),
+        "executability": executability,
+        "human_dependency_reason": str(human_dep)[:500] if human_dep else None,
+        "required_human_actions": str(req_human)[:500] if req_human else None,
         "raw_json": json.dumps(data),
     }
 
