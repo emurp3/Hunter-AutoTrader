@@ -154,14 +154,39 @@ def call_advisor(
 
 def call_all_advisors(source: IncomeSource, session: Session) -> dict:
     """
-    Call all configured advisors in sequence.
+    Call all configured advisors in priority order: Grok → Venice → DeepSeek.
     Returns summary dict: {advisor_name: result | error_message}
     """
     results = {}
-    for name in (AdvisorName.venice, AdvisorName.deepseek, AdvisorName.grok):
+    for name in (AdvisorName.grok, AdvisorName.venice, AdvisorName.deepseek):
         try:
             result = call_advisor(name, source, session)
             results[name] = result.recommendation if result else "not_configured"
         except Exception as exc:
             results[name] = f"error: {exc}"
     return results
+
+
+def call_with_priority_fallback(
+    source: IncomeSource,
+    session: Session,
+    *,
+    preferred: Optional[str] = None,
+) -> Optional[object]:
+    """
+    Call the preferred advisor first, then fall back through Grok → Venice → DeepSeek.
+    Returns the first successful AdvisorInput, or None if all unavailable.
+    """
+    order = [preferred] if preferred else []
+    for name in (AdvisorName.grok, AdvisorName.venice, AdvisorName.deepseek):
+        if name not in order:
+            order.append(name)
+
+    for name in order:
+        try:
+            result = call_advisor(name, source, session)
+            if result:
+                return result
+        except Exception:
+            continue
+    return None

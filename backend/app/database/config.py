@@ -44,6 +44,7 @@ def create_db_and_tables() -> None:
     import app.models.decision           # noqa: F401
     import app.models.marketplace        # noqa: F401
     import app.models.task               # noqa: F401
+    import app.models.daily_opportunity  # noqa: F401
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_tables()
 

@@ -137,18 +137,35 @@ def _build_weekly_report(session: Session) -> dict:
 async def daily_scan_task() -> None:
     """
     Full daily operations pipeline:
-      1. AutoTrader intake (ingest → score → orchestrate → alert → packet)
-      2. Strategy quota check (auto-promote candidates, alert if shortfall)
+      0. Daily advisor opportunity (one advisor owns the day — generates direction)
+      1. Generate fresh trading candidates → autotrader.json
+      2. AutoTrader intake (ingest → score → orchestrate → alert → packet)
+      3. Strategy quota check (auto-promote candidates, alert if shortfall)
     """
     logger.info("daily_scan_task: starting")
 
-    # ── Step 0: Generate fresh trading candidates → autotrader.json ──────────
+    # ── Step 0: Daily advisor opportunity ─────────────────────────────────────
+    logger.info("daily_scan_task: [0/3] generating daily advisor opportunity")
+    try:
+        from app.services.daily_opportunity import generate_today_opportunity, get_day_owner
+        with Session(engine) as session:
+            assigned = get_day_owner()
+            opp = generate_today_opportunity(session)
+            logger.info(
+                "daily_scan_task: daily opportunity — id=%d assigned=%s actual=%s lane=%s profit=$%.2f confidence=%.0f%%",
+                opp.id, assigned, opp.actual_advisor, opp.lane,
+                opp.expected_profit, opp.confidence * 100,
+            )
+    except Exception as exc:
+        logger.warning("daily_scan_task: daily opportunity generation failed — %s", exc)
+
+    # ── Step 1: Generate fresh trading candidates → autotrader.json ──────────
     logger.info("daily_scan_task: [0/2] generating trading candidates")
     n_candidates = generate_trading_candidates()
     logger.info("daily_scan_task: trading candidates generated — count=%d", n_candidates)
 
     # ── Step 1: AutoTrader intake ─────────────────────────────────────────────
-    logger.info("daily_scan_task: [1/2] running AutoTrader intake")
+    logger.info("daily_scan_task: [2/3] running AutoTrader intake")
     with Session(engine) as session:
         result = run_intake(session)
 
@@ -174,7 +191,7 @@ async def daily_scan_task() -> None:
             logger.info("daily_scan_task: intake_dry — creation lane auto-triggered (see autotrader service log)")
 
     # ── Step 2: Weekly quota enforcement ─────────────────────────────────────
-    logger.info("daily_scan_task: [2/2] enforcing weekly quotas")
+    logger.info("daily_scan_task: [3/3] enforcing weekly quotas")
     with Session(engine) as session:
         quota_result = _run_weekly_quota_checks(session)
 
