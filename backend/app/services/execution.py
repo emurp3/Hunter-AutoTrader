@@ -188,9 +188,14 @@ def place_trade(
             },
         )
         if result.status not in ("rejected", "canceled"):
+            size_text = (
+                str(result.qty)
+                if result.qty is not None
+                else (f"${result.notional:.2f}" if result.notional is not None else "market")
+            )
             alert_svc.raise_alert(
                 alert_type=AlertType.execution_completed,
-                title=f"Trade submitted - {order.symbol} {order.side} {order.qty}",
+                title=f"Trade submitted - {order.symbol} {order.side} {size_text}",
                 body=f"order_id={result.order_id} status={result.status}",
                 session=session,
                 priority=AlertPriority.medium,

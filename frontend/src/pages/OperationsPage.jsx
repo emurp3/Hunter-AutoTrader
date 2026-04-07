@@ -445,6 +445,21 @@ function formatCurrency(value) {
   })}`
 }
 
+function extractTaskId(alert) {
+  const body = alert?.body ?? ''
+  const match = body.match(/task_id=([a-f0-9-]+)/i)
+  return match?.[1] ?? null
+}
+
+function alertActionHints(alert) {
+  const taskId = extractTaskId(alert)
+  return {
+    taskId,
+    canAcknowledge: Boolean(alert?.id),
+    canRetry: Boolean(taskId && alert?.alert_type === 'review_required'),
+  }
+}
+
 function exportCsv(rows) {
   const cols = ['timestamp', 'source_id', 'allocation_name', 'category', 'amount_committed', 'expected_return', 'actual_return', 'net_result', 'status', 'budget_cycle']
   const header = cols.join(',')
@@ -1746,6 +1761,25 @@ export default function OperationsPage({ onBack }) {
                     <span className="alert-priority">{alert.priority.toUpperCase()}</span>
                     <span className="alert-title">{alert.title}</span>
                     <span className="alert-type">{alert.alert_type}</span>
+                    <div className="alert-body">
+                      {alert.body || 'No alert detail provided.'}
+                    </div>
+                    <div className="alert-meta">
+                      {(() => {
+                        const { taskId, canAcknowledge, canRetry } = alertActionHints(alert)
+                        return (
+                          <>
+                            {taskId && <span className="alert-task-id">task {taskId}</span>}
+                            <span className="alert-action-hint">
+                              {canAcknowledge ? 'ack available' : 'ack unavailable'}
+                            </span>
+                            <span className="alert-action-hint">
+                              {canRetry ? 'retry available' : 'retry unavailable'}
+                            </span>
+                          </>
+                        )
+                      })()}
+                    </div>
                   </div>
                 ))}
                 {alerts.length > 10 && <div className="alert-more">+{alerts.length - 10} more alerts</div>}
@@ -1988,5 +2022,4 @@ export default function OperationsPage({ onBack }) {
     </div>
   )
 }
-
 
