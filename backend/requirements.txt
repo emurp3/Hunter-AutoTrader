@@ -8,3 +8,4 @@ alpaca-py
 httpx
 pytz
 twilio
+playwright

@@ -67,3 +67,47 @@ services:
       name: hunter-data
       mountPath: /data
       sizeGB: 1
+
+  - type: worker
+    name: hunter-hva-worker
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    startCommand: python -m app.worker.main
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.9"
+      - key: HUNTER_BASE_URL
+        value: https://hunter-autotrader.onrender.com
+      - key: HUNTER_WORKER_ID
+        value: hosted-hva-worker-1
+      - key: HUNTER_POLL_INTERVAL_SECONDS
+        value: "10"
+      - key: HUNTER_HEARTBEAT_INTERVAL_SECONDS
+        value: "45"
+      - key: HUNTER_PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: HUNTER_CLAUDE_MODEL
+        value: claude-sonnet-4-5
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MARKETPLACE_FB_EMAIL
+        sync: false
+      - key: MARKETPLACE_FB_PASSWORD
+        sync: false
+      - key: MARKETPLACE_FB_2FA_SECRET
+        sync: false
+      - key: MARKETPLACE_FB_SESSION_STATE
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: HUNTER_SERVICE_LOCATION
+        sync: false
