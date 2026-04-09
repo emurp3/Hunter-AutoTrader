@@ -9,3 +9,5 @@ httpx
 pytz
 twilio
 playwright
+python-jose[cryptography]
+passlib[bcrypt]

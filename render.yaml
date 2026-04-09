@@ -19,6 +19,12 @@ services:
       # Execution mode (sandbox = paper trading, never live without explicit change)
       - key: EXECUTION_MODE
         value: sandbox
+      - key: HUNTER_JWT_SECRET
+        sync: false
+      - key: HUNTER_ADMIN_PASSWORD
+        sync: false
+      - key: HUNTER_WORKER_TOKEN
+        sync: false
       - key: AUTOTRADER_SOURCE_TYPE
         value: live
 
@@ -81,6 +87,8 @@ services:
         value: https://hunter-autotrader.onrender.com
       - key: HUNTER_WORKER_ID
         value: hosted-hva-worker-1
+      - key: HUNTER_WORKER_TOKEN
+        sync: false
       - key: HUNTER_POLL_INTERVAL_SECONDS
         value: "10"
       - key: HUNTER_HEARTBEAT_INTERVAL_SECONDS

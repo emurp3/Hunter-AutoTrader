@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.database.config import create_db_and_tables
 from app.routers.autotrader import router as autotrader_router
@@ -25,6 +26,7 @@ from app.routers.leads import router as leads_router
 from app.routers.decisions import router as decisions_router
 from app.routers.marketplace import router as marketplace_router
 from app.routers.tasks import router as tasks_router
+from app.routers.auth import router as auth_router
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -77,6 +79,13 @@ app = FastAPI(
 app.include_router(system_router)        # /system — health + readiness (first for priority)
 app.include_router(opportunities_router)
 app.include_router(reports_router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(budget_router)
 app.include_router(autotrader_router)
 app.include_router(alerts_router)
@@ -93,6 +102,7 @@ app.include_router(leads_router)
 app.include_router(decisions_router)
 app.include_router(marketplace_router)
 app.include_router(tasks_router)
+app.include_router(auth_router)
 
 # ── Static file serving (production only) ────────────────────────────────────
 # _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).

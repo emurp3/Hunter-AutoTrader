@@ -3,19 +3,21 @@ from sqlmodel import Session
 
 from app.database.config import get_session
 from app.services import alerts as alert_svc
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInDB
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
 @router.get("/")
-def list_alerts(active_only: bool = True, session: Session = Depends(get_session)):
+def list_alerts(active_only: bool = True, session: Session = Depends(get_session), _: UserInDB = Depends(get_current_user)):
     if active_only:
         return alert_svc.get_active_alerts(session)
     return alert_svc.get_all_alerts(session)
 
 
 @router.post("/{alert_id}/acknowledge")
-def acknowledge_alert(alert_id: int, session: Session = Depends(get_session)):
+def acknowledge_alert(alert_id: int, session: Session = Depends(get_session), _: UserInDB = Depends(require_admin)):
     alert = alert_svc.acknowledge_alert(alert_id, session)
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")

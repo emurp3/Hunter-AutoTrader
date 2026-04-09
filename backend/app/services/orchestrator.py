@@ -17,6 +17,8 @@ from app.services.scoring import score_opportunity
 from app.services import events as event_svc
 from app.services import alerts as alert_svc
 from app.services import action_packets as packet_svc
+import logging as _log
+_logger = _log.getLogger(__name__)
 
 
 def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
@@ -89,8 +91,8 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
                     session,
                     summary=f"Auto-allocated ${alloc_result['amount']:.2f} (approval_required={alloc_result['approval_required']})",
                 )
-        except Exception:
-            pass  # Budget failure must not block the pipeline
+        except Exception as _exc:  # noqa: BLE001
+            _logger.error("Budget step failed: %s", _exc, exc_info=True)
 
     # Action packet
     packet = packet_svc.generate_packet(source.source_id, session)
@@ -107,23 +109,20 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
         from app.services import decision as decision_svc
         decision = decision_svc.decide(source, session)
         decision_id = decision.id
-    except Exception:
-        pass  # Decision failure must not block the pipeline
+    except Exception as _exc:  # noqa: BLE001
+        _logger.error("Decision step failed: %s", _exc, exc_info=True)
 
     # Auto-dispatch: high/elite always; also medium-band creation_lane opportunities
     task_id = None
-    _should_dispatch = result.priority_band in (PriorityBand.elite, PriorityBand.high) or (
-        result.priority_band == PriorityBand.medium
-        and getattr(source, "origin_module", None) == "creation_lane"
-    )
+    _should_dispatch = result.priority_band in (PriorityBand.elite, PriorityBand.high, PriorityBand.medium)
     if _should_dispatch:
         try:
             from app.services.tasks import auto_dispatch_for_source
             task = auto_dispatch_for_source(source.source_id, session)
             if task:
                 task_id = task.task_id
-        except Exception:
-            pass  # Dispatch failure must not block the pipeline
+        except Exception as _exc:  # noqa: BLE001
+            _logger.error("Dispatch step failed: %s", _exc, exc_info=True)
 
     # Auto-trade: execution_ready trading decisions fire Alpaca orders immediately
     trade_placed = False
@@ -135,8 +134,8 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
             if dec and dec.execution_ready and dec.execution_path == "trading":
                 trade_result = auto_place_trade_for_source(source.source_id, session)
                 trade_placed = trade_result is not None
-        except Exception:
-            pass  # Trade placement failure must not block the pipeline
+        except Exception as _exc:  # noqa: BLE001
+            _logger.error("Trade placement step failed: %s", _exc, exc_info=True)
 
     return {
         "source_id": source.source_id,

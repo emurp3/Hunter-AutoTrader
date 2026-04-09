@@ -13,7 +13,9 @@ class HunterWorkerClient:
             raise RuntimeError("HUNTER_BASE_URL is required for the hosted HVA worker")
         self.base_url = base_url
         timeout = float(os.getenv("HUNTER_HTTP_TIMEOUT_SECONDS", "30"))
-        self._client = httpx.Client(base_url=base_url, timeout=timeout)
+        _worker_token = os.getenv("HUNTER_WORKER_TOKEN", "")
+        _headers = {"Authorization": f"Bearer {_worker_token}"} if _worker_token else {}
+        self._client = httpx.Client(base_url=base_url, timeout=timeout, headers=_headers)
 
     def close(self) -> None:
         self._client.close()

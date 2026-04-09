@@ -9,6 +9,8 @@ from app.models.income_source import IncomeSource
 from app.models.decision import OpportunityDecision
 from app.services.autotrader import get_intake_state, run_intake
 from app.services.source_acquisition import get_latest_results, get_source_status
+from app.auth.jwt import get_current_user, require_admin
+from app.auth.models import UserInDB
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ def _run_intake_background() -> None:
 
 
 @router.get("/status")
-def autotrader_status() -> dict:
+def autotrader_status(_: UserInDB = Depends(get_current_user)) -> dict:
     state = get_intake_state()
 
     return {
@@ -87,7 +89,7 @@ def autotrader_status() -> dict:
 
 
 @router.get("/intake-summary")
-def intake_summary(session: Session = Depends(get_session)) -> dict:
+def intake_summary(session: Session = Depends(get_session), _: UserInDB = Depends(get_current_user)) -> dict:
     state = get_intake_state()
     sources = session.exec(
         select(IncomeSource)
@@ -165,7 +167,7 @@ def trigger_generate_candidates() -> dict:
 
 
 @router.post("/run-intake", status_code=202)
-def trigger_intake(background_tasks: BackgroundTasks) -> dict:
+def trigger_intake(background_tasks: BackgroundTasks, _: UserInDB = Depends(require_admin)) -> dict:
     """
     Queue the AutoTrader intake pipeline. Returns 202 immediately.
     Actual work runs in a background thread with its own DB session.
@@ -225,6 +227,7 @@ def autotrader_opportunities(
     limit: int = Query(default=50, ge=1, le=200),
     band: str | None = Query(default=None, description="Filter by priority band: elite, high, medium, low"),
     session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
 ) -> dict:
     """
     Live-scored opportunities from all ingestion sources, ordered by score descending.

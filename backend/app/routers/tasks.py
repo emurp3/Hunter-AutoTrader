@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.database.config import get_session
+from app.auth.jwt import require_worker
 from app.models.task import EscalationType, ExecutionEngine, Task, TaskAttempt, TaskStatus
 from app.services import tasks as task_svc
 
@@ -121,7 +122,7 @@ def list_pending(limit: int = 50, session: Session = Depends(get_session)):
 
 
 @router.post("/claim")
-def claim(body: ClaimRequest, session: Session = Depends(get_session)):
+def claim(body: ClaimRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
     """Atomically claim the next available task. Returns null if queue is empty."""
     task = task_svc.claim_task(body.worker_id, session)
     if not task:
@@ -159,7 +160,7 @@ def get_attempts(task_id: str, session: Session = Depends(get_session)):
 
 
 @router.post("/{task_id}/heartbeat")
-def heartbeat(task_id: str, body: HeartbeatRequest, session: Session = Depends(get_session)):
+def heartbeat(task_id: str, body: HeartbeatRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
     """Extend the worker lease. Call every 60s while executing."""
     ok = task_svc.heartbeat(task_id, body.worker_id, session)
     if not ok:
@@ -171,7 +172,7 @@ def heartbeat(task_id: str, body: HeartbeatRequest, session: Session = Depends(g
 
 
 @router.post("/{task_id}/complete")
-def complete(task_id: str, body: CompleteRequest, session: Session = Depends(get_session)):
+def complete(task_id: str, body: CompleteRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
     """Record a successful outcome and close the task."""
     try:
         task = task_svc.complete_task(
@@ -191,7 +192,7 @@ def complete(task_id: str, body: CompleteRequest, session: Session = Depends(get
 
 
 @router.post("/{task_id}/escalate")
-def escalate(task_id: str, body: EscalateRequest, session: Session = Depends(get_session)):
+def escalate(task_id: str, body: EscalateRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
     """Hard-stop escalation. Raises a Commander alert immediately."""
     try:
         task = task_svc.escalate_task(
@@ -212,7 +213,7 @@ def escalate(task_id: str, body: EscalateRequest, session: Session = Depends(get
 
 
 @router.post("/{task_id}/fail")
-def fail(task_id: str, body: FailRequest, session: Session = Depends(get_session)):
+def fail(task_id: str, body: FailRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
     """Mark task as permanently failed (attempts exhausted, no escalation condition)."""
     try:
         task = task_svc.fail_task(
