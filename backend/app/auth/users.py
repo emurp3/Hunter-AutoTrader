@@ -6,7 +6,7 @@ from passlib.context import CryptContext
 
 from app.auth.models import UserInDB
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
