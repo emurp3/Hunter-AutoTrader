@@ -8,6 +8,13 @@ function AppInner() {
   const { user, loading } = useAuth()
   const [page, setPage]   = useState('hero')
 
+  // Hero page is always public — no auth required
+  if (page === 'hero') {
+    return <HeroPage onEnter={() => setPage('operations')} />
+  }
+
+  // Everything below here is the protected operations section.
+  // Auth check runs only when the user tries to enter.
   if (loading) {
     return (
       <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:'#0a0a0a', color:'#444', fontFamily:'monospace' }}>
@@ -18,12 +25,7 @@ function AppInner() {
 
   if (!user) return <Login />
 
-  return (
-    <>
-      {page === 'hero' && <HeroPage onEnter={() => setPage('operations')} />}
-      {page === 'operations' && <OperationsPage onBack={() => setPage('hero')} />}
-    </>
-  )
+  return <OperationsPage onBack={() => setPage('hero')} />
 }
 
 export default function App() {
