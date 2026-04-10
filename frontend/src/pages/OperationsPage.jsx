@@ -1,151 +1,85 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { useAuth } from '../context/AuthContext'
+
 const API = '/api'
 
 const fallbackData = {
   summary: {
     weekly_quotas: {
       all_met: false,
-      source_discovery: {
-        sources_found_this_week: 6,
-        required: 10,
-        shortfall: 4,
-        quota_met: false,
-      },
-      strategy_deployment: {
-        active_count: 7,
-        required: 10,
-        shortfall: 3,
-        quota_met: false,
-      },
+      source_discovery: { sources_found_this_week: 0, required: 10, shortfall: 10, quota_met: false },
+      strategy_deployment: { active_count: 0, required: 10, shortfall: 10, quota_met: false },
     },
-    total_opportunities: 24,
-    active_opportunities: 7,
-    elite_opportunities: 2,
-    high_opportunities: 5,
-    unacknowledged_alerts: 3,
-    ready_packets: 4,
-    underperforming_strategies: 2,
+    total_opportunities: 0,
+    active_opportunities: 0,
+    elite_opportunities: 0,
+    high_opportunities: 0,
+    unacknowledged_alerts: 0,
+    ready_packets: 0,
+    underperforming_strategies: 0,
   },
-  alerts: [
-    { id: 1, priority: 'high', title: 'Strategy quota below target', alert_type: 'quota' },
-    { id: 2, priority: 'medium', title: 'AutoTrader source not live', alert_type: 'autotrader' },
-    { id: 3, priority: 'medium', title: 'Budget approvals waiting', alert_type: 'budget' },
-  ],
+  alerts: [],
   strategies: {
-    active_count: 7,
-    activated_this_week: 3,
-    retired_this_week: 1,
-    replacement_strategies_required: 2,
-    total_expected_return: 570,
-    total_actual_return: 119,
-    candidates_available: 6,
-    strategies: [
-      {
-        strategy_id: 'auto-intake',
-        strategy_name: 'AutoTrader opportunity intake',
-        category: 'intake',
-        expected_return: 0,
-        actual_return: 0,
-        evidence_of_activity: false,
-      },
-      {
-        strategy_id: 'small-flips',
-        strategy_name: 'Small-win cash flips',
-        category: 'active',
-        expected_return: 180,
-        actual_return: 57,
-        evidence_of_activity: true,
-      },
-      {
-        strategy_id: 'digital-scouting',
-        strategy_name: 'Digital product scouting',
-        category: 'active',
-        expected_return: 125,
-        actual_return: 34,
-        evidence_of_activity: true,
-      },
-    ],
+    active_count: 0,
+    activated_this_week: 0,
+    retired_this_week: 0,
+    replacement_strategies_required: 0,
+    total_expected_return: 0,
+    total_actual_return: 0,
+    candidates_available: 0,
+    strategies: [],
   },
   budget: {
-    starting_bankroll: 100,
-    current_bankroll: 119.42,
-    available_capital: 62,
-    committed_capital: 38,
-    realized_profit: 19.42,
-    unrealized_exposure: 24,
-    allocation_count: 4,
-    evaluation_start_date: '2026-03-23',
-    evaluation_end_date: '2026-04-22',
+    starting_bankroll: 0,
+    current_bankroll: 0,
+    available_capital: 0,
+    committed_capital: 0,
+    realized_profit: 0,
+    unrealized_exposure: 0,
+    allocation_count: 0,
+    evaluation_start_date: null,
+    evaluation_end_date: null,
     capital_match_eligible: false,
     capital_match_amount: 0,
     month_end_review: {
-      starting_bankroll: 100,
-      ending_bankroll: 119.42,
-      net_gain_loss: 19.42,
-      growth_pct: 19.42,
+      starting_bankroll: 0,
+      ending_bankroll: 0,
+      net_gain_loss: 0,
+      growth_pct: 0,
       doubled_bankroll: false,
       capital_match_eligible: false,
       recommended_match_amount: 0,
-      next_cycle_bankroll_if_matched: 119.42,
-      evaluation_start_date: '2026-03-23',
-      evaluation_end_date: '2026-04-22',
-      days_remaining: 24,
+      next_cycle_bankroll_if_matched: 0,
+      evaluation_start_date: null,
+      evaluation_end_date: null,
+      days_remaining: null,
     },
     budget: {
-      starting_bankroll: 100,
-      current_bankroll: 119.42,
-      evaluation_start_date: '2026-03-23',
-      evaluation_end_date: '2026-04-22',
-      status: 'open',
+      starting_bankroll: 0,
+      current_bankroll: 0,
+      evaluation_start_date: null,
+      evaluation_end_date: null,
+      status: 'no_open_budget',
     },
-    allocations_by_source: [
-      {
-        source_id: 'AT-4821',
-        allocation_name: 'High-margin vehicle opportunity with local buyer demand.',
-        amount_allocated: 18,
-        status: 'planned',
-      },
-      {
-        source_id: 'DP-112',
-        allocation_name: 'Digital product bundle with low setup cost and rapid distribution.',
-        amount_allocated: 12,
-        status: 'planned',
-      },
-    ],
+    allocations_by_source: [],
   },
-  allocations: [
-    {
-      id: 1,
-      source_id: 'AT-4821',
-      allocation_name: 'High-margin vehicle opportunity with local buyer demand.',
-      amount_allocated: 18,
-      status: 'planned',
-      expected_return: 240,
-    },
-    {
-      id: 2,
-      source_id: 'DP-112',
-      allocation_name: 'Digital product bundle with low setup cost and rapid distribution.',
-      amount_allocated: 12,
-      status: 'planned',
-      expected_return: 125,
-    },
-  ],
+  allocations: [],
   atStatus: {
-    source_configured: true,
+    source_configured: false,
     source_reachable: false,
+    intake_running: false,
     last_scan_status: 'never_run',
     last_scan_at: null,
-    last_error: 'AutoTrader offline / no live data. Export file is missing.',
+    last_error: 'Operational data unavailable.',
     live_data_status: 'missing',
-    live_data_message: 'AutoTrader offline / no live data. Export file is missing.',
+    live_data_message: 'Operational data unavailable until the backend reconnects.',
     live_data_updated_at: null,
     live_data_record_count: 0,
     stale_after_hours: 24,
     using_fallback: false,
     fallback_reason: null,
-    fallback_record_count: 7,
+    fallback_record_count: 0,
     current_data_mode: 'offline',
     last_scan_counts: {
       scanned: 0,
@@ -155,9 +89,9 @@ const fallbackData = {
       errors: 0,
     },
     config: {
-      source_type: 'file',
-      file_path: 'C:\\Murph\\agents\\hunter\\backend\\data\\autotrader.json',
-      seed_path: 'C:\\Murph\\agents\\hunter\\backend\\data\\seed_opportunities.json',
+      source_type: 'unknown',
+      file_path: null,
+      seed_path: null,
     },
   },
   intakeSummary: {
@@ -172,83 +106,23 @@ const fallbackData = {
     live_data_status: 'missing',
     top_5_by_score: [],
   },
-  packets: [
-    {
-      id: 'packet-01',
-      status: 'ready',
-      priority_band: 'elite',
-      source_id: 'AT-4821',
-      estimated_return: 240,
-      next_actions: ['review', 'approve'],
-    },
-    {
-      id: 'packet-02',
-      status: 'draft',
-      priority_band: 'high',
-      source_id: 'DP-112',
-      estimated_return: 125,
-      next_actions: ['score'],
-    },
-  ],
+  packets: [],
   pipeline: {
-    by_status: {
-      ingested: 24,
-      scored: 18,
-      review_ready: 6,
-      budget_candidates: 4,
-      active: 7,
-    },
-    by_band: {
-      elite: 2,
-      high: 5,
-      medium: 9,
-      low: 8,
-    },
-    top_10: [
-      {
-        source_id: 'AT-4821',
-        priority_band: 'elite',
-        score: 96,
-        description: 'High-margin vehicle opportunity with local buyer demand.',
-        status: 'review_ready',
-        estimated_profit: 240,
-      },
-      {
-        source_id: 'DP-112',
-        priority_band: 'high',
-        score: 84,
-        description: 'Digital product bundle with low setup cost and rapid distribution.',
-        status: 'budget_candidate',
-        estimated_profit: 125,
-      },
-    ],
+    by_status: {},
+    by_band: {},
+    top_10: [],
   },
   events: {
-    count: 3,
-    events: [
-      { id: 'evt-1', event_type: 'packet_ready', source_id: 'AT-4821', created_at: '2026-03-27T19:20:00Z' },
-      { id: 'evt-2', event_type: 'quota_shortfall', source_id: 'weekly', created_at: '2026-03-27T18:02:00Z' },
-      { id: 'evt-3', event_type: 'autotrader_blocked', source_id: 'autotrader', created_at: '2026-03-27T17:14:00Z' },
-    ],
+    count: 0,
+    events: [],
   },
   executionStatus: {
-    active_executions: [
-      {
-        packet_id: 8,
-        source_id: 'github:repo:josh-xt/agixt',
-        opportunity_summary: 'AGiXT monetization and setup opportunity.',
-        status: 'acknowledged',
-        execution_state: 'in_progress',
-        priority_band: 'high',
-        estimated_return: 860,
-        budget_recommendation: 7.39,
-      },
-    ],
+    active_executions: [],
     completed_executions: [],
     failed_executions: [],
     recent_outcomes: [],
     counts: {
-      active: 1,
+      active: 0,
       completed: 0,
       failed: 0,
     },
@@ -263,6 +137,19 @@ const fallbackData = {
     weakest_lane: null,
     average_return_per_opportunity_type: [],
   },
+}
+
+function buildScanSignature(status) {
+  return [
+    status?.last_scan_at ?? 'none',
+    status?.last_scan_status ?? 'never_run',
+    status?.live_data_status ?? 'missing',
+    status?.current_data_mode ?? 'offline',
+  ].join('|')
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 function StatCard({ label, value, sub, highlight }) {
@@ -584,6 +471,7 @@ async function loadOperationalData() {
 }
 
 export default function OperationsPage({ onBack, onAuthFail }) {
+  const { logout } = useAuth()
   const [summary, setSummary] = useState(fallbackData.summary)
   const [alerts, setAlerts] = useState(fallbackData.alerts)
   const [strategies, setStrategies] = useState(fallbackData.strategies)
@@ -639,6 +527,44 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     setTransactions(data.transactions ?? null)
   }
 
+  async function waitForIntakeCompletion(previousSignature) {
+    let sawRunning = false
+    let latestStatus = null
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await requestJson('/autotrader/status')
+      latestStatus = status
+      const nextSignature = buildScanSignature(status)
+
+      if (status.intake_running) {
+        sawRunning = true
+      }
+
+      if (!status.intake_running && nextSignature !== previousSignature && status.last_scan_status !== 'never_run') {
+        return status
+      }
+
+      if (sawRunning && !status.intake_running) {
+        return status
+      }
+
+      await sleep(1500)
+    }
+
+    return latestStatus
+  }
+
+  function handleLogout() {
+    logout()
+    if (onBack) {
+      onBack()
+      return
+    }
+    if (onAuthFail) {
+      onAuthFail()
+    }
+  }
+
   useEffect(() => {
     let active = true
 
@@ -678,7 +604,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
           performanceSummary: fallbackData.performanceSummary,
         })
         setUsingFallback(true)
-        setError('Hunter backend is unavailable, so the dashboard is showing local fallback data.')
+        setError('Hunter backend is unavailable. No live operational data is being shown.')
       } finally {
         if (active) {
           setLoading(false)
@@ -765,7 +691,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const failedExecutions = executionStatus?.failed_executions ?? []
   const top10 = pipeline?.top_10 ?? []
   const recentEvents = events?.events ?? []
-  const endpointStatus = usingFallback ? 'Fallback' : 'Live'
+  const endpointStatus = usingFallback ? 'Unavailable' : 'Live'
   const liveDataStatus = atStatus?.live_data_status ?? 'missing'
   const fallbackActive = Boolean(atStatus?.using_fallback || atStatus?.current_data_mode === 'seed')
   const liveFeedReady = liveDataStatus === 'ready'
@@ -780,7 +706,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
 
   const missionSummary = useMemo(() => {
     if (usingFallback) {
-      return 'Backend unavailable. Dashboard is rendering with local fallback data only.'
+      return 'Backend unavailable. Hunter is showing an empty offline state until the API reconnects.'
     }
 
     if (fallbackActive) {
@@ -848,22 +774,29 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     })
 
     try {
+      const initialSignature = type === 'intake' ? buildScanSignature(atStatus) : null
       const result = await requestJson(command.path, { method: 'POST' })
-      setCommandState({
-        type,
-        status: 'success',
-        message:
-          type === 'intake'
-            ? result.fallback_used
-              ? `Intake completed using seed fallback. Live source status: ${result.live_data_status ?? 'offline'}.`
-              : `AutoTrader intake completed with live data. ${result.records_loaded ?? result.scanned ?? 0} findings loaded.`
-            : 'Weekly quota enforcement completed successfully.',
-      })
+      const intakeStatus =
+        type === 'intake'
+          ? await waitForIntakeCompletion(initialSignature)
+          : null
 
       const refreshed = await loadOperationalData()
       applyOperationalData(refreshed)
       setUsingFallback(false)
       setError(null)
+      setCommandState({
+        type,
+        status: 'success',
+        message:
+          type === 'intake'
+            ? intakeStatus?.using_fallback
+              ? `Intake completed using seed fallback. Live source status: ${intakeStatus.live_data_status ?? 'offline'}.`
+              : intakeStatus?.last_scan_status === 'success'
+                ? `AutoTrader intake completed. ${intakeStatus.live_data_record_count ?? refreshed.intakeSummary?.total_from_autotrader ?? 0} records available.`
+                : result.message || 'AutoTrader intake request accepted. Refreshing live status now.'
+            : 'Weekly quota enforcement completed successfully.',
+      })
     } catch (commandError) {
       setCommandState({
         type,
@@ -1017,6 +950,9 @@ export default function OperationsPage({ onBack, onAuthFail }) {
           <span className={`ops-status-badge ops-status-badge--${usingFallback ? 'fallback' : 'live'}`}>
             {endpointStatus}
           </span>
+          <button className="ops-logout" onClick={handleLogout}>
+            Logout
+          </button>
           <span className="ops-version">v0.2.0</span>
         </div>
       </header>
@@ -1037,14 +973,16 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                 <div className="ops-command-label">First Task</div>
                 <div className="ops-command-title">Run AutoTrader Intake</div>
                 <div className="ops-command-text">
-                  {fallbackActive || autotraderOffline
+                  {usingFallback
+                    ? 'Backend unavailable. Intake is disabled until the Hunter API reconnects.'
+                    : fallbackActive || autotraderOffline
                     ? 'AutoTrader is offline, so this run will use the seeded opportunity file instead of silent empty data.'
                     : 'Best live operational test once the AutoTrader bridge is healthy.'}
                 </div>
                 <button
                   className="ops-action-button"
                   onClick={() => runCommand('intake')}
-                  disabled={commandState.status === 'running'}
+                  disabled={commandState.status === 'running' || usingFallback}
                 >
                   Run Intake
                 </button>
@@ -1058,7 +996,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                 <button
                   className="ops-action-button ops-action-button--secondary"
                   onClick={() => runCommand('quotas')}
-                  disabled={commandState.status === 'running'}
+                  disabled={commandState.status === 'running' || usingFallback}
                 >
                   Run Quotas
                 </button>
@@ -1131,7 +1069,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
 
           {usingFallback && (
             <div className="ops-no-data">
-              Running in local fallback mode so the operations page still renders cleanly in Vite.
+              Backend unavailable. Hunter is intentionally showing an empty offline state instead of fake operational data.
             </div>
           )}
 
@@ -2034,4 +1972,3 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     </div>
   )
 }
-

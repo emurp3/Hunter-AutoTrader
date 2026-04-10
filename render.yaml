@@ -84,7 +84,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.9"
       - key: HUNTER_BASE_URL
-        value: https://hunter-autotrader.onrender.com
+        value: https://hunter.onrender.com
       - key: HUNTER_WORKER_ID
         value: hosted-hva-worker-1
       - key: HUNTER_WORKER_TOKEN

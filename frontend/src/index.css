@@ -412,6 +412,26 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
     0 14px 28px rgba(0,0,0,0.28);
 }
 
+.ops-logout {
+  background: rgba(224,82,82,0.1);
+  border: 1px solid rgba(224,82,82,0.24);
+  color: #ffcac2;
+  border-radius: 999px;
+  padding: 0.42rem 0.9rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s, background 0.15s;
+}
+
+.ops-logout:hover {
+  border-color: rgba(224,82,82,0.42);
+  background: rgba(224,82,82,0.16);
+  transform: translateY(-1px);
+}
+
 .ops-title {
   font-size: 1.02rem;
   font-weight: 800;
