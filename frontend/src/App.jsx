@@ -31,14 +31,14 @@ function AppInner() {
 
   // Direct login (from "Login" button on hero)
   if (page === 'login') {
-    if (user) return <OperationsPage onBack={() => setPage('hero')} />
+    if (user) return <OperationsPage onBack={() => setPage('hero')} onAuthFail={() => setPage('login')} />
     return <Login onSuccess={() => setPage('operations')} onBack={() => setPage('hero')} />
   }
 
   // ── Protected: operations ─────────────────────────────────────────────────
   if (loading) return <div style={loadStyle}>loading...</div>
   if (!user)   return <Login onSuccess={() => setPage('operations')} />
-  return <OperationsPage onBack={() => setPage('hero')} />
+  return <OperationsPage onBack={() => setPage('hero')} onAuthFail={() => setPage('login')} />
 }
 
 export default function App() {

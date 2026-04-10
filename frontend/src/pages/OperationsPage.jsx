@@ -478,8 +478,13 @@ function exportCsv(rows) {
   URL.revokeObjectURL(url)
 }
 
+class AuthError extends Error {
+  constructor() { super('Unauthorized'); this.isAuthError = true }
+}
+
 async function requestJson(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -487,6 +492,8 @@ async function requestJson(path, options = {}) {
     },
     ...options,
   })
+
+  if (response.status === 401) throw new AuthError()
 
   let data = null
   try {
@@ -576,7 +583,7 @@ async function loadOperationalData() {
   }
 }
 
-export default function OperationsPage({ onBack }) {
+export default function OperationsPage({ onBack, onAuthFail }) {
   const [summary, setSummary] = useState(fallbackData.summary)
   const [alerts, setAlerts] = useState(fallbackData.alerts)
   const [strategies, setStrategies] = useState(fallbackData.strategies)
@@ -645,8 +652,13 @@ export default function OperationsPage({ onBack }) {
         applyOperationalData(data)
         setError(null)
         setUsingFallback(false)
-      } catch (_) {
+      } catch (err) {
         if (!active) {
+          return
+        }
+
+        if (err?.isAuthError) {
+          if (onAuthFail) onAuthFail()
           return
         }
 
