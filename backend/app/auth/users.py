@@ -6,15 +6,20 @@ from passlib.context import CryptContext
 
 from app.auth.models import UserInDB
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
+_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _b(plain: str) -> bytes:
+    """Bcrypt hard limit is 72 bytes. Pre-truncate so the C library never sees more."""
+    return plain.encode("utf-8")[:72]
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd.verify(plain, hashed)
+    return _pwd.verify(_b(plain), hashed)
 
 
 def hash_password(plain: str) -> str:
-    return _pwd.hash(plain)
+    return _pwd.hash(_b(plain))
 
 
 def _build_db() -> dict[str, UserInDB]:
