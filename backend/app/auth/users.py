@@ -1,30 +1,41 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import os
-
-from passlib.context import CryptContext
 
 from app.auth.models import UserInDB
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def _b(plain: str) -> bytes:
-    """Bcrypt hard limit is 72 bytes. Pre-truncate so the C library never sees more."""
-    return plain.encode("utf-8")[:72]
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd.verify(_b(plain), hashed)
+# ---------------------------------------------------------------------------
+# Password hashing — pure Python stdlib (PBKDF2-SHA256 + random salt).
+# Replaced passlib[bcrypt] which is broken on Python 3.14 due to an internal
+# detect_wrap_bug() call that hashes a 73-byte test password, triggering a
+# ValueError in the underlying _bcrypt C library regardless of any truncation.
+# ---------------------------------------------------------------------------
+_ITERS = 260_000  # OWASP 2024 minimum for PBKDF2-SHA256
 
 
 def hash_password(plain: str) -> str:
-    return _pwd.hash(_b(plain))
+    salt = os.urandom(32)
+    key  = hashlib.pbkdf2_hmac("sha256", plain.encode(), salt, _ITERS)
+    return base64.b64encode(salt + key).decode()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        raw  = base64.b64decode(hashed)
+        salt = raw[:32]
+        key  = raw[32:]
+        test = hashlib.pbkdf2_hmac("sha256", plain.encode(), salt, _ITERS)
+        return hmac.compare_digest(key, test)
+    except Exception:
+        return False
 
 
 def _build_db() -> dict[str, UserInDB]:
-    admin_pw  = os.getenv("HUNTER_ADMIN_PASSWORD", "hunter-admin-2024")
-    owner_pw  = os.getenv("HUNTER_OWNER_PASSWORD", "Em252525!!")
+    admin_pw = os.getenv("HUNTER_ADMIN_PASSWORD", "hunter-admin-2024")
+    owner_pw = os.getenv("HUNTER_OWNER_PASSWORD", "Em252525!!")
     return {
         "admin": UserInDB(
             username="admin",
@@ -44,7 +55,6 @@ def _build_db() -> dict[str, UserInDB]:
     }
 
 
-# Built once at process startup; admin password is read from env at that time.
 _USERS: dict[str, UserInDB] = _build_db()
 
 
