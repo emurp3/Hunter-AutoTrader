@@ -3,7 +3,7 @@ from sqlmodel import Session
 
 from app.database.config import get_session
 from app.services import alerts as alert_svc
-from app.auth.jwt import get_current_user
+from app.auth.jwt import get_current_user, require_admin
 from app.auth.models import UserInDB
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
