@@ -1,8 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 
-import { useAuth } from '../context/AuthContext'
-
 const API = '/api'
 
 const fallbackData = {
@@ -951,14 +949,8 @@ export default function OperationsPage({ onBack, onAuthFail }) {
           <span className={`ops-status-badge ops-status-badge--${usingFallback ? 'fallback' : 'live'}`}>
             {endpointStatus}
           </span>
-          <button className="ops-logout" onClick={handleLogout}>
-            Logout
-          </button>
           <span className="ops-version">v0.2.0</span>
-          <button
-            className="ops-logout"
-            onClick={() => { logout(); onBack() }}
-          >
+          <button className="ops-logout" onClick={handleLogout}>
             Logout
           </button>
         </div>
