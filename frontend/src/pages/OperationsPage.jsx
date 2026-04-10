@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useAuth } from '../context/AuthContext'
 
 import { useAuth } from '../context/AuthContext'
 
@@ -954,6 +955,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
             Logout
           </button>
           <span className="ops-version">v0.2.0</span>
+          <button
+            className="ops-logout"
+            onClick={() => { logout(); onBack() }}
+          >
+            Logout
+          </button>
         </div>
       </header>
 
