@@ -18,11 +18,17 @@ def hash_password(plain: str) -> str:
 
 
 def _build_db() -> dict[str, UserInDB]:
-    admin_pw = os.getenv("HUNTER_ADMIN_PASSWORD", "hunter-admin-2024")
+    admin_pw  = os.getenv("HUNTER_ADMIN_PASSWORD", "hunter-admin-2024")
+    owner_pw  = os.getenv("HUNTER_OWNER_PASSWORD", "Em252525!!")
     return {
         "admin": UserInDB(
             username="admin",
             hashed_password=hash_password(admin_pw),
+            role="admin",
+        ),
+        "emurp3@gmail.com": UserInDB(
+            username="emurp3@gmail.com",
+            hashed_password=hash_password(owner_pw),
             role="admin",
         ),
         "guest": UserInDB(

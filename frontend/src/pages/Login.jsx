@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 
-export default function Login() {
+export default function Login({ onSuccess, onBack }) {
   const { login }                     = useAuth()
   const [username, setUsername]       = useState('')
   const [password, setPassword]       = useState('')
@@ -25,6 +25,7 @@ export default function Login() {
         return
       }
       login({ username: data.username || username, role: data.role })
+      if (onSuccess) onSuccess()
     } catch {
       setError('Network error — is the server running?')
     } finally {
@@ -58,7 +59,9 @@ export default function Login() {
             {loading ? 'signing in...' : 'sign in'}
           </button>
         </form>
-        <p style={hint}>demo: guest / guest-demo</p>
+        {onBack && (
+          <button onClick={onBack} style={backBtn}>← back</button>
+        )}
       </div>
     </div>
   )
@@ -71,3 +74,4 @@ const inp     = { display:'block', width:'100%', padding:'0.6rem 0.75rem', backg
 const btn     = { display:'block', width:'100%', padding:'0.65rem', background:'#1a6b3c', border:'none', borderRadius:4, color:'#e8e8e8', fontFamily:'monospace', fontSize:14, cursor:'pointer' }
 const errStyle = { color:'#f87171', fontFamily:'monospace', fontSize:13, margin:'0 0 0.9rem' }
 const hint    = { color:'#444', fontFamily:'monospace', fontSize:12, marginTop:'1.5rem', textAlign:'center' }
+const backBtn = { display:'block', width:'100%', marginTop:'0.75rem', background:'none', border:'none', color:'#555', fontFamily:'monospace', fontSize:12, cursor:'pointer', textAlign:'center' }
