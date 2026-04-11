@@ -354,16 +354,9 @@ def normalize_finding(raw: dict[str, Any], *, source_prefix: str) -> dict[str, A
         logger.warning("normalize_finding: skipping finding %s with empty description", raw_id)
         return None
 
-    date_raw = raw.get("signal_date") or raw.get("timestamp")
+    # date_found = date Hunter ingested the source, not the raw publication timestamp.
+    # Using today ensures source discovery quota reflects when Hunter found the source.
     date_found = date.today()
-    if date_raw:
-        try:
-            if isinstance(date_raw, str) and "T" in date_raw:
-                date_found = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).date()
-            else:
-                date_found = date.fromisoformat(str(date_raw))
-        except ValueError:
-            logger.warning("normalize_finding: invalid date '%s' for %s — using today", date_raw, raw_id)
 
     estimated_profit = raw.get("estimated_profit", raw.get("estimated_monthly_return", 0.0))
     try:
@@ -393,7 +386,7 @@ def normalize_finding(raw: dict[str, Any], *, source_prefix: str) -> dict[str, A
     }
 
 
-_UPDATE_FIELDS = ("estimated_profit", "next_action", "notes", "confidence", "category")
+_UPDATE_FIELDS = ("estimated_profit", "next_action", "notes", "confidence", "category", "date_found")
 
 
 def ingest_findings(session: Session, findings: list[dict[str, Any]], *, origin_module: str) -> IntakeResult:
@@ -602,6 +595,16 @@ def run_intake(session: Session) -> IntakeResult:
     _state.last_updated = result.updated
     _state.last_skipped = result.skipped
     _state.last_errors = result.errors
+
+    # ── Auto-promote strategies after any successful intake ──────────────────
+    if not result.aborted and (result.inserted > 0 or result.updated > 0):
+        try:
+            from app.services.strategies import auto_promote_candidates
+            promoted = auto_promote_candidates(session)
+            if promoted:
+                logger.info("auto_promote: promoted %d candidates to active after intake", len(promoted))
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("auto_promote: post-intake promotion failed — %s", _exc)
 
     # ── Creation lane — auto-trigger when live intake found nothing new ───────
     if not result.aborted and result.inserted == 0 and result.source_mode == "live":
