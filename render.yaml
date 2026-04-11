@@ -26,7 +26,9 @@ services:
       - key: HUNTER_WORKER_TOKEN
         sync: false
       - key: AUTOTRADER_SOURCE_TYPE
-        value: live
+        value: file
+      - key: AUTOTRADER_FILE_PATH
+        value: /opt/render/project/src/backend/data/seed_opportunities.json
 
       # Alpaca paper trading credentials — set these in the Render dashboard
       - key: SANDBOX_API_KEY
