@@ -487,9 +487,37 @@ def _run_live_intake(session: Session) -> IntakeResult:
             records_loaded=acq.get("found", 0),
         )
 
-        _state.live_data_status = "ready"
-        _state.live_data_message = f"Live source acquisition: {result.inserted} new, {result.updated} updated."
         _state.source_reachable = True
+
+        # If live acquisition found nothing, fall back to seed so quotas stay healthy.
+        if result.inserted == 0 and result.updated == 0:
+            logger.info("_run_live_intake: live acquisition returned 0 results — activating seed fallback")
+            try:
+                seed_findings, seed_path = load_seed_findings()
+                seed_result = ingest_findings(session, seed_findings, origin_module=SEED_MODULE_NAME)
+                seed_result.source_mode = "seed"
+                seed_result.fallback_used = True
+                seed_result.fallback_reason = "Live acquisition returned 0 results."
+                seed_result.live_data_status = "ready"
+                seed_result.live_data_message = "Live acquisition active but empty — seed fallback engaged."
+                seed_result.records_loaded = len(seed_findings)
+                _state.using_fallback = True
+                _state.fallback_reason = "Live acquisition returned 0 results."
+                _state.fallback_path = seed_path
+                _state.fallback_record_count = len(seed_findings)
+                _state.current_data_mode = "seed"
+                _state.last_status = "fallback"
+                _state.last_scanned = seed_result.scanned
+                _state.last_inserted = seed_result.inserted
+                _state.last_updated = seed_result.updated
+                _state.last_skipped = seed_result.skipped
+                _state.last_errors = seed_result.errors
+                _state.last_error = None
+                return seed_result
+            except AutoTraderSourceError as seed_exc:
+                logger.warning("_run_live_intake: seed fallback also failed — %s", seed_exc)
+
+        _state.live_data_message = f"Live source acquisition: {result.inserted} new, {result.updated} updated."
         _state.using_fallback = False
         _state.current_data_mode = "live"
         _state.last_status = "partial" if errors else "success"
@@ -505,6 +533,35 @@ def _run_live_intake(session: Session) -> IntakeResult:
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         logger.error("_run_live_intake failed: %s", msg)
+        # Hard failure — attempt seed fallback before giving up
+        try:
+            seed_findings, seed_path = load_seed_findings()
+            seed_result = ingest_findings(session, seed_findings, origin_module=SEED_MODULE_NAME)
+            seed_result.source_mode = "seed"
+            seed_result.fallback_used = True
+            seed_result.fallback_reason = msg
+            seed_result.live_data_status = "error"
+            seed_result.live_data_message = f"Live acquisition failed — seed fallback engaged. Error: {msg}"
+            seed_result.records_loaded = len(seed_findings)
+            _state.live_data_status = "error"
+            _state.live_data_message = seed_result.live_data_message
+            _state.source_reachable = False
+            _state.using_fallback = True
+            _state.fallback_reason = msg
+            _state.fallback_path = seed_path
+            _state.fallback_record_count = len(seed_findings)
+            _state.current_data_mode = "seed"
+            _state.last_status = "fallback"
+            _state.last_scanned = seed_result.scanned
+            _state.last_inserted = seed_result.inserted
+            _state.last_updated = seed_result.updated
+            _state.last_skipped = seed_result.skipped
+            _state.last_errors = seed_result.errors
+            _state.last_error = msg
+            return seed_result
+        except AutoTraderSourceError:
+            pass
+
         _state.live_data_status = "error"
         _state.live_data_message = msg
         _state.source_reachable = False
