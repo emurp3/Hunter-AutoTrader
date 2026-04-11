@@ -690,7 +690,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const failedExecutions = executionStatus?.failed_executions ?? []
   const top10 = pipeline?.top_10 ?? []
   const recentEvents = events?.events ?? []
-  const endpointStatus = usingFallback ? 'Unavailable' : 'Live'
+  const endpointStatus = usingFallback ? 'API Offline' : 'API Online'
   const liveDataStatus = atStatus?.live_data_status ?? 'missing'
   const fallbackActive = Boolean(atStatus?.using_fallback || atStatus?.current_data_mode === 'seed')
   const liveFeedReady = liveDataStatus === 'ready'
@@ -936,7 +936,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                 readiness.execution_mode === 'live' ? 'live-mode' : 'sandbox-mode'
               }`}
             >
-              {readiness.execution_mode === 'live' ? 'LIVE' : 'SANDBOX'}
+              {readiness.execution_mode === 'live' ? 'LIVE BROKER' : 'SANDBOX'}
             </span>
           )}
           {readiness && (
@@ -1018,7 +1018,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
               <div className="ops-readiness-header">
                 <h3>System Readiness</h3>
                 <span className={`readiness-mode-badge readiness-mode-badge--${readiness.execution_mode}`}>
-                  {readiness.execution_mode?.toUpperCase()} MODE
+                  {readiness.execution_mode === 'live' ? 'LIVE BROKER MODE' : `${readiness.execution_mode?.toUpperCase()} MODE`}
                 </span>
                 <span
                   className={`readiness-status-badge readiness-status-badge--${
@@ -1116,12 +1116,23 @@ export default function OperationsPage({ onBack, onAuthFail }) {
               <div className="budget-execution-shell">
                 <div className="budget-execution-hero">
                   <div className="budget-execution-copy">
-                    <div className="ops-kicker">Live Capital State</div>
-                    <h3>Hunter is compounding a live bankroll across the current 30-day evaluation window.</h3>
+                    <div className="ops-kicker">
+                      {fallbackActive || autotraderOffline ? 'Seed Mode — Capital Tracking Active' : 'Live Capital State'}
+                    </div>
+                    <h3>
+                      {fallbackActive
+                        ? 'Capital tracking is active. Opportunity intake is running from seeded data — live source acquisition is offline.'
+                        : autotraderOffline
+                        ? 'Capital tracking is active. AutoTrader is offline — opportunities reflect seed fallback data, not live acquisition.'
+                        : 'Hunter is compounding a live bankroll across the current 30-day evaluation window.'}
+                    </h3>
                     <p>
-                      Live capital data is coming from <code>/budget/current</code> and{' '}
+                      Budget data is sourced from <code>/budget/current</code> and{' '}
                       <code>/budget/allocations</code>. This block reflects current bankroll,
                       committed capital, available capital, realized profit, and per-opportunity deployment.
+                      {(fallbackActive || autotraderOffline) && (
+                        <> Capital figures are real. Opportunity sources are not from a live feed.</>
+                      )}
                     </p>
                   </div>
                   <div className="budget-execution-stats">
@@ -1242,7 +1253,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                     <span className="ops-count">{fundedOpportunities.length}</span>
                   </div>
                   {fundedOpportunities.length === 0 ? (
-                    <div className="ops-no-data">No live allocations recorded yet.</div>
+                    <div className="ops-no-data">No allocations recorded yet.</div>
                   ) : (
                     <div className="budget-allocation-list">
                       {fundedOpportunities.map((allocation, index) => (
