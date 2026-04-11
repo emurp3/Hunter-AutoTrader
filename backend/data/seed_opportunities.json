@@ -89,5 +89,44 @@
     "url": "https://www.gumroad.com/",
     "timestamp": "2026-03-28T12:30:00Z",
     "notes": "Aim for a low-friction one-time sale with optional customization upsell."
+  },
+  {
+    "id": "seed-shopify-audit-08",
+    "description": "Offer one-time Shopify store audits to DTC brands under $500k revenue — identifying conversion leaks, dead SKUs, and checkout friction.",
+    "estimated_profit": 480,
+    "currency": "USD",
+    "confidence": 0.80,
+    "next_action": "build a 10-point audit template and pitch three Shopify brands found via Twitter/X product drops",
+    "category": "consulting",
+    "source": "hunter_seed",
+    "url": "https://www.shopify.com/",
+    "timestamp": "2026-04-01T09:00:00Z",
+    "notes": "Charge flat $250–500 per audit. Upsell implementation fixes at hourly rate. Target brands 6–18 months old."
+  },
+  {
+    "id": "seed-notion-template-09",
+    "description": "Publish a Notion workspace template for freelance contractors to track clients, invoices, and project pipelines — sold via Gumroad.",
+    "estimated_profit": 310,
+    "currency": "USD",
+    "confidence": 0.75,
+    "next_action": "finalize template, record a 90-second demo video, and list with SEO-optimized description",
+    "category": "digital-product",
+    "source": "hunter_seed",
+    "url": "https://www.notion.so/",
+    "timestamp": "2026-04-02T10:00:00Z",
+    "notes": "Price at $19 with a free lite version for list growth. Target freelance Reddit communities for launch traffic."
+  },
+  {
+    "id": "seed-referral-broker-10",
+    "description": "Act as a referral broker connecting local service businesses — HVAC, plumbers, landscapers — with vetted subcontractors seeking overflow work.",
+    "estimated_profit": 390,
+    "currency": "USD",
+    "confidence": 0.77,
+    "next_action": "identify five local HVAC operators with seasonal overflow and one sub looking for leads",
+    "category": "referral-network",
+    "source": "hunter_seed",
+    "url": "https://www.facebook.com/groups/",
+    "timestamp": "2026-04-03T08:00:00Z",
+    "notes": "Charge the sub a flat monthly access fee or a per-job referral cut of 8–12%. Keep matching manual at first."
   }
 ]
