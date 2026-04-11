@@ -489,17 +489,20 @@ def _run_live_intake(session: Session) -> IntakeResult:
 
         _state.source_reachable = True
 
-        # If live acquisition found nothing, fall back to seed so quotas stay healthy.
-        if result.inserted == 0 and result.updated == 0:
-            logger.info("_run_live_intake: live acquisition returned 0 results — activating seed fallback")
+        # If live acquisition found nothing from external sources, fall back to seed so quotas stay healthy.
+        # Use scanned==0 (no items returned from any adapter), NOT inserted/updated==0.
+        # inserted==0 with scanned>0 means all live results were already in the DB — that is a
+        # successful live run, not a failure requiring a seed fallback.
+        if result.scanned == 0:
+            logger.info("_run_live_intake: live acquisition returned 0 results from adapters — activating seed fallback")
             try:
                 seed_findings, seed_path = load_seed_findings()
                 seed_result = ingest_findings(session, seed_findings, origin_module=SEED_MODULE_NAME)
                 seed_result.source_mode = "seed"
                 seed_result.fallback_used = True
-                seed_result.fallback_reason = "Live acquisition returned 0 results."
+                seed_result.fallback_reason = "Live acquisition found no new opportunities from external sources."
                 seed_result.live_data_status = "ready"
-                seed_result.live_data_message = "Live acquisition active but empty — seed fallback engaged."
+                seed_result.live_data_message = "Live acquisition active but external sources returned nothing — seed fallback engaged."
                 seed_result.records_loaded = len(seed_findings)
                 _state.using_fallback = True
                 _state.fallback_reason = "Live acquisition returned 0 results."
