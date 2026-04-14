@@ -80,7 +80,11 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
             pass  # Strategy creation failure must not block the pipeline
 
     # Auto-allocate budget for elite/high sources
-    if result.priority_band in (PriorityBand.elite, PriorityBand.high):
+    _is_trading_medium = (
+        result.priority_band == PriorityBand.medium
+        and (source.category or "").lower() == "trading"
+    )
+    if result.priority_band in (PriorityBand.elite, PriorityBand.high) or _is_trading_medium:
         try:
             from app.services.budget import auto_allocate_for_source
             alloc_result = auto_allocate_for_source(source.source_id, session)

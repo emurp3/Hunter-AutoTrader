@@ -44,9 +44,9 @@ def _thresh(name: str, default: float) -> float:
 
 def _thresholds() -> dict[str, float]:
     return {
-        "auto_execute_score": _thresh("HUNTER_DECISION_AUTO_EXECUTE_SCORE", 85.0),
-        "auto_execute_confidence": _thresh("HUNTER_DECISION_AUTO_EXECUTE_CONFIDENCE", 0.75),
-        "auto_execute_max_capital": _thresh("HUNTER_DECISION_AUTO_EXECUTE_MAX_CAPITAL", 25.0),
+        "auto_execute_score": _thresh("HUNTER_DECISION_AUTO_EXECUTE_SCORE", 50.0),
+        "auto_execute_confidence": _thresh("HUNTER_DECISION_AUTO_EXECUTE_CONFIDENCE", 0.65),
+        "auto_execute_max_capital": _thresh("HUNTER_DECISION_AUTO_EXECUTE_MAX_CAPITAL", 50.0),
         "ready_to_act_score": _thresh("HUNTER_DECISION_READY_TO_ACT_SCORE", 65.0),
         "ready_to_act_confidence": _thresh("HUNTER_DECISION_READY_TO_ACT_CONFIDENCE", 0.55),
         "review_score": _thresh("HUNTER_DECISION_REVIEW_SCORE", 45.0),
