@@ -1,7 +1,11 @@
 """
 APScheduler-based background tasks for Hunter.
 
-Two jobs are registered at startup:
+Three jobs are registered at startup:
+
+  recycle_cycle_task — runs every RECYCLE_CYCLE_INTERVAL_SECONDS (default 60s);
+                       drives the INTRADAY_RECYCLE sell-first/buy-after loop.
+                       Only active when STRATEGY_MODE=RECYCLE and ALPACA_ENABLED=True.
 
   daily_scan_task    — runs every 24 hours; calls the AutoTrader intake pipeline
                        and logs scan / inserted / updated / skipped / error counts.
@@ -10,7 +14,7 @@ Two jobs are registered at startup:
                        sorts by score desc, and writes a JSON summary to
                        HUNTER_REPORTS_PATH. Also includes budget_commander_summary.
 
-Both jobs open their own Session(engine) — they run outside the FastAPI
+All jobs open their own Session(engine) — they run outside the FastAPI
 request lifecycle so FastAPI's Depends() is not available.
 """
 
@@ -31,6 +35,7 @@ from app.services.trading_candidates import generate_trading_candidates
 from app.services.budget import get_budget_commander_summary
 from app.services import strategies as strategy_svc
 from app.services import alerts as alert_svc
+from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -230,11 +235,70 @@ async def weekly_report_task() -> None:
     _REPORTS_PATH.mkdir(parents=True, exist_ok=True)
     filename = f"weekly_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
     output_path = _REPORTS_PATH / filename
-    output_path.write_text(json.dumps(report, indent=2))
+    (_REPORTS_PATH / filename).write_text(
+        __import__("json").dumps(report, indent=2, default=str)
+    )
     logger.info("weekly_report_task: report written to %s", output_path)
 
 
+async def recycle_cycle_task() -> None:
+    """
+    INTRADAY_RECYCLE cycle task — fires every RECYCLE_CYCLE_INTERVAL_SECONDS.
+
+    Sequence (sell-first, buy-after):
+      1. Cancel stale open buy orders
+      2. Sync broker state
+      3. Evaluate and execute exits (profit target / stop loss / max hold / EOD)
+      4. Wait 2 s for fills to settle
+      5. Re-sync broker state
+      6. Evaluate and execute replacements (swap weaker position for stronger candidate)
+      7. Evaluate and execute new entries (only if effective_buying_power >= MIN_REQUIRED_BUYING_POWER)
+      8. Final sync
+
+    Guarded by:
+      - STRATEGY_MODE == "RECYCLE"
+      - ALPACA_ENABLED == True
+      - max_instances=1 on the APScheduler job (no concurrent runs)
+    """
+    if not ALPACA_ENABLED or STRATEGY_MODE != "RECYCLE":
+        logger.debug("recycle_cycle_task: skipped (ALPACA_ENABLED=%s STRATEGY_MODE=%s)",
+                     ALPACA_ENABLED, STRATEGY_MODE)
+        return
+
+    logger.info("recycle_cycle_task: starting cycle")
+    from app.services.recycle_engine import run_recycle_cycle
+
+    try:
+        result = run_recycle_cycle()
+        logger.info(
+            "recycle_cycle_task: done — exits=%d/%d entries=%d/%d replacements=%d skipped=%s",
+            result.exits_submitted, result.exits_submitted + result.exits_failed,
+            result.entries_submitted, result.entries_submitted + result.entries_failed,
+            result.replacements_triggered,
+            result.cycle_skipped,
+        )
+        if result.errors:
+            for err in result.errors:
+                logger.error("recycle_cycle_task error: %s", err)
+        if result.warnings:
+            for w in result.warnings:
+                logger.warning("recycle_cycle_task warning: %s", w)
+    except Exception as exc:
+        logger.exception("recycle_cycle_task: unhandled exception — %s", exc)
+
+
 def build_weekly_report_now() -> dict:
-    """Synchronous helper used by the /reports/weekly endpoint."""
+    """Synchronous helper — builds and persists the weekly report immediately.
+
+    Called by the /reports/weekly endpoint for on-demand generation.
+    Returns the report dict (same structure as weekly_report_task produces).
+    """
     with Session(engine) as session:
-        return _build_weekly_report(session)
+        report = _build_weekly_report(session)
+
+    _REPORTS_PATH.mkdir(parents=True, exist_ok=True)
+    import json
+    filename = f"weekly_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+    (_REPORTS_PATH / filename).write_text(json.dumps(report, indent=2, default=str))
+    logger.info("build_weekly_report_now: report written to %s", filename)
+    return report

@@ -404,6 +404,7 @@ async function loadOperationalData() {
     packets,
     pipeline,
     budgetResult,
+    capitalStateResult,
     budgetReviewResult,
     allocationsResult,
     intakeResult,
@@ -422,6 +423,7 @@ async function loadOperationalData() {
     requestJson('/packets/'),
     requestJson('/operations/pipeline'),
     requestJson('/budget/current'),
+    requestJson('/budget/capital-state'),
     requestJson('/budget/review'),
     requestJson('/budget/allocations'),
     requestJson('/autotrader/intake-summary'),
@@ -453,6 +455,7 @@ async function loadOperationalData() {
     packets: Array.isArray(packets.value) ? packets.value : [],
     pipeline: pipeline.value,
     budget: budgetResult.status === 'fulfilled' ? budgetResult.value : null,
+    capitalState: capitalStateResult.status === 'fulfilled' ? capitalStateResult.value : null,
     budgetReview: budgetReviewResult.status === 'fulfilled' ? budgetReviewResult.value : null,
     allocations: allocationsResult.status === 'fulfilled' && Array.isArray(allocationsResult.value)
       ? allocationsResult.value
@@ -475,6 +478,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const [alerts, setAlerts] = useState(fallbackData.alerts)
   const [strategies, setStrategies] = useState(fallbackData.strategies)
   const [budget, setBudget] = useState(fallbackData.budget)
+  const [capitalState, setCapitalState] = useState(null)
   const [budgetReview, setBudgetReview] = useState(fallbackData.budget.month_end_review)
   const [allocations, setAllocations] = useState(fallbackData.allocations)
   const [atStatus, setAtStatus] = useState(fallbackData.atStatus)
@@ -511,6 +515,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     setAlerts(data.alerts)
     setStrategies(data.strategies)
     setBudget(data.budget)
+    if (data.capitalState) setCapitalState(data.capitalState)
     setBudgetReview(data.budgetReview ?? data.budget?.month_end_review ?? null)
     setAllocations(data.allocations)
     setAtStatus(data.atStatus)
@@ -732,15 +737,36 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   }, [allocations, budget])
 
   const budgetStatus = budget?.budget?.status ?? budget?.status ?? 'no_open_budget'
+
+  // ── Broker-reconciled capital state (capital-state endpoint wins in live mode) ──
+  // capitalState comes from /budget/capital-state which applies broker truth in live
+  // mode; fall back to /budget/current values if capital-state is unavailable.
+  const cs = capitalState  // shorthand
+
   const startingBankroll =
+    cs?.starting_bankroll ??
     budget?.starting_bankroll ?? budget?.budget?.starting_bankroll ?? budget?.budget?.starting_budget ?? 0
+
   const currentBankroll =
+    cs?.current_bankroll ??
     budget?.current_bankroll ?? budget?.budget?.current_bankroll ?? startingBankroll
-  const availableCapital = budget?.available_capital ?? budget?.available_budget ?? budget?.remaining_budget ?? 0
+
+  const availableCapital =
+    cs?.available_capital ??
+    budget?.available_capital ?? budget?.available_budget ?? budget?.remaining_budget ?? 0
+
   const committedCapital =
+    cs?.committed_capital ??
     budget?.committed_capital ?? budget?.allocated_budget ?? budget?.total_allocated ?? 0
-  const realizedProfit = budget?.realized_profit ?? budget?.realized_return ?? budget?.budget?.realized_return ?? 0
-  const monthEndReview = budgetReview ?? budget?.month_end_review ?? null
+
+  const realizedProfit =
+    cs?.realized_profit ??
+    budget?.realized_profit ?? budget?.realized_return ?? budget?.budget?.realized_return ?? 0
+
+  const unrealizedPl =
+    cs?.unrealized_pl ?? budget?.unrealized_pl ?? 0
+
+  const monthEndReview = budgetReview ?? cs?.month_end_review ?? budget?.month_end_review ?? null
   const originalBaseCapital = monthEndReview?.starting_bankroll ?? startingBankroll
   const doublingTarget =
     monthEndReview?.doubling_threshold ??
@@ -748,12 +774,43 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const doublingProgressPct =
     monthEndReview?.progress_to_doubling_threshold ??
     (doublingTarget > 0 ? Math.max(0, (currentBankroll / doublingTarget) * 100) : 0)
-  const evaluationEndDate = budget?.evaluation_end_date ?? budget?.budget?.evaluation_end_date ?? null
+  const evaluationEndDate =
+    cs?.evaluation_end_date ?? budget?.evaluation_end_date ?? budget?.budget?.evaluation_end_date ?? null
   const capitalMatchAmount =
-    budget?.capital_match_amount ?? monthEndReview?.recommended_match_amount ?? 0
+    cs?.capital_match_amount ?? budget?.capital_match_amount ?? monthEndReview?.recommended_match_amount ?? 0
   const capitalMatchEligible =
-    budget?.capital_match_eligible ?? monthEndReview?.capital_match_eligible ?? false
-  const fundedPacketCount = fundedOpportunities.length || fundedPackets.length
+    cs?.capital_match_eligible ?? budget?.capital_match_eligible ?? monthEndReview?.capital_match_eligible ?? false
+
+  // Funded packets: prefer broker open_positions_count from capital-state
+  const brokerFundedPackets = cs?.funded_packets ?? cs?.broker?.open_positions_count ?? null
+  const fundedPacketCount =
+    brokerFundedPackets !== null
+      ? brokerFundedPackets
+      : (fundedOpportunities.length || fundedPackets.length)
+
+  // Strategy / broker metadata
+  const strategyMode = cs?.strategy_mode ?? budget?.strategy_mode ?? 'RECYCLE'
+  const liveExecStrategy = cs?.live_execution_strategy ?? budget?.live_execution_strategy ?? 'INTRADAY_RECYCLE'
+  const executionMode = cs?.execution_mode ?? budget?.execution_mode ?? 'sandbox'
+  const isLiveMode = executionMode === 'live'
+  const lastBrokerSyncAt = cs?.last_broker_sync_at ?? budget?.last_broker_sync_at ?? null
+  const brokerSyncSuccess = cs?.broker_sync_success ?? budget?.broker_sync_success ?? false
+  const mismatchDetected = cs?.mismatch_detected ?? budget?.mismatch_detected ?? false
+  const mismatchDetails = cs?.mismatch_details ?? budget?.mismatch_details ?? null
+  const openPositionsCount = cs?.broker?.open_positions_count ?? cs?.open_positions_count ?? 0
+  const effectiveBuyingPower = cs?.broker?.effective_buying_power ?? 0
+  const brokerPositions = cs?.broker?.positions ?? []
+
+  // Raw broker account fields for tooltip transparency
+  const brokerCash = cs?.broker_cash ?? cs?.broker?.cash ?? 0
+  const brokerBuyingPower = cs?.broker_buying_power ?? cs?.broker?.buying_power ?? 0
+  const brokerPortfolioValue = cs?.broker_portfolio_value ?? cs?.broker?.portfolio_value ?? 0
+  const reservedByOpenOrders = cs?.reserved_by_open_orders ?? cs?.broker?.reserved_by_open_orders ?? 0
+  const openBuyOrdersCount = cs?.open_buy_orders_count ?? cs?.broker?.open_buy_orders_count ?? 0
+  // CAPITAL_RESERVE_BUFFER matches backend default ($2.00 env: CAPITAL_RESERVE_BUFFER)
+  const capitalReserveBuffer = brokerBuyingPower > 0
+    ? Math.max(0, brokerBuyingPower - availableCapital)
+    : 2.00
 
   async function runCommand(type) {
     const commands = {
@@ -1114,50 +1171,183 @@ export default function OperationsPage({ onBack, onAuthFail }) {
               <div className="ops-no-data">No active bankroll cycle is available yet.</div>
             ) : (
               <div className="budget-execution-shell">
+
+                {/* ── Broker mismatch warning banner ─────────────────────── */}
+                {mismatchDetected && (
+                  <div className="broker-mismatch-banner" style={{
+                    background: '#fff3cd', border: '1px solid #ffc107',
+                    borderRadius: '6px', padding: '10px 14px', marginBottom: '12px',
+                    fontSize: '13px', color: '#856404'
+                  }}>
+                    <strong>⚠ Capital Mismatch Detected</strong> — Broker truth differs from
+                    internal ledger.{' '}
+                    {mismatchDetails && <span style={{fontFamily:'monospace'}}>{mismatchDetails}</span>}
+                    {' '}Dashboard is showing broker-authoritative values.
+                  </div>
+                )}
+
+                {/* ── Broker sync error warning ───────────────────────────── */}
+                {isLiveMode && !brokerSyncSuccess && (
+                  <div className="broker-sync-error-banner" style={{
+                    background: '#f8d7da', border: '1px solid #f5c6cb',
+                    borderRadius: '6px', padding: '10px 14px', marginBottom: '12px',
+                    fontSize: '13px', color: '#721c24'
+                  }}>
+                    <strong>⚠ Broker Sync Failed</strong> — Could not reach Alpaca to verify
+                    live capital state. Dashboard may be showing stale internal ledger values.
+                  </div>
+                )}
+
                 <div className="budget-execution-hero">
                   <div className="budget-execution-copy">
-                    <div className="ops-kicker">
-                      {fallbackActive || autotraderOffline ? 'Seed Mode — Capital Tracking Active' : 'Live Capital State'}
+                    <div className="ops-kicker" style={{display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap'}}>
+                      <span>{fallbackActive || autotraderOffline ? 'Seed Mode — Capital Tracking Active' : 'Live Capital State'}</span>
+                      <span style={{background:'#e8f4fd', color:'#0c63e4', borderRadius:'4px', padding:'2px 8px', fontSize:'11px', fontWeight:700}}>
+                        {strategyMode}
+                      </span>
+                      <span style={{background:'#f0f0f0', color:'#555', borderRadius:'4px', padding:'2px 8px', fontSize:'11px'}}>
+                        {liveExecStrategy}
+                      </span>
+                      <span style={{background: isLiveMode ? '#d4edda' : '#fff3cd', color: isLiveMode ? '#155724' : '#856404', borderRadius:'4px', padding:'2px 8px', fontSize:'11px', fontWeight:600}}>
+                        {executionMode.toUpperCase()}
+                      </span>
                     </div>
                     <h3>
                       {fallbackActive
                         ? 'Capital tracking is active. Opportunity intake is running from seeded data — live source acquisition is offline.'
                         : autotraderOffline
                         ? 'Capital tracking is active. AutoTrader is offline — opportunities reflect seed fallback data, not live acquisition.'
-                        : 'Hunter is compounding a live bankroll across the current 30-day evaluation window.'}
+                        : isLiveMode
+                        ? 'Hunter is running live capital recycling (INTRADAY_RECYCLE). Capital state reflects live Alpaca account truth.'
+                        : 'Hunter is compounding a bankroll in paper (sandbox) mode.'}
                     </h3>
-                    <p>
-                      Budget data is sourced from <code>/budget/current</code> and{' '}
-                      <code>/budget/allocations</code>. This block reflects current bankroll,
-                      committed capital, available capital, realized profit, and per-opportunity deployment.
-                      {(fallbackActive || autotraderOffline) && (
-                        <> Capital figures are real. Opportunity sources are not from a live feed.</>
+                    <p style={{fontSize:'12px', color:'#888', marginTop:'4px'}}>
+                      {brokerSyncSuccess
+                        ? <>
+                            <strong>Free Cash</strong>, <strong>Deployed Capital</strong>, <strong>Portfolio Value</strong>, <strong>Open Positions</strong>, and <strong>Unrealized P/L</strong> are sourced directly from the <strong>live Alpaca account</strong> (<code>/budget/capital-state</code>).{' '}
+                            <strong>Realized P/L</strong> is tracked by Hunter's internal ledger and resets when the app restarts.{' '}
+                            Hover any card for the exact formula.
+                          </>
+                        : <>Capital values sourced from <strong>internal ledger</strong> (broker sync unavailable or disabled). Values may not reflect live broker account state.</>
+                      }
+                      {lastBrokerSyncAt && (
+                        <> Last broker sync: <strong>{new Date(lastBrokerSyncAt).toLocaleTimeString()}</strong>
+                        {brokerSyncSuccess ? ' ✓' : ' ✗ (failed)'}</>
                       )}
                     </p>
                   </div>
                   <div className="budget-execution-stats">
-                    <div className="budget-execution-stat budget-execution-stat--available">
-                      <span className="budget-execution-label">Available Capital</span>
+                    <div
+                      className="budget-execution-stat budget-execution-stat--available"
+                      title={brokerSyncSuccess
+                        ? `Alpaca buying_power (${formatCurrency(brokerBuyingPower)}) minus $${capitalReserveBuffer.toFixed(2)} reserve buffer = ${formatCurrency(availableCapital)}`
+                        : 'Internal ledger value (broker sync unavailable)'}
+                    >
+                      <span className="budget-execution-label">Free Cash</span>
                       <strong>{formatCurrency(availableCapital)}</strong>
+                      <span className="budget-execution-sublabel">
+                        {brokerSyncSuccess
+                          ? `Alpaca buying_power − $${capitalReserveBuffer.toFixed(2)} reserve`
+                          : 'Internal ledger'}
+                      </span>
                     </div>
-                    <div className="budget-execution-stat budget-execution-stat--allocated">
-                      <span className="budget-execution-label">Committed Capital</span>
+                    <div
+                      className="budget-execution-stat budget-execution-stat--allocated"
+                      title={brokerSyncSuccess
+                        ? `Open position market values + ${openBuyOrdersCount} pending buy order(s) reserved (${formatCurrency(reservedByOpenOrders)}). Total deployed: ${formatCurrency(committedCapital)}`
+                        : 'Internal ledger value (broker sync unavailable)'}
+                    >
+                      <span className="budget-execution-label">Deployed Capital</span>
                       <strong>{formatCurrency(committedCapital)}</strong>
+                      <span className="budget-execution-sublabel">
+                        {brokerSyncSuccess
+                          ? `${openPositionsCount} positions + ${openBuyOrdersCount} pending order${openBuyOrdersCount !== 1 ? 's' : ''} · Alpaca`
+                          : 'Internal ledger'}
+                      </span>
                     </div>
-                    <div className="budget-execution-stat budget-execution-stat--current">
-                      <span className="budget-execution-label">Current Bankroll</span>
+                    <div
+                      className="budget-execution-stat budget-execution-stat--current"
+                      title={brokerSyncSuccess
+                        ? `Alpaca portfolio_value = ${formatCurrency(brokerPortfolioValue)} (cash ${formatCurrency(brokerCash)} + ${openPositionsCount} position market values)`
+                        : 'Internal ledger value (broker sync unavailable)'}
+                    >
+                      <span className="budget-execution-label">Portfolio Value</span>
                       <strong>{formatCurrency(currentBankroll)}</strong>
+                      <span className="budget-execution-sublabel">
+                        {brokerSyncSuccess ? 'Alpaca portfolio_value' : 'Internal ledger'}
+                      </span>
                     </div>
-                    <div className="budget-execution-stat budget-execution-stat--funded">
-                      <span className="budget-execution-label">Funded Packets</span>
+                    <div
+                      className="budget-execution-stat budget-execution-stat--funded"
+                      title={brokerSyncSuccess
+                        ? `${openPositionsCount} open position(s) reported by Alpaca broker`
+                        : 'Internal ledger count'}
+                    >
+                      <span className="budget-execution-label">Open Positions</span>
                       <strong>{fundedPacketCount}</strong>
+                      <span className="budget-execution-sublabel">
+                        {brokerSyncSuccess ? 'Alpaca position count' : 'Internal ledger'}
+                      </span>
                     </div>
-                    <div className="budget-execution-stat budget-execution-stat--return">
-                      <span className="budget-execution-label">Realized Profit</span>
+                    <div
+                      className="budget-execution-stat budget-execution-stat--return"
+                      title={`Hunter-tracked realized P/L from closed trades since last restart. $0 means all ${openPositionsCount} position(s) are still open — nothing sold yet. Resets when Render redeploys the app.`}
+                    >
+                      <span className="budget-execution-label">Realized P/L</span>
                       <strong>{formatCurrency(realizedProfit)}</strong>
+                      <span className="budget-execution-sublabel">
+                        Hunter ledger · {openPositionsCount > 0 && realizedProfit === 0
+                          ? `${openPositionsCount} positions open, none sold yet`
+                          : 'resets on restart'}
+                      </span>
+                    </div>
+                    <div
+                      className={`budget-execution-stat ${unrealizedPl >= 0 ? 'budget-execution-stat--available' : 'budget-execution-stat--allocated'}`}
+                      title={brokerSyncSuccess
+                        ? `Sum of unrealized_pl across all ${openPositionsCount} open Alpaca position(s). Paper gain/loss if all positions were closed right now.`
+                        : 'Unrealized P/L unavailable (broker sync failed)'}
+                    >
+                      <span className="budget-execution-label">Unrealized P/L</span>
+                      <strong style={{color: unrealizedPl >= 0 ? '#1a7f37' : '#cf222e'}}>
+                        {unrealizedPl >= 0 ? '+' : ''}{formatCurrency(unrealizedPl)}
+                      </strong>
+                      <span className="budget-execution-sublabel">
+                        {brokerSyncSuccess
+                          ? `Σ ${openPositionsCount} position${openPositionsCount !== 1 ? 's' : ''} · Alpaca`
+                          : 'Broker sync unavailable'}
+                      </span>
                     </div>
                   </div>
                 </div>
+
+                {/* ── Broker account breakdown strip ──────────────────────── */}
+                {brokerSyncSuccess && (
+                  <div style={{display:'flex', gap:'12px', flexWrap:'wrap', padding:'8px 0', borderTop:'1px solid #eee', marginTop:'8px', fontSize:'11px', color:'#666'}}>
+                    <span title="Settled cash balance in Alpaca account">💵 <strong>Cash:</strong> {formatCurrency(brokerCash)}</span>
+                    <span title="Alpaca buying_power — what Alpaca says you can deploy">📊 <strong>Buying Power:</strong> {formatCurrency(brokerBuyingPower)}</span>
+                    <span title="Alpaca portfolio_value = cash + all position market values">📈 <strong>Portfolio Value:</strong> {formatCurrency(brokerPortfolioValue)}</span>
+                    {reservedByOpenOrders > 0 && (
+                      <span title={`$${reservedByOpenOrders.toFixed(2)} reserved by ${openBuyOrdersCount} open buy order(s)`}>
+                        ⏳ <strong>Pending Buys:</strong> {formatCurrency(reservedByOpenOrders)} ({openBuyOrdersCount})
+                      </span>
+                    )}
+                    <span title="Effective buying power after reserve buffer and pending buy orders">🔓 <strong>Deployable:</strong> {formatCurrency(effectiveBuyingPower)}</span>
+                    {lastBrokerSyncAt && (
+                      <span>🕐 <strong>Synced:</strong> {new Date(lastBrokerSyncAt).toLocaleTimeString()} ✓</span>
+                    )}
+                  </div>
+                )}
+                {/* ── Per-position strip (live mode only) ─────────────────── */}
+                {isLiveMode && brokerPositions.length > 0 && (
+                  <div style={{display:'flex', gap:'8px', flexWrap:'wrap', padding:'6px 0', borderTop:'1px solid #eee', marginTop:'4px', fontSize:'11px', color:'#555'}}>
+                    <span style={{fontWeight:600, color:'#888'}}>Positions:</span>
+                    {brokerPositions.map(p =>
+                      <span key={p.symbol} style={{color: (p.unrealized_pl||0) >= 0 ? '#1a7f37' : '#cf222e'}}>
+                        {p.symbol} {(p.unrealized_pl||0) >= 0 ? '+' : ''}{(p.unrealized_pl||0).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="budget-row budget-row--primary">
                   <div className="budget-cell">

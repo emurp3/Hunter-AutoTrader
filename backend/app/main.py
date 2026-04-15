@@ -27,7 +27,8 @@ from app.routers.decisions import router as decisions_router
 from app.routers.marketplace import router as marketplace_router
 from app.routers.tasks import router as tasks_router
 from app.routers.auth import router as auth_router
-from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task
+from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task
+from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -63,6 +64,17 @@ async def lifespan(app: FastAPI):
         id="weekly_report",
         misfire_grace_time=3600,
     )
+    # ── INTRADAY_RECYCLE cycle — runs every N seconds during market hours ─────
+    # Sell-first → refresh → buy-after loop. Only active in RECYCLE mode.
+    if ALPACA_ENABLED and STRATEGY_MODE == "RECYCLE":
+        scheduler.add_job(
+            recycle_cycle_task,
+            "interval",
+            seconds=RECYCLE_CYCLE_INTERVAL_SECONDS,
+            id="recycle_cycle",
+            max_instances=1,        # Never allow concurrent cycle runs
+            misfire_grace_time=30,
+        )
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)

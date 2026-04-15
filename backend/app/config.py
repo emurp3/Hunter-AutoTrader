@@ -309,3 +309,67 @@ HUNTER_OPERATING_ACCOUNT_PROVIDER: str = os.getenv(
 )
 # HUNTER_INITIAL_BANKROLL is already defined above as WEEKLY_BUDGET.
 # Set it to your actual Robins checking starting balance before Monday launch.
+
+# ── Live Execution Strategy — INTRADAY_RECYCLE ───────────────────────────────
+# STRATEGY_MODE: RECYCLE | ACCUMULATE | SWING
+#   RECYCLE  — short-cycle intraday: sell → refresh → buy every N seconds
+#   ACCUMULATE — passive long-term hold (legacy default)
+#   SWING    — multi-day swing trades
+STRATEGY_MODE: str = os.getenv("STRATEGY_MODE", "RECYCLE").upper()
+
+# LIVE_EXECUTION_STRATEGY — human-readable label shown in dashboard chips
+LIVE_EXECUTION_STRATEGY: str = os.getenv(
+    "LIVE_EXECUTION_STRATEGY", "INTRADAY_RECYCLE"
+).upper()
+
+# ── Position sizing ───────────────────────────────────────────────────────────
+# MAX_OPEN_POSITIONS — maximum simultaneous live positions
+MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
+
+# MAX_POSITION_DOLLARS — hard cap per individual position (notional)
+MAX_POSITION_DOLLARS: float = float(os.getenv("MAX_POSITION_DOLLARS", "30.0"))
+
+# MAX_POSITION_PCT_OF_BANKROLL — position cap as fraction of current bankroll
+MAX_POSITION_PCT_OF_BANKROLL: float = float(
+    os.getenv("MAX_POSITION_PCT_OF_BANKROLL", "0.30")
+)
+
+# ── Capital safety thresholds ─────────────────────────────────────────────────
+# MIN_REQUIRED_BUYING_POWER — minimum available BP before any new buy is attempted
+MIN_REQUIRED_BUYING_POWER: float = float(os.getenv("MIN_REQUIRED_BUYING_POWER", "5.0"))
+
+# CAPITAL_RESERVE_BUFFER — dollars always withheld from buying_power calculation.
+#   available_capital = buying_power - CAPITAL_RESERVE_BUFFER
+CAPITAL_RESERVE_BUFFER: float = float(os.getenv("CAPITAL_RESERVE_BUFFER", "2.0"))
+
+# ── Exit rules ────────────────────────────────────────────────────────────────
+# TARGET_PROFIT_PCT — unrealized gain fraction triggering a profit-target exit
+TARGET_PROFIT_PCT: float = float(os.getenv("TARGET_PROFIT_PCT", "0.02"))   # 2 %
+
+# STOP_LOSS_PCT — unrealized loss fraction triggering a stop-loss exit (negative)
+STOP_LOSS_PCT: float = float(os.getenv("STOP_LOSS_PCT", "-0.015"))         # -1.5 %
+
+# MAX_HOLD_MINUTES — intraday max hold before forced liquidation
+MAX_HOLD_MINUTES: int = int(os.getenv("MAX_HOLD_MINUTES", "240"))          # 4 h
+
+# FORCE_SELL_END_OF_DAY — flatten all positions before market close
+FORCE_SELL_END_OF_DAY: bool = _get_bool("FORCE_SELL_END_OF_DAY", True)
+
+# ALLOW_OVERNIGHT_HOLD — override: permit overnight positions when True
+ALLOW_OVERNIGHT_HOLD: bool = _get_bool("ALLOW_OVERNIGHT_HOLD", False)
+
+# RECYCLE_EOD_FLATTEN_MINUTES_BEFORE — minutes before 16:00 ET to begin EOD exits
+RECYCLE_EOD_FLATTEN_MINUTES_BEFORE: int = int(
+    os.getenv("RECYCLE_EOD_FLATTEN_MINUTES_BEFORE", "15")
+)
+
+
+# ── Replacement / ranking ─────────────────────────────────────────────────────
+REPLACEMENT_RANK_THRESHOLD: float = float(os.getenv("REPLACEMENT_RANK_THRESHOLD", "0.15"))
+PYRAMIDING_ENABLED: bool = _get_bool("PYRAMIDING_ENABLED", False)
+
+# ── Recycle cycle interval ────────────────────────────────────────────────────
+RECYCLE_CYCLE_INTERVAL_SECONDS: int = int(os.getenv("RECYCLE_CYCLE_INTERVAL_SECONDS", "60"))
+
+# ── Stale order management ────────────────────────────────────────────────────
+STALE_ORDER_TIMEOUT_SECONDS: int = int(os.getenv("STALE_ORDER_TIMEOUT_SECONDS", "120"))

@@ -22,6 +22,7 @@ from app.services.budget import (
     auto_allocate_top_packets,
     ensure_bankroll,
     get_allocations_for_budget,
+    get_broker_reconciled_capital_state,
     get_budget_commander_summary,
     get_month_end_review,
     get_open_budget,
@@ -85,39 +86,85 @@ def open_week(payload: WeeklyBudgetCreate, session: Session = Depends(get_sessio
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+# ── GET /budget/capital-state ─────────────────────────────────────────────────
+
+@router.get("/capital-state")
+def get_capital_state(session: Session = Depends(get_session)) -> dict:
+    """
+    Authoritative live capital state.
+
+    In LIVE mode: broker truth overrides internal ledger for all display
+    values (available_capital, committed_capital, current_bankroll,
+    funded_packets, unrealized_pl).
+
+    In SANDBOX mode: returns internal ledger values with broker state
+    included for observability.
+
+    Always includes: last_broker_sync_at, mismatch_detected,
+    strategy_mode, live_execution_strategy.
+    """
+    return get_broker_reconciled_capital_state(session)
+
+
 # ── GET /budget/current ───────────────────────────────────────────────────────
 
 @router.get("/current")
 def get_current(session: Session = Depends(get_session)) -> dict:
-    """Return the active bankroll with live-calculated capital stats."""
+    """
+    Return the active bankroll with broker-reconciled capital stats.
+    In live mode, capital display values are sourced from Alpaca directly.
+    """
+    # Get broker-reconciled state (broker truth wins in live mode)
+    reconciled = get_broker_reconciled_capital_state(session)
+
     budget = ensure_bankroll(session)
-    sync_budget = get_budget_commander_summary(session)
     allocations = get_allocations_for_budget(session, budget.id)
-    review = sync_budget["month_end_review"]
+    review = reconciled.get("month_end_review", {})
+
     return {
         "budget": budget,
-        "starting_bankroll": sync_budget["starting_bankroll"],
-        "current_bankroll": sync_budget["current_bankroll"],
-        "available_capital": sync_budget["available_capital"],
-        "committed_capital": sync_budget["committed_capital"],
-        "realized_profit": sync_budget["realized_profit"],
-        "unrealized_exposure": sync_budget["unrealized_exposure"],
-        "remaining_budget": sync_budget["available_capital"],
-        "available_budget": sync_budget["available_capital"],
-        "allocated_budget": sync_budget["committed_capital"],
-        "total_allocated": sync_budget["committed_capital"],
-        "realized_return": sync_budget["realized_profit"],
-        "net_gain_loss": review["net_gain_loss"],
-        "roi_pct": review["growth_pct"],
-        "flipped": review["doubled_bankroll"],
-        "flip_target": round(sync_budget["starting_bankroll"] * 2, 2),
+        # ── Broker-authoritative display values ──────────────────────────────
+        "starting_bankroll": reconciled["starting_bankroll"],
+        "current_bankroll": reconciled["current_bankroll"],
+        "available_capital": reconciled["available_capital"],
+        "committed_capital": reconciled["committed_capital"],
+        "realized_profit": reconciled["realized_profit"],
+        "unrealized_pl": reconciled["unrealized_pl"],
+        "unrealized_exposure": reconciled["committed_capital"],  # compat alias
+        # ── Backward-compat aliases ──────────────────────────────────────────
+        "remaining_budget": reconciled["available_capital"],
+        "available_budget": reconciled["available_capital"],
+        "allocated_budget": reconciled["committed_capital"],
+        "total_allocated": reconciled["committed_capital"],
+        "realized_return": reconciled["realized_profit"],
+        # ── Review / target metrics ──────────────────────────────────────────
+        "net_gain_loss": review.get("net_gain_loss", 0.0),
+        "roi_pct": review.get("growth_pct", 0.0),
+        "flipped": review.get("doubled_bankroll", False),
+        "flip_target": round(reconciled["starting_bankroll"] * 2, 2),
         "allocation_count": len(allocations),
-        "evaluation_start_date": sync_budget["evaluation_start_date"],
-        "evaluation_end_date": sync_budget["evaluation_end_date"],
-        "capital_match_eligible": sync_budget["capital_match_eligible"],
-        "capital_match_amount": sync_budget["capital_match_amount"],
+        "evaluation_start_date": reconciled["evaluation_start_date"],
+        "evaluation_end_date": reconciled["evaluation_end_date"],
+        "capital_match_eligible": reconciled["capital_match_eligible"],
+        "capital_match_amount": reconciled["capital_match_amount"],
         "month_end_review": review,
-        "ledger": sync_budget["ledger"],
+        # ── Strategy / mode context ──────────────────────────────────────────
+        "strategy_mode": reconciled["strategy_mode"],
+        "live_execution_strategy": reconciled["live_execution_strategy"],
+        "execution_mode": reconciled["execution_mode"],
+        # ── Broker sync metadata ─────────────────────────────────────────────
+        "last_broker_sync_at": reconciled["last_broker_sync_at"],
+        "broker_sync_success": reconciled["broker_sync_success"],
+        "broker_mode": reconciled["broker_mode"],
+        "mismatch_detected": reconciled["mismatch_detected"],
+        "mismatch_details": reconciled["mismatch_details"],
+        # ── Internal ledger (audit trail) ────────────────────────────────────
+        "internal_available_capital": reconciled["internal_available_capital"],
+        "internal_committed_capital": reconciled["internal_committed_capital"],
+        "internal_current_bankroll": reconciled["internal_current_bankroll"],
+        # ── Broker live positions (for position cards) ───────────────────────
+        "broker": reconciled.get("broker", {}),
+        "funded_packets": reconciled["funded_packets"],
         "allocations_by_source": [
             {
                 "source_id": allocation.source_id,
@@ -530,90 +577,13 @@ def budget_weekly_report(session: Session = Depends(get_session)) -> dict:
     return {"budget_commander_summary": summary}
 
 
-# ── POST /budget/reconcile ────────────────────────────────────────────────────
 
-@router.post("/reconcile", status_code=201)
-def reconcile_bankroll(
-    payload: BankrollReconciliationCreate,
-    session: Session = Depends(get_session),
-) -> dict:
+# ── POST /budget/reconcile ───────────────────────────────────────────────────
+
+@router.post("/reconcile")
+def reconcile_broker(session: Session = Depends(get_session)) -> dict:
     """
-    Manual bankroll reconciliation for Robins Financial (or any operating account).
-
-    Supply the actual balance from your checking account.  Hunter compares it to
-    the internal current_bankroll and stores the result in the reconciliation log.
-
-    Discrepancy bands:
-      reconciled         — within $1.00
-      minor_discrepancy  — $1.01–$10.00
-      major_discrepancy  — >$10.00
+    Force an immediate broker reconciliation and return the updated capital state.
+    Useful for the dashboard refresh button in live mode.
     """
-    reported = payload.reported_balance
-    provider = payload.provider or HUNTER_OPERATING_ACCOUNT_PROVIDER
-
-    open_budget = get_open_budget(session)
-    if not open_budget:
-        internal = 0.0
-        note = "No active bankroll cycle. Internal balance treated as $0."
-    else:
-        internal = round(budget_svc.recalc_current_bankroll(session, open_budget), 2)
-        note = None
-
-    discrepancy = round(reported - internal, 2)
-    abs_disc = abs(discrepancy)
-    discrepancy_pct = round((abs_disc / reported * 100), 2) if reported > 0 else 0.0
-
-    if abs_disc <= 1.00:
-        status = "reconciled"
-    elif abs_disc <= 10.00:
-        status = "minor_discrepancy"
-    else:
-        status = "major_discrepancy"
-
-    record = BankrollReconciliation(
-        provider=provider,
-        reported_balance=reported,
-        internal_balance=internal,
-        discrepancy=discrepancy,
-        discrepancy_pct=discrepancy_pct,
-        status=status,
-        notes=payload.notes or note,
-    )
-    session.add(record)
-    session.commit()
-    session.refresh(record)
-
-    return {
-        "reconciliation_id": record.id,
-        "provider": provider,
-        "reported_balance": reported,
-        "internal_balance": internal,
-        "discrepancy": discrepancy,
-        "discrepancy_pct": discrepancy_pct,
-        "status": status,
-        "reconciled_at": record.reconciled_at.isoformat(),
-        "notes": record.notes,
-        "action_required": (
-            None if status == "reconciled"
-            else f"Discrepancy of ${abs_disc:.2f} detected. Review allocations and outcomes for missing entries."
-        ),
-    }
-
-
-@router.get("/reconcile/history")
-def reconcile_history(limit: int = 20, session: Session = Depends(get_session)) -> dict:
-    """Returns the last N bankroll reconciliation records, newest first."""
-    from app.models.marketplace import BankrollReconciliation
-    from sqlmodel import select as _sel
-    records = list(
-        session.exec(
-            _sel(BankrollReconciliation)
-            .order_by(BankrollReconciliation.reconciled_at.desc())
-            .limit(limit)
-        ).all()
-    )
-    return {
-        "count": len(records),
-        "reconciliations": [r.model_dump() for r in records],
-    }
-
+    return get_broker_reconciled_capital_state(session)

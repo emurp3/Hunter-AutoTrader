@@ -1,21 +1,38 @@
 """
 Capital and allocation service for Hunter's rolling bankroll model.
+
+In LIVE mode, capital-state fields (available_capital, committed_capital,
+current_bankroll, funded_packets) are authoritative only when read from the
+broker via broker_reconciliation.get_broker_capital_state().  The internal
+ledger (WeeklyBudget / BudgetAllocation) is the source of truth for
+realized_profit and historical records, but must NEVER be used to display
+currently-available capital when the broker account has open positions.
+
+Use get_broker_reconciled_capital_state() for any outward-facing capital
+display in live mode.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from sqlmodel import Session, select
 
 from app.config import (
+    ALPACA_ENABLED,
     APPROVAL_REQUIRED_OVER,
     BUDGET_STRICT_MODE,
+    EXECUTION_MODE,
     FLIP_TARGET_MULTIPLIER,
     MAX_ALLOCATION_PER_OPPORTUNITY,
+    STRATEGY_MODE,
+    LIVE_EXECUTION_STRATEGY,
     WEEKLY_BUDGET,
 )
+
+_logger = logging.getLogger(__name__)
 from app.models.action_packet import ActionPacket, PacketStatus
 from app.models.budget import (
     AllocationCategory,
@@ -715,4 +732,165 @@ def _compute_month_end_review(budget: WeeklyBudget) -> dict:
         "evaluation_end_date": budget.evaluation_end_date.isoformat(),
         "days_remaining": max(0, (budget.evaluation_end_date - date.today()).days),
         "evaluation_window_closed": evaluation_window_closed,
+    }
+
+
+# ── Broker-reconciled capital state (live-mode authoritative view) ─────────────
+
+def get_broker_reconciled_capital_state(session: Session) -> dict:
+    """
+    Authoritative capital-state dict for all outward-facing display.
+
+    Gate: whenever ALPACA_ENABLED=True and broker sync succeeds, broker truth
+    wins for all capital fields — regardless of EXECUTION_MODE (live or sandbox).
+    This means paper/sandbox Alpaca positions are correctly reflected as committed
+    capital instead of the seed-bankroll ledger showing $0 committed / $100 free.
+
+    Falls back to internal WeeklyBudget ledger only when:
+      - ALPACA_ENABLED=False, OR
+      - broker sync fails (network error, auth error, etc.)
+
+    Always returns a complete dict with no missing keys so callers never get
+    a KeyError.
+    """
+    from app.services.broker_reconciliation import (
+        get_broker_capital_state,
+        broker_capital_state_to_dict,
+    )
+
+    # ── Internal ledger snapshot ─────────────────────────────────────────────
+    bankroll = ensure_bankroll(session)
+    sync_bankroll(session, bankroll)
+
+    internal_available = float(bankroll.available_capital or 0.0)
+    internal_committed = float(bankroll.committed_capital or 0.0)
+    internal_bankroll  = float(bankroll.current_bankroll or 0.0)
+    realized_profit    = float(bankroll.realized_profit or 0.0)
+    starting_bankroll  = float(bankroll.starting_bankroll or 0.0)
+    weekly_target      = float(bankroll.weekly_target or 0.0)
+    total_allocated    = float(bankroll.total_allocated or 0.0)
+
+    eval_start = bankroll.evaluation_start_date.isoformat() if bankroll.evaluation_start_date else None
+    eval_end   = bankroll.evaluation_end_date.isoformat()   if bankroll.evaluation_end_date   else None
+
+    from app.models.action_packet import ActionPacket, PacketStatus
+    from sqlmodel import select as _sel
+    from datetime import date
+    db_funded = session.exec(
+        _sel(ActionPacket).where(
+            ActionPacket.status.in_([PacketStatus.executed, PacketStatus.acknowledged])
+        )
+    ).all()
+    internal_funded_count = len(db_funded)
+
+    # ── Month-end review snapshot ─────────────────────────────────────────────
+    ending_bankroll = internal_bankroll
+    net_gain = round(ending_bankroll - starting_bankroll, 2)
+    growth_pct = round((net_gain / starting_bankroll) * 100, 2) if starting_bankroll else 0.0
+    doubling_threshold = round(starting_bankroll * 2, 2)
+    doubled = ending_bankroll >= doubling_threshold
+    progress_to_doubling = round((ending_bankroll / doubling_threshold) * 100, 2) if doubling_threshold else 0.0
+    cap_match_eligible = doubled
+    cap_match_amount = round(max(0.0, ending_bankroll - starting_bankroll), 2) if doubled else 0.0
+    days_remaining = max(0, (bankroll.evaluation_end_date - date.today()).days) if bankroll.evaluation_end_date else None
+    month_end_review = {
+        "starting_bankroll": starting_bankroll,
+        "ending_bankroll": ending_bankroll,
+        "net_gain_loss": net_gain,
+        "growth_pct": growth_pct,
+        "doubled_bankroll": doubled,
+        "doubling_threshold": doubling_threshold,
+        "progress_to_doubling_threshold": progress_to_doubling,
+        "capital_match_eligible": cap_match_eligible,
+        "recommended_match_amount": cap_match_amount,
+        "next_cycle_bankroll_if_matched": round(ending_bankroll + cap_match_amount, 2),
+        "evaluation_start_date": eval_start,
+        "evaluation_end_date": eval_end,
+        "days_remaining": days_remaining,
+        "evaluation_window_closed": date.today() >= bankroll.evaluation_end_date if bankroll.evaluation_end_date else False,
+    }
+
+    # ── Broker reconciliation ─────────────────────────────────────────────────
+    broker_state = get_broker_capital_state(
+        internal_available_capital=internal_available,
+        internal_committed_capital=internal_committed,
+        internal_current_bankroll=internal_bankroll,
+    )
+    broker_dict = broker_capital_state_to_dict(broker_state)
+
+    # Use broker truth whenever Alpaca is enabled and sync succeeded.
+    # This applies in BOTH live mode AND sandbox/paper mode — Alpaca positions
+    # are the authoritative committed-capital source regardless of execution mode.
+    use_broker_truth = ALPACA_ENABLED and broker_state.sync_success
+
+    if use_broker_truth:
+        display_available      = broker_state.available_capital
+        display_committed      = broker_state.committed_capital
+        display_bankroll       = broker_state.current_bankroll
+        display_funded_packets = broker_state.open_positions_count
+        display_unrealized_pl  = broker_state.unrealized_pl
+        display_effective_bp   = broker_state.effective_buying_power
+    else:
+        if ALPACA_ENABLED:
+            _logger.warning(
+                "get_broker_reconciled_capital_state: broker sync failed (%s) "
+                "-- falling back to internal ledger",
+                broker_state.sync_error,
+            )
+        display_available      = internal_available
+        display_committed      = internal_committed
+        display_bankroll       = internal_bankroll
+        display_funded_packets = internal_funded_count
+        display_unrealized_pl  = 0.0
+        display_effective_bp   = internal_available
+
+    is_live = EXECUTION_MODE == "live"
+
+    return {
+        # ── Display-authoritative capital values ─────────────────────────────
+        "available_capital":        round(display_available, 2),
+        "committed_capital":        round(display_committed, 2),
+        "current_bankroll":         round(display_bankroll, 2),
+        "funded_packets":           display_funded_packets,
+        "unrealized_pl":            round(display_unrealized_pl, 2),
+        "effective_buying_power":   round(display_effective_bp, 2),
+
+        # ── Internal ledger values (audit trail, realized P/L) ────────────────
+        "starting_bankroll":        starting_bankroll,
+        "weekly_target":            weekly_target,
+        "realized_profit":          round(realized_profit, 2),
+        "total_allocated":          total_allocated,
+        "internal_available_capital": internal_available,
+        "internal_committed_capital": internal_committed,
+        "internal_current_bankroll":  internal_bankroll,
+
+        # ── Review / target metrics ───────────────────────────────────────────
+        "evaluation_start_date":    eval_start,
+        "evaluation_end_date":      eval_end,
+        "capital_match_eligible":   cap_match_eligible,
+        "capital_match_amount":     cap_match_amount,
+        "month_end_review":         month_end_review,
+
+        # ── Strategy metadata ─────────────────────────────────────────────────
+        "strategy_mode":            STRATEGY_MODE,
+        "live_execution_strategy":  LIVE_EXECUTION_STRATEGY,
+        "execution_mode":           EXECUTION_MODE,
+        "is_live_mode":             is_live,
+
+        # ── Broker sync metadata ──────────────────────────────────────────────
+        "broker_mode":              broker_state.broker_mode,
+        "last_broker_sync_at":      broker_state.last_sync_at,
+        "broker_sync_success":      broker_state.sync_success,
+        "broker_sync_error":        broker_state.sync_error,
+        "mismatch_detected":        broker_state.mismatch_detected,
+        "mismatch_details":         broker_state.mismatch_details,
+        "open_positions_count":     broker_state.open_positions_count,
+        "reserved_by_open_orders":  broker_state.reserved_by_open_orders,
+        "open_buy_orders_count":    broker_state.open_buy_orders_count,
+        "broker_cash":              broker_state.cash,
+        "broker_buying_power":      broker_state.buying_power,
+        "broker_portfolio_value":   broker_state.portfolio_value,
+
+        # ── Full broker snapshot (positions, orders) ──────────────────────────
+        "broker":                   broker_dict,
     }
