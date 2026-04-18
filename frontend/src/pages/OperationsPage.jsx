@@ -515,7 +515,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     setAlerts(data.alerts)
     setStrategies(data.strategies)
     setBudget(data.budget)
-    if (data.capitalState) setCapitalState(data.capitalState)
+    setCapitalState(data.capitalState ?? null)
     setBudgetReview(data.budgetReview ?? data.budget?.month_end_review ?? null)
     setAllocations(data.allocations)
     setAtStatus(data.atStatus)
@@ -736,7 +736,21 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     return budget?.allocations_by_source ?? []
   }, [allocations, budget])
 
-  const budgetStatus = budget?.budget?.status ?? budget?.status ?? 'no_open_budget'
+  const budgetCycle =
+    budget?.budget ??
+    ((budget?.evaluation_start_date ||
+      budget?.evaluation_end_date ||
+      budget?.starting_bankroll != null ||
+      budget?.starting_budget != null ||
+      budget?.status === 'open' ||
+      budget?.status === 'closed')
+      ? budget
+      : null)
+
+  const budgetStatus = budgetCycle?.status ?? 'no_open_budget'
+  const hasPlanningBudget = Boolean(budgetCycle)
+  const planningCycleStart = budgetCycle?.evaluation_start_date ?? budget?.evaluation_start_date ?? null
+  const planningCycleEnd = budgetCycle?.evaluation_end_date ?? budget?.evaluation_end_date ?? null
 
   // ── Broker-reconciled capital state (capital-state endpoint wins in live mode) ──
   // capitalState comes from /budget/capital-state which applies broker truth in live
@@ -781,13 +795,6 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const capitalMatchEligible =
     cs?.capital_match_eligible ?? budget?.capital_match_eligible ?? monthEndReview?.capital_match_eligible ?? false
 
-  // Funded packets: prefer broker open_positions_count from capital-state
-  const brokerFundedPackets = cs?.funded_packets ?? cs?.broker?.open_positions_count ?? null
-  const fundedPacketCount =
-    brokerFundedPackets !== null
-      ? brokerFundedPackets
-      : (fundedOpportunities.length || fundedPackets.length)
-
   // Strategy / broker metadata
   const strategyMode = cs?.strategy_mode ?? budget?.strategy_mode ?? 'RECYCLE'
   const liveExecStrategy = cs?.live_execution_strategy ?? budget?.live_execution_strategy ?? 'INTRADAY_RECYCLE'
@@ -807,10 +814,23 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const brokerPortfolioValue = cs?.broker_portfolio_value ?? cs?.broker?.portfolio_value ?? 0
   const reservedByOpenOrders = cs?.reserved_by_open_orders ?? cs?.broker?.reserved_by_open_orders ?? 0
   const openBuyOrdersCount = cs?.open_buy_orders_count ?? cs?.broker?.open_buy_orders_count ?? 0
+  const openOrdersCount = openBuyOrdersCount
   // CAPITAL_RESERVE_BUFFER matches backend default ($2.00 env: CAPITAL_RESERVE_BUFFER)
   const capitalReserveBuffer = brokerBuyingPower > 0
     ? Math.max(0, brokerBuyingPower - availableCapital)
     : 2.00
+  const capitalTruthLabel = brokerSyncSuccess
+    ? 'Broker truth'
+    : isLiveMode
+      ? 'Internal ledger fallback'
+      : 'Sandbox ledger'
+  const capitalTruthCopy = brokerSyncSuccess
+    ? 'These capital numbers are sourced from the broker-reconciled capital endpoint and reflect account truth.'
+    : isLiveMode
+      ? 'Broker sync is unavailable, so Hunter is falling back to internal ledger values. The cards stay visible, but they are labeled as fallback.'
+      : 'Sandbox mode is using Hunter ledger values instead of a live broker account.'
+  const capitalTruthTimestamp = lastBrokerSyncAt ? new Date(lastBrokerSyncAt).toLocaleTimeString() : null
+  const currentBankrollLabel = brokerSyncSuccess ? 'Current Bankroll / Portfolio Value' : 'Current Bankroll'
 
   async function runCommand(type) {
     const commands = {
@@ -1163,12 +1183,17 @@ export default function OperationsPage({ onBack, onAuthFail }) {
           <section className="ops-section">
             <div className="ops-section-header">
               <h2>Capital Deployment</h2>
-              <span className={`budget-status-pill budget-status-pill--${budgetStatus}`}>
-                {budgetStatus.toUpperCase()}
+              <span className={`budget-status-pill budget-status-pill--${brokerSyncSuccess ? 'open' : 'no_open_budget'}`}>
+                {capitalTruthLabel.toUpperCase()}
               </span>
             </div>
-            {!budget ? (
-              <div className="ops-no-data">No active bankroll cycle is available yet.</div>
+            {(!budget && !capitalState) ? (
+              <div className="ops-no-data">
+                Capital state unavailable — backend endpoint offline or no bankroll cycle configured yet.
+                <span style={{display:'block', fontSize:'11px', color:'#aaa', marginTop:'4px'}}>
+                  /budget/current and /budget/capital-state both failed to respond.
+                </span>
+              </div>
             ) : (
               <div className="budget-execution-shell">
 
@@ -1213,26 +1238,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                       </span>
                     </div>
                     <h3>
-                      {fallbackActive
-                        ? 'Capital tracking is active. Opportunity intake is running from seeded data — live source acquisition is offline.'
-                        : autotraderOffline
-                        ? 'Capital tracking is active. AutoTrader is offline — opportunities reflect seed fallback data, not live acquisition.'
-                        : isLiveMode
-                        ? 'Hunter is running live capital recycling (INTRADAY_RECYCLE). Capital state reflects live Alpaca account truth.'
-                        : 'Hunter is compounding a bankroll in paper (sandbox) mode.'}
+                      Broker state stays visible even when planning is closed or broker sync is degraded.
                     </h3>
                     <p style={{fontSize:'12px', color:'#888', marginTop:'4px'}}>
-                      {brokerSyncSuccess
-                        ? <>
-                            <strong>Free Cash</strong>, <strong>Deployed Capital</strong>, <strong>Portfolio Value</strong>, <strong>Open Positions</strong>, and <strong>Unrealized P/L</strong> are sourced directly from the <strong>live Alpaca account</strong> (<code>/budget/capital-state</code>).{' '}
-                            <strong>Realized P/L</strong> is tracked by Hunter's internal ledger and resets when the app restarts.{' '}
-                            Hover any card for the exact formula.
-                          </>
-                        : <>Capital values sourced from <strong>internal ledger</strong> (broker sync unavailable or disabled). Values may not reflect live broker account state.</>
-                      }
-                      {lastBrokerSyncAt && (
-                        <> Last broker sync: <strong>{new Date(lastBrokerSyncAt).toLocaleTimeString()}</strong>
-                        {brokerSyncSuccess ? ' ✓' : ' ✗ (failed)'}</>
+                      {capitalTruthCopy}
+                      {capitalTruthTimestamp && (
+                        <> Last sync attempt: <strong>{capitalTruthTimestamp}</strong>{brokerSyncSuccess ? ' (verified)' : ' (unverified)'}</>
                       )}
                     </p>
                   </div>
@@ -1243,12 +1254,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         ? `Alpaca buying_power (${formatCurrency(brokerBuyingPower)}) minus $${capitalReserveBuffer.toFixed(2)} reserve buffer = ${formatCurrency(availableCapital)}`
                         : 'Internal ledger value (broker sync unavailable)'}
                     >
-                      <span className="budget-execution-label">Free Cash</span>
+                      <span className="budget-execution-label">Available Capital</span>
                       <strong>{formatCurrency(availableCapital)}</strong>
                       <span className="budget-execution-sublabel">
                         {brokerSyncSuccess
                           ? `Alpaca buying_power − $${capitalReserveBuffer.toFixed(2)} reserve`
-                          : 'Internal ledger'}
+                          : capitalTruthLabel}
                       </span>
                     </div>
                     <div
@@ -1257,12 +1268,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         ? `Open position market values + ${openBuyOrdersCount} pending buy order(s) reserved (${formatCurrency(reservedByOpenOrders)}). Total deployed: ${formatCurrency(committedCapital)}`
                         : 'Internal ledger value (broker sync unavailable)'}
                     >
-                      <span className="budget-execution-label">Deployed Capital</span>
+                      <span className="budget-execution-label">Committed Capital</span>
                       <strong>{formatCurrency(committedCapital)}</strong>
                       <span className="budget-execution-sublabel">
                         {brokerSyncSuccess
                           ? `${openPositionsCount} positions + ${openBuyOrdersCount} pending order${openBuyOrdersCount !== 1 ? 's' : ''} · Alpaca`
-                          : 'Internal ledger'}
+                          : capitalTruthLabel}
                       </span>
                     </div>
                     <div
@@ -1271,10 +1282,10 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         ? `Alpaca portfolio_value = ${formatCurrency(brokerPortfolioValue)} (cash ${formatCurrency(brokerCash)} + ${openPositionsCount} position market values)`
                         : 'Internal ledger value (broker sync unavailable)'}
                     >
-                      <span className="budget-execution-label">Portfolio Value</span>
+                      <span className="budget-execution-label">{currentBankrollLabel}</span>
                       <strong>{formatCurrency(currentBankroll)}</strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess ? 'Alpaca portfolio_value' : 'Internal ledger'}
+                        {brokerSyncSuccess ? 'Alpaca portfolio_value' : capitalTruthLabel}
                       </span>
                     </div>
                     <div
@@ -1284,9 +1295,9 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         : 'Internal ledger count'}
                     >
                       <span className="budget-execution-label">Open Positions</span>
-                      <strong>{fundedPacketCount}</strong>
+                      <strong>{openPositionsCount}</strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess ? 'Alpaca position count' : 'Internal ledger'}
+                        {brokerSyncSuccess ? 'Broker open position count' : capitalTruthLabel}
                       </span>
                     </div>
                     <div
@@ -1315,6 +1326,22 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         {brokerSyncSuccess
                           ? `Σ ${openPositionsCount} position${openPositionsCount !== 1 ? 's' : ''} · Alpaca`
                           : 'Broker sync unavailable'}
+                      </span>
+                    </div>
+                    <div
+                      className="budget-execution-stat budget-execution-stat--funded"
+                      title={brokerSyncSuccess
+                        ? `${openOrdersCount} open buy order(s) currently reserving ${formatCurrency(reservedByOpenOrders)}`
+                        : 'Internal ledger count of open buy orders'}
+                    >
+                      <span className="budget-execution-label">Open Orders</span>
+                      <strong>{openOrdersCount}</strong>
+                      <span className="budget-execution-sublabel">
+                        {reservedByOpenOrders > 0
+                          ? `${formatCurrency(reservedByOpenOrders)} reserved`
+                          : brokerSyncSuccess
+                            ? 'No pending buy orders'
+                            : capitalTruthLabel}
                       </span>
                     </div>
                   </div>
@@ -1349,93 +1376,121 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                   </div>
                 )}
 
-                <div className="budget-row budget-row--primary">
-                  <div className="budget-cell">
-                    <div className="budget-value">{formatCurrency(startingBankroll)}</div>
-                    <div className="budget-label">Starting Bankroll</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div className="budget-value">{formatCurrency(availableCapital)}</div>
-                    <div className="budget-label">Available Capital</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div className="budget-value">{formatCurrency(committedCapital)}</div>
-                    <div className="budget-label">Committed Capital</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div
-                      className={`budget-value${
-                        realizedProfit >= 0 ? ' budget-value--pos' : ' budget-value--neg'
-                      }`}
-                    >
-                      {formatCurrency(realizedProfit)}
+                <div className="budget-state-grid">
+                  <div className="budget-state-panel">
+                    <div className="budget-state-panel__header">
+                      <h3>Broker State</h3>
+                      <span className={`budget-status-pill budget-status-pill--${brokerSyncSuccess ? 'open' : 'no_open_budget'}`}>
+                        {brokerSyncSuccess ? 'VERIFIED' : 'FALLBACK'}
+                      </span>
                     </div>
-                    <div className="budget-label">Realized Profit</div>
-                  </div>
-                </div>
-
-                <div className="budget-row budget-row--secondary">
-                  <div className="budget-cell">
-                    <div className="budget-value">{formatCurrency(originalBaseCapital)}</div>
-                    <div className="budget-label">Original Base Capital</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div className="budget-value">{formatCurrency(doublingTarget)}</div>
-                    <div className="budget-label">Doubling Threshold</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div className="budget-value">{`${doublingProgressPct.toFixed(0)}%`}</div>
-                    <div className="budget-label">Progress to Threshold</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div className={`budget-value${capitalMatchEligible ? ' budget-value--pos' : ''}`}>
-                      {capitalMatchEligible ? 'YES' : 'NO'}
-                    </div>
-                    <div className="budget-label">Capital Match Eligible</div>
-                  </div>
-                  <div className="budget-cell">
-                    <div className={`budget-value${capitalMatchAmount > 0 ? ' budget-value--pos' : ''}`}>
-                      {formatCurrency(capitalMatchAmount)}
-                    </div>
-                    <div className="budget-label">Recommended Match Amount</div>
-                  </div>
-                </div>
-
-                <div className="budget-progress-block">
-                  <div className="budget-progress-header">
-                    <div>
-                      <div className="budget-progress-title">Month-End Evaluation</div>
-                      <div className="budget-progress-copy">
-                        Progress toward doubling from {formatCurrency(startingBankroll)} to{' '}
-                        {formatCurrency(doublingTarget)}
+                    <div className="budget-row budget-row--primary">
+                      <div className="budget-cell">
+                        <div className="budget-value">{formatCurrency(availableCapital)}</div>
+                        <div className="budget-label">Available Capital</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{formatCurrency(committedCapital)}</div>
+                        <div className="budget-label">Committed Capital</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{formatCurrency(currentBankroll)}</div>
+                        <div className="budget-label">{currentBankrollLabel}</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className={`budget-value${unrealizedPl >= 0 ? ' budget-value--pos' : ' budget-value--neg'}`}>
+                          {unrealizedPl >= 0 ? '+' : ''}{formatCurrency(unrealizedPl)}
+                        </div>
+                        <div className="budget-label">Unrealized P/L</div>
                       </div>
                     </div>
-                    <div className="budget-progress-value">{doublingProgressPct.toFixed(0)}%</div>
+                    <div className="budget-meta">
+                      <span>{capitalTruthCopy}</span>
+                      {capitalTruthTimestamp && (
+                        <>
+                          <span className="budget-sep">·</span>
+                          <span>Last sync {capitalTruthTimestamp}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="budget-progress-track">
-                    <div
-                      className="budget-progress-fill"
-                      style={{ width: `${doublingProgressPct}%` }}
-                    />
-                  </div>
-                  <div className="budget-progress-meta">
-                    <span>Current {formatCurrency(currentBankroll)}</span>
-                    <span className="budget-sep">·</span>
-                    <span>Days remaining {monthEndReview?.days_remaining ?? 'n/a'}</span>
-                    <span className="budget-sep">·</span>
-                    <span>Potential match {formatCurrency(capitalMatchAmount)}</span>
+
+                  <div className="budget-state-panel">
+                    <div className="budget-state-panel__header">
+                      <h3>Pipeline / Planning State</h3>
+                      <span className={`budget-status-pill budget-status-pill--${budgetStatus}`}>
+                        {budgetStatus.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="budget-row budget-row--secondary">
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCurrency(startingBankroll) : '—'}</div>
+                        <div className="budget-label">Starting Bankroll</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCurrency(originalBaseCapital) : '—'}</div>
+                        <div className="budget-label">Original Base Capital</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCurrency(doublingTarget) : '—'}</div>
+                        <div className="budget-label">Doubling Threshold</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? `${doublingProgressPct.toFixed(0)}%` : '—'}</div>
+                        <div className="budget-label">Progress to Threshold</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className={`budget-value${capitalMatchEligible ? ' budget-value--pos' : ''}`}>
+                          {hasPlanningBudget ? (capitalMatchEligible ? 'YES' : 'NO') : '—'}
+                        </div>
+                        <div className="budget-label">Capital Match Eligible</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className={`budget-value${capitalMatchAmount > 0 ? ' budget-value--pos' : ''}`}>
+                          {hasPlanningBudget ? formatCurrency(capitalMatchAmount) : '—'}
+                        </div>
+                        <div className="budget-label">Recommended Match Amount</div>
+                      </div>
+                    </div>
+                    <div className="budget-meta">
+                      <span>Status {budgetStatus}</span>
+                      <span className="budget-sep">·</span>
+                      <span>Cycle start {planningCycleStart ?? 'n/a'}</span>
+                      <span className="budget-sep">·</span>
+                      <span>Review end {planningCycleEnd ?? evaluationEndDate ?? 'n/a'}</span>
+                      <span className="budget-sep">·</span>
+                      <span>Match eligible {hasPlanningBudget ? (capitalMatchEligible ? 'yes' : 'no') : 'n/a'}</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="budget-meta">
-                  <span>Status {budgetStatus}</span>
-                  <span className="budget-sep">·</span>
-                  <span>Cycle start {budget?.evaluation_start_date ?? budget?.budget?.evaluation_start_date}</span>
-                  <span className="budget-sep">·</span>
-                  <span>Review end {evaluationEndDate ?? 'n/a'}</span>
-                  <span className="budget-sep">·</span>
-                  <span>Match eligible {budget?.capital_match_eligible ? 'yes' : 'no'}</span>
-                </div>
+                {hasPlanningBudget && (
+                  <div className="budget-progress-block">
+                    <div className="budget-progress-header">
+                      <div>
+                        <div className="budget-progress-title">Month-End Evaluation</div>
+                        <div className="budget-progress-copy">
+                          Progress toward doubling from {formatCurrency(startingBankroll)} to{' '}
+                          {formatCurrency(doublingTarget)}
+                        </div>
+                      </div>
+                      <div className="budget-progress-value">{doublingProgressPct.toFixed(0)}%</div>
+                    </div>
+                    <div className="budget-progress-track">
+                      <div
+                        className="budget-progress-fill"
+                        style={{ width: `${doublingProgressPct}%` }}
+                      />
+                    </div>
+                    <div className="budget-progress-meta">
+                      <span>Current {formatCurrency(currentBankroll)}</span>
+                      <span className="budget-sep">·</span>
+                      <span>Days remaining {monthEndReview?.days_remaining ?? 'n/a'}</span>
+                      <span className="budget-sep">·</span>
+                      <span>Potential match {formatCurrency(capitalMatchAmount)}</span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="budget-allocation-panel">
                   <div className="budget-allocation-header">

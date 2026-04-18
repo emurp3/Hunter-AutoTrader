@@ -762,13 +762,19 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
     bankroll = ensure_bankroll(session)
     sync_bankroll(session, bankroll)
 
-    internal_available = float(bankroll.available_capital or 0.0)
-    internal_committed = float(bankroll.committed_capital or 0.0)
+    # WeeklyBudget field name mapping:
+    #   remaining_budget  → available capital after committed positions
+    #   realized_return   → cumulative closed P/L (NOT realized_profit)
+    #   committed_capital and total_allocated are not stored on the model;
+    #   derive them from the allocations table via recalc_committed_capital().
+    #   weekly_target has no direct model field; zero is a safe default.
+    internal_committed = float(recalc_committed_capital(session, bankroll) or 0.0)
+    internal_available = float(bankroll.remaining_budget or 0.0)
     internal_bankroll  = float(bankroll.current_bankroll or 0.0)
-    realized_profit    = float(bankroll.realized_profit or 0.0)
+    realized_profit    = float(bankroll.realized_return or 0.0)
     starting_bankroll  = float(bankroll.starting_bankroll or 0.0)
-    weekly_target      = float(bankroll.weekly_target or 0.0)
-    total_allocated    = float(bankroll.total_allocated or 0.0)
+    weekly_target      = 0.0          # no direct field on WeeklyBudget
+    total_allocated    = internal_committed  # committed capital = total allocated
 
     eval_start = bankroll.evaluation_start_date.isoformat() if bankroll.evaluation_start_date else None
     eval_end   = bankroll.evaluation_end_date.isoformat()   if bankroll.evaluation_end_date   else None
