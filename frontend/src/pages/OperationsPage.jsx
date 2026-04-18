@@ -331,6 +331,14 @@ function formatCurrency(value) {
   })}`
 }
 
+function formatCount(value) {
+  if (value == null || Number.isNaN(Number(value))) {
+    return '—'
+  }
+
+  return Number(value).toLocaleString()
+}
+
 function extractTaskId(alert) {
   const body = alert?.body ?? ''
   const match = body.match(/task_id=([a-f0-9-]+)/i)
@@ -756,6 +764,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   // capitalState comes from /budget/capital-state which applies broker truth in live
   // mode; fall back to /budget/current values if capital-state is unavailable.
   const cs = capitalState  // shorthand
+  const hasCapitalSource = Boolean(cs || budget)
 
   const startingBankroll =
     cs?.starting_bankroll ??
@@ -829,6 +838,8 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     : isLiveMode
       ? 'Broker sync is unavailable, so Hunter is falling back to internal ledger values. The cards stay visible, but they are labeled as fallback.'
       : 'Sandbox mode is using Hunter ledger values instead of a live broker account.'
+  const capitalUnavailableCopy =
+    'No broker or ledger capital payload is available yet. The broker block stays visible so missing capital data is explicit instead of hidden.'
   const capitalTruthTimestamp = lastBrokerSyncAt ? new Date(lastBrokerSyncAt).toLocaleTimeString() : null
   const currentBankrollLabel = brokerSyncSuccess ? 'Current Bankroll / Portfolio Value' : 'Current Bankroll'
 
@@ -1187,15 +1198,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                 {capitalTruthLabel.toUpperCase()}
               </span>
             </div>
-            {(!budget && !capitalState) ? (
-              <div className="ops-no-data">
-                Capital state unavailable — backend endpoint offline or no bankroll cycle configured yet.
-                <span style={{display:'block', fontSize:'11px', color:'#aaa', marginTop:'4px'}}>
-                  /budget/current and /budget/capital-state both failed to respond.
-                </span>
-              </div>
-            ) : (
-              <div className="budget-execution-shell">
+            <div className="budget-execution-shell">
 
                 {/* ── Broker mismatch warning banner ─────────────────────── */}
                 {mismatchDetected && (
@@ -1241,9 +1244,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                       Broker state stays visible even when planning is closed or broker sync is degraded.
                     </h3>
                     <p style={{fontSize:'12px', color:'#888', marginTop:'4px'}}>
-                      {capitalTruthCopy}
+                      {hasCapitalSource ? capitalTruthCopy : capitalUnavailableCopy}
                       {capitalTruthTimestamp && (
                         <> Last sync attempt: <strong>{capitalTruthTimestamp}</strong>{brokerSyncSuccess ? ' (verified)' : ' (unverified)'}</>
+                      )}
+                      {!hasCapitalSource && (
+                        <> Waiting on <code>/budget/current</code> and <code>/budget/capital-state</code> to return capital data.</>
                       )}
                     </p>
                   </div>
@@ -1255,11 +1261,13 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         : 'Internal ledger value (broker sync unavailable)'}
                     >
                       <span className="budget-execution-label">Available Capital</span>
-                      <strong>{formatCurrency(availableCapital)}</strong>
+                      <strong>{hasCapitalSource ? formatCurrency(availableCapital) : '—'}</strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess
+                        {hasCapitalSource && brokerSyncSuccess
                           ? `Alpaca buying_power − $${capitalReserveBuffer.toFixed(2)} reserve`
-                          : capitalTruthLabel}
+                          : hasCapitalSource
+                            ? capitalTruthLabel
+                            : 'Waiting for capital payload'}
                       </span>
                     </div>
                     <div
@@ -1269,11 +1277,13 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         : 'Internal ledger value (broker sync unavailable)'}
                     >
                       <span className="budget-execution-label">Committed Capital</span>
-                      <strong>{formatCurrency(committedCapital)}</strong>
+                      <strong>{hasCapitalSource ? formatCurrency(committedCapital) : '—'}</strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess
+                        {hasCapitalSource && brokerSyncSuccess
                           ? `${openPositionsCount} positions + ${openBuyOrdersCount} pending order${openBuyOrdersCount !== 1 ? 's' : ''} · Alpaca`
-                          : capitalTruthLabel}
+                          : hasCapitalSource
+                            ? capitalTruthLabel
+                            : 'Waiting for capital payload'}
                       </span>
                     </div>
                     <div
@@ -1283,9 +1293,11 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         : 'Internal ledger value (broker sync unavailable)'}
                     >
                       <span className="budget-execution-label">{currentBankrollLabel}</span>
-                      <strong>{formatCurrency(currentBankroll)}</strong>
+                      <strong>{hasCapitalSource ? formatCurrency(currentBankroll) : '—'}</strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess ? 'Alpaca portfolio_value' : capitalTruthLabel}
+                        {hasCapitalSource
+                          ? brokerSyncSuccess ? 'Alpaca portfolio_value' : capitalTruthLabel
+                          : 'Waiting for capital payload'}
                       </span>
                     </div>
                     <div
@@ -1295,9 +1307,11 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         : 'Internal ledger count'}
                     >
                       <span className="budget-execution-label">Open Positions</span>
-                      <strong>{openPositionsCount}</strong>
+                      <strong>{formatCount(hasCapitalSource ? openPositionsCount : null)}</strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess ? 'Broker open position count' : capitalTruthLabel}
+                        {hasCapitalSource
+                          ? brokerSyncSuccess ? 'Broker open position count' : capitalTruthLabel
+                          : 'Waiting for capital payload'}
                       </span>
                     </div>
                     <div
@@ -1305,11 +1319,13 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                       title={`Hunter-tracked realized P/L from closed trades since last restart. $0 means all ${openPositionsCount} position(s) are still open — nothing sold yet. Resets when Render redeploys the app.`}
                     >
                       <span className="budget-execution-label">Realized P/L</span>
-                      <strong>{formatCurrency(realizedProfit)}</strong>
+                      <strong>{hasCapitalSource ? formatCurrency(realizedProfit) : '—'}</strong>
                       <span className="budget-execution-sublabel">
-                        Hunter ledger · {openPositionsCount > 0 && realizedProfit === 0
+                        {hasCapitalSource
+                          ? `Hunter ledger · ${openPositionsCount > 0 && realizedProfit === 0
                           ? `${openPositionsCount} positions open, none sold yet`
-                          : 'resets on restart'}
+                          : 'resets on restart'}`
+                          : 'Waiting for capital payload'}
                       </span>
                     </div>
                     <div
@@ -1320,12 +1336,14 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                     >
                       <span className="budget-execution-label">Unrealized P/L</span>
                       <strong style={{color: unrealizedPl >= 0 ? '#1a7f37' : '#cf222e'}}>
-                        {unrealizedPl >= 0 ? '+' : ''}{formatCurrency(unrealizedPl)}
+                        {hasCapitalSource ? `${unrealizedPl >= 0 ? '+' : ''}${formatCurrency(unrealizedPl)}` : '—'}
                       </strong>
                       <span className="budget-execution-sublabel">
-                        {brokerSyncSuccess
+                        {hasCapitalSource && brokerSyncSuccess
                           ? `Σ ${openPositionsCount} position${openPositionsCount !== 1 ? 's' : ''} · Alpaca`
-                          : 'Broker sync unavailable'}
+                          : hasCapitalSource
+                            ? 'Broker sync unavailable'
+                            : 'Waiting for capital payload'}
                       </span>
                     </div>
                     <div
@@ -1335,13 +1353,15 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                         : 'Internal ledger count of open buy orders'}
                     >
                       <span className="budget-execution-label">Open Orders</span>
-                      <strong>{openOrdersCount}</strong>
+                      <strong>{formatCount(hasCapitalSource ? openOrdersCount : null)}</strong>
                       <span className="budget-execution-sublabel">
-                        {reservedByOpenOrders > 0
+                        {hasCapitalSource && reservedByOpenOrders > 0
                           ? `${formatCurrency(reservedByOpenOrders)} reserved`
-                          : brokerSyncSuccess
+                          : hasCapitalSource && brokerSyncSuccess
                             ? 'No pending buy orders'
-                            : capitalTruthLabel}
+                            : hasCapitalSource
+                              ? capitalTruthLabel
+                              : 'Waiting for capital payload'}
                       </span>
                     </div>
                   </div>
@@ -1386,26 +1406,40 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                     </div>
                     <div className="budget-row budget-row--primary">
                       <div className="budget-cell">
-                        <div className="budget-value">{formatCurrency(availableCapital)}</div>
+                        <div className="budget-value">{hasCapitalSource ? formatCurrency(availableCapital) : '—'}</div>
                         <div className="budget-label">Available Capital</div>
                       </div>
                       <div className="budget-cell">
-                        <div className="budget-value">{formatCurrency(committedCapital)}</div>
+                        <div className="budget-value">{hasCapitalSource ? formatCurrency(committedCapital) : '—'}</div>
                         <div className="budget-label">Committed Capital</div>
                       </div>
                       <div className="budget-cell">
-                        <div className="budget-value">{formatCurrency(currentBankroll)}</div>
+                        <div className="budget-value">{hasCapitalSource ? formatCurrency(currentBankroll) : '—'}</div>
                         <div className="budget-label">{currentBankrollLabel}</div>
                       </div>
                       <div className="budget-cell">
                         <div className={`budget-value${unrealizedPl >= 0 ? ' budget-value--pos' : ' budget-value--neg'}`}>
-                          {unrealizedPl >= 0 ? '+' : ''}{formatCurrency(unrealizedPl)}
+                          {hasCapitalSource ? `${unrealizedPl >= 0 ? '+' : ''}${formatCurrency(unrealizedPl)}` : '—'}
                         </div>
                         <div className="budget-label">Unrealized P/L</div>
                       </div>
+                      <div className="budget-cell">
+                        <div className={`budget-value${realizedProfit >= 0 ? ' budget-value--pos' : ' budget-value--neg'}`}>
+                          {hasCapitalSource ? formatCurrency(realizedProfit) : '—'}
+                        </div>
+                        <div className="budget-label">Realized P/L</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{formatCount(hasCapitalSource ? openPositionsCount : null)}</div>
+                        <div className="budget-label">Open Positions</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{formatCount(hasCapitalSource ? openOrdersCount : null)}</div>
+                        <div className="budget-label">Open Orders</div>
+                      </div>
                     </div>
                     <div className="budget-meta">
-                      <span>{capitalTruthCopy}</span>
+                      <span>{hasCapitalSource ? capitalTruthCopy : capitalUnavailableCopy}</span>
                       {capitalTruthTimestamp && (
                         <>
                           <span className="budget-sep">·</span>
@@ -1450,6 +1484,22 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                           {hasPlanningBudget ? formatCurrency(capitalMatchAmount) : '—'}
                         </div>
                         <div className="budget-label">Recommended Match Amount</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCount(summary?.ready_packets ?? 0) : '—'}</div>
+                        <div className="budget-label">Ready Packets</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCount(pipeline?.by_status?.planned ?? 0) : '—'}</div>
+                        <div className="budget-label">Planned Count</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCount(allocations?.length ?? budget?.allocations_by_source?.length ?? 0) : '—'}</div>
+                        <div className="budget-label">Budgeted Count</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{hasPlanningBudget ? formatCurrency(strategies?.total_expected_return ?? 0) : '—'}</div>
+                        <div className="budget-label">Expected Return</div>
                       </div>
                     </div>
                     <div className="budget-meta">
@@ -1530,7 +1580,6 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                   )}
                 </div>
               </div>
-            )}
           </section>
 
           <section className="ops-section">
