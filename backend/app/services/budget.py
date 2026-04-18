@@ -210,6 +210,38 @@ def sync_bankroll(session: Session, budget: WeeklyBudget) -> WeeklyBudget:
     return budget
 
 
+def sync_current_ledger_to_broker(
+    session: Session,
+    budget: WeeklyBudget,
+    *,
+    available_capital: float,
+    current_bankroll: float,
+) -> WeeklyBudget:
+    """
+    Persist the current broker-backed ledger snapshot without rewriting the
+    historical seed/origin fields.
+
+    Historical fields that remain immutable/origin-based:
+      - starting_bankroll
+      - starting_budget
+      - evaluation_start_date / evaluation_end_date
+      - realized_return
+
+    Current/live-synced fields:
+      - current_bankroll
+      - remaining_budget
+    """
+    budget.current_bankroll = round(current_bankroll, 2)
+    budget.remaining_budget = round(max(0.0, available_capital), 2)
+    budget.starting_budget = budget.starting_bankroll
+    budget.week_start_date = budget.evaluation_start_date
+    budget.week_end_date = budget.evaluation_end_date
+    session.add(budget)
+    session.commit()
+    session.refresh(budget)
+    return budget
+
+
 def is_flipped(budget: WeeklyBudget) -> bool:
     return budget.current_bankroll >= round(budget.starting_bankroll * FLIP_TARGET_MULTIPLIER, 2)
 
@@ -768,13 +800,13 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
     #   committed_capital and total_allocated are not stored on the model;
     #   derive them from the allocations table via recalc_committed_capital().
     #   weekly_target has no direct model field; zero is a safe default.
-    internal_committed = float(recalc_committed_capital(session, bankroll) or 0.0)
-    internal_available = float(bankroll.remaining_budget or 0.0)
-    internal_bankroll  = float(bankroll.current_bankroll or 0.0)
+    planning_committed = float(recalc_committed_capital(session, bankroll) or 0.0)
+    raw_internal_available = float(bankroll.remaining_budget or 0.0)
+    raw_internal_bankroll = float(bankroll.current_bankroll or 0.0)
     realized_profit    = float(bankroll.realized_return or 0.0)
     starting_bankroll  = float(bankroll.starting_bankroll or 0.0)
     weekly_target      = 0.0          # no direct field on WeeklyBudget
-    total_allocated    = internal_committed  # committed capital = total allocated
+    total_allocated    = planning_committed  # planning/pipeline committed capital
 
     eval_start = bankroll.evaluation_start_date.isoformat() if bankroll.evaluation_start_date else None
     eval_end   = bankroll.evaluation_end_date.isoformat()   if bankroll.evaluation_end_date   else None
@@ -818,9 +850,9 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
 
     # ── Broker reconciliation ─────────────────────────────────────────────────
     broker_state = get_broker_capital_state(
-        internal_available_capital=internal_available,
-        internal_committed_capital=internal_committed,
-        internal_current_bankroll=internal_bankroll,
+        internal_available_capital=raw_internal_available,
+        internal_committed_capital=planning_committed,
+        internal_current_bankroll=raw_internal_bankroll,
     )
     broker_dict = broker_capital_state_to_dict(broker_state)
 
@@ -830,6 +862,23 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
     use_broker_truth = ALPACA_ENABLED and broker_state.sync_success
 
     if use_broker_truth:
+        # Reconcile the current internal ledger snapshot to the broker-backed
+        # reality so we do not keep comparing live capital against untouched
+        # seed-era values after a successful sync.
+        sync_current_ledger_to_broker(
+            session,
+            bankroll,
+            available_capital=broker_state.available_capital,
+            current_bankroll=broker_state.current_bankroll,
+        )
+        internal_available = float(bankroll.remaining_budget or 0.0)
+        internal_bankroll = float(bankroll.current_bankroll or 0.0)
+        internal_committed = float(broker_state.committed_capital or 0.0)
+        broker_state.internal_available_capital = internal_available
+        broker_state.internal_committed_capital = internal_committed
+        broker_state.internal_current_bankroll = internal_bankroll
+        broker_state.mismatch_detected = False
+        broker_state.mismatch_details = None
         display_available      = broker_state.available_capital
         display_committed      = broker_state.committed_capital
         display_bankroll       = broker_state.current_bankroll
@@ -843,6 +892,9 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
                 "-- falling back to internal ledger",
                 broker_state.sync_error,
             )
+        internal_available = raw_internal_available
+        internal_bankroll = raw_internal_bankroll
+        internal_committed = planning_committed
         display_available      = internal_available
         display_committed      = internal_committed
         display_bankroll       = internal_bankroll
