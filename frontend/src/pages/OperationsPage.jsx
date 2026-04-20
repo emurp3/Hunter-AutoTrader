@@ -340,6 +340,21 @@ function formatCount(value) {
   return Number(value).toLocaleString()
 }
 
+function formatDurationMinutes(value) {
+  if (value == null || Number.isNaN(Number(value))) {
+    return '—'
+  }
+
+  const minutes = Math.max(0, Number(value))
+  if (minutes < 60) {
+    return `${minutes.toFixed(minutes < 10 ? 1 : 0)}m`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = Math.round(minutes % 60)
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+}
+
 function extractTaskId(alert) {
   const body = alert?.body ?? ''
   const match = body.match(/task_id=([a-f0-9-]+)/i)
@@ -721,6 +736,16 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const activeExecutions = executionStatus?.active_executions ?? []
   const completedExecutions = executionStatus?.completed_executions ?? []
   const failedExecutions = executionStatus?.failed_executions ?? []
+  const recentTimingOutcomes = executionStatus?.recent_closed_positions?.length
+    ? executionStatus.recent_closed_positions
+    : (executionStatus?.recent_outcomes ?? [])
+      .map((outcome) => ({
+        symbol: outcome?.timing?.symbol ?? outcome?.source_id ?? '—',
+        ...outcome?.timing,
+        recorded_at: outcome?.recorded_at,
+        source_id: outcome?.source_id,
+      }))
+      .filter((item) => item.hold_duration_minutes != null || item.time_to_realized_profit_minutes != null)
   const top10 = pipeline?.top_10 ?? []
   const recentEvents = events?.events ?? []
   const endpointStatus = usingFallback ? 'API Offline' : 'API Online'
@@ -854,7 +879,8 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const brokerPortfolioValue = cs?.broker_portfolio_value ?? cs?.broker?.portfolio_value ?? 0
   const reservedByOpenOrders = cs?.reserved_by_open_orders ?? cs?.broker?.reserved_by_open_orders ?? 0
   const openBuyOrdersCount = cs?.open_buy_orders_count ?? cs?.broker?.open_buy_orders_count ?? 0
-  const openOrdersCount = openBuyOrdersCount
+  const openSellOrdersCount = cs?.broker?.open_sell_orders_count ?? 0
+  const openOrdersCount = openBuyOrdersCount + openSellOrdersCount
   // CAPITAL_RESERVE_BUFFER matches backend default ($2.00 env: CAPITAL_RESERVE_BUFFER)
   const capitalReserveBuffer = brokerBuyingPower > 0
     ? Math.max(0, brokerBuyingPower - availableCapital)
@@ -1550,7 +1576,9 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                     <span style={{fontWeight:600, color:'#888'}}>Positions:</span>
                     {brokerPositions.map(p =>
                       <span key={p.symbol} style={{color: (p.unrealized_pl||0) >= 0 ? '#1a7f37' : '#cf222e'}}>
-                        {p.symbol} {(p.unrealized_pl||0) >= 0 ? '+' : ''}{(p.unrealized_pl||0).toFixed(2)}
+                        {p.symbol} {(p.unrealized_pl||0) >= 0 ? '+' : ''}{(p.unrealized_pl||0).toFixed(2)} · hold {formatDurationMinutes(p.hold_minutes)}
+                        {p.max_hold_minutes != null && ` / ${formatDurationMinutes(p.max_hold_minutes)} max`}
+                        {p.over_max_hold ? ' · over max' : ''}
                       </span>
                     )}
                   </div>
@@ -1947,6 +1975,59 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                   <span>Best lane {performanceSummary?.best_lane ?? 'n/a'}</span>
                   <span className="budget-sep">·</span>
                   <span>Weakest lane {performanceSummary?.weakest_lane ?? 'n/a'}</span>
+                </div>
+                <div className="timing-snapshot">
+                  <div className="timing-snapshot__header">
+                    <div className="ops-kicker">Position Timing</div>
+                    <h4>Return timing snapshot</h4>
+                  </div>
+                  {brokerPositions.length === 0 && recentTimingOutcomes.length === 0 ? (
+                    <div className="ops-no-data">No live position timing has been recorded yet.</div>
+                  ) : (
+                    <>
+                      {brokerPositions.length > 0 && (
+                        <div className="timing-strip">
+                          {brokerPositions.map((position) => (
+                            <div
+                              key={`open-${position.symbol}`}
+                              className={`timing-pill${position.over_max_hold ? ' timing-pill--warn' : ''}`}
+                            >
+                              <strong>{position.symbol}</strong>
+                              <span>Open hold {formatDurationMinutes(position.hold_minutes)}</span>
+                              <span>Max {formatDurationMinutes(position.max_hold_minutes)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {recentTimingOutcomes.length > 0 && (
+                        <div className="timing-list">
+                          {recentTimingOutcomes.slice(0, 6).map((item, index) => (
+                            <div
+                              key={`${item.symbol}-${item.exited_at ?? item.recorded_at ?? index}`}
+                              className="timing-row"
+                            >
+                              <div className="timing-row__main">
+                                <strong>{item.symbol ?? 'position'}</strong>
+                                <span>
+                                  {item.exited_at
+                                    ? `Closed ${formatRelativeDate(item.exited_at)}`
+                                    : `Recorded ${formatRelativeDate(item.recorded_at)}`}
+                                </span>
+                              </div>
+                              <div className="timing-row__metrics">
+                                <span>Hold {formatDurationMinutes(item.hold_duration_minutes)}</span>
+                                <span>
+                                  Time to realized profit {item.time_to_realized_profit_minutes != null
+                                    ? formatDurationMinutes(item.time_to_realized_profit_minutes)
+                                    : 'n/a'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             </div>

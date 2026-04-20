@@ -854,7 +854,14 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
         internal_committed_capital=planning_committed,
         internal_current_bankroll=raw_internal_bankroll,
     )
+    from app.services import position_lifecycle as lifecycle_svc
+
+    lifecycle_svc.sync_lifecycles_with_broker_state(session, broker_state)
     broker_dict = broker_capital_state_to_dict(broker_state)
+    broker_dict["positions"] = lifecycle_svc.enrich_broker_positions_with_lifecycle(
+        session,
+        broker_dict.get("positions", []),
+    )
 
     # Use broker truth whenever Alpaca is enabled and sync succeeded.
     # This applies in BOTH live mode AND sandbox/paper mode — Alpaca positions

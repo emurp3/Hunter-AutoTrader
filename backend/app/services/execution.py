@@ -36,6 +36,7 @@ from app.models.provider_execution import ProviderExecution
 from app.models.strategy import Strategy, StrategyStatus
 from app.services import alerts as alert_svc
 from app.services import events as event_svc
+from app.services import position_lifecycle as lifecycle_svc
 
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
@@ -291,6 +292,27 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
     session.commit()
     session.refresh(provider_execution)
 
+    order_side = (order.side or "").lower()
+    if order_side == "buy":
+        lifecycle_svc.record_entry_submission(
+            session,
+            symbol=result.symbol,
+            source_id=packet.source_id,
+            packet_id=packet.id,
+            allocation_id=allocation.id,
+            provider_order_id=result.order_id,
+            entered_at=provider_execution.submitted_at,
+        )
+    elif order_side == "sell":
+        lifecycle_svc.record_exit_submission(
+            session,
+            symbol=result.symbol,
+            source_id=packet.source_id,
+            packet_id=packet.id,
+            provider_order_id=result.order_id,
+            submitted_at=provider_execution.submitted_at,
+        )
+
     event_svc.log_event(
         packet.source_id,
         EventType.executed,
@@ -400,8 +422,22 @@ def get_execution_status(session: Session) -> dict:
                 "failure_reason": outcome.failure_reason,
                 "notes": outcome.notes,
                 "recorded_at": outcome.recorded_at.isoformat(),
+                "timing": lifecycle_svc.serialize_lifecycle(
+                    lifecycle_svc.get_latest_lifecycle(
+                        session,
+                        packet_id=outcome.action_packet_id,
+                        source_id=outcome.source_id,
+                    )
+                ),
             }
             for outcome in outcomes[:20]
+        ],
+        "recent_closed_positions": [
+            {
+                "symbol": lifecycle.symbol,
+                **(lifecycle_svc.serialize_lifecycle(lifecycle) or {}),
+            }
+            for lifecycle in lifecycle_svc.get_recent_closed_lifecycles(session, limit=10)
         ],
         "counts": {
             "active": len(active_packets),
@@ -619,6 +655,19 @@ def _record_outcome(
 ) -> None:
     started_at = packet.execution_started_at or packet.updated_at or packet.created_at
     completion_hours = max(0.0, round((now - started_at).total_seconds() / 3600, 2))
+    lifecycle = lifecycle_svc.close_lifecycle_for_execution(
+        session,
+        packet_id=packet.id,
+        source_id=packet.source_id,
+        symbol=_latest_provider_symbol(packet.id, session),
+        actual_return=actual_return if state == ExecutionState.completed else None,
+        exited_at=now if state == ExecutionState.completed else None,
+        commit=False,
+    ) if state == ExecutionState.completed else lifecycle_svc.get_latest_lifecycle(
+        session,
+        packet_id=packet.id,
+        source_id=packet.source_id,
+    )
     outcome = ExecutionOutcome(
         action_packet_id=packet.id,
         allocation_id=allocation.id if allocation else None,
@@ -634,6 +683,16 @@ def _record_outcome(
         failure_reason=failure_reason,
         notes=notes,
     )
+    if lifecycle and lifecycle.hold_duration_minutes is not None:
+        outcome.notes = _merge_notes(
+            notes,
+            f"hold={lifecycle.hold_duration_minutes:.2f}m"
+            + (
+                f", realized_profit_after={lifecycle.time_to_realized_profit_minutes:.2f}m"
+                if lifecycle.time_to_realized_profit_minutes is not None
+                else ""
+            ),
+        )
     session.add(outcome)
 
 
@@ -870,6 +929,12 @@ def _packet_payload(packet: ActionPacket, session: Session) -> dict:
         .where(ProviderExecution.packet_id == packet.id)
         .order_by(ProviderExecution.created_at.desc())
     ).first()
+    lifecycle = lifecycle_svc.get_latest_lifecycle(
+        session,
+        packet_id=packet.id,
+        source_id=packet.source_id,
+        symbol=provider_order.symbol if provider_order else None,
+    )
     return {
         "packet_id": packet.id,
         "source_id": packet.source_id,
@@ -897,6 +962,7 @@ def _packet_payload(packet: ActionPacket, session: Session) -> dict:
             if provider_order
             else None
         ),
+        "position_timing": lifecycle_svc.serialize_lifecycle(lifecycle),
         "allocation": (
             {
                 "allocation_id": allocation.id,
@@ -917,3 +983,20 @@ def _packet_payload(packet: ActionPacket, session: Session) -> dict:
         "lane": _infer_lane(source),
         "category": source.category if source else None,
     }
+
+
+def _latest_provider_symbol(packet_id: int, session: Session) -> Optional[str]:
+    provider_order = session.exec(
+        select(ProviderExecution)
+        .where(ProviderExecution.packet_id == packet_id)
+        .order_by(ProviderExecution.created_at.desc())
+    ).first()
+    return provider_order.symbol if provider_order else None
+
+
+def _merge_notes(existing: Optional[str], addition: str) -> str:
+    if not existing:
+        return addition
+    if addition in existing:
+        return existing
+    return f"{existing} | {addition}"

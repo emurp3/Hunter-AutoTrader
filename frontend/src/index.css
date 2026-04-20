@@ -2385,6 +2385,81 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   color: var(--text-muted);
 }
 
+.timing-snapshot {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.timing-snapshot__header h4 {
+  margin: 0.2rem 0 0;
+  font-size: 0.98rem;
+}
+
+.timing-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+}
+
+.timing-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.timing-pill strong {
+  color: var(--text);
+}
+
+.timing-pill--warn {
+  border-color: rgba(224,82,82,0.28);
+  background: rgba(224,82,82,0.08);
+}
+
+.timing-list {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.timing-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.timing-row__main,
+.timing-row__metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.timing-row__main strong {
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .timing-row {
+    flex-direction: column;
+  }
+}
+
 /* ── Mobile: ops-section-header export button wrap ──────────────────────── */
 @media (max-width: 600px) {
   .ops-section-header {

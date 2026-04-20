@@ -352,6 +352,24 @@ def execute_exits(exit_decisions: list[ExitDecision]) -> tuple[list[dict], list[
                 order.qty = pos.qty
 
             result = adapter.place_order(order)
+            try:
+                from sqlmodel import Session
+                from app.database.config import engine
+                from app.services import position_lifecycle as lifecycle_svc
+
+                with Session(engine) as session:
+                    lifecycle_svc.record_exit_submission(
+                        session,
+                        symbol=decision.symbol,
+                        provider_order_id=result.order_id,
+                        submitted_at=datetime.now(timezone.utc),
+                    )
+            except Exception as lifecycle_exc:
+                logger.warning(
+                    "execute_exits: could not persist timing lifecycle for %s — %s",
+                    decision.symbol,
+                    lifecycle_exc,
+                )
             submitted.append({
                 "symbol": decision.symbol,
                 "exit_reason": decision.exit_reason,
@@ -548,6 +566,25 @@ def execute_entries(entry_decisions: list[EntryDecision]) -> tuple[list[dict], l
                 time_in_force="day",
             )
             result = adapter.place_order(order)
+            try:
+                from sqlmodel import Session
+                from app.database.config import engine
+                from app.services import position_lifecycle as lifecycle_svc
+
+                with Session(engine) as session:
+                    lifecycle_svc.record_entry_submission(
+                        session,
+                        symbol=entry.symbol,
+                        source_id=entry.source_id,
+                        provider_order_id=result.order_id,
+                        entered_at=datetime.now(timezone.utc),
+                    )
+            except Exception as lifecycle_exc:
+                logger.warning(
+                    "execute_entries: could not persist timing lifecycle for %s — %s",
+                    entry.symbol,
+                    lifecycle_exc,
+                )
             submitted.append({
                 "symbol": entry.symbol,
                 "notional": entry.notional,

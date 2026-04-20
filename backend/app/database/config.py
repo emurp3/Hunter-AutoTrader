@@ -41,6 +41,7 @@ def create_db_and_tables() -> None:
     import app.models.advisor        # noqa: F401
     import app.models.execution_outcome  # noqa: F401
     import app.models.provider_execution  # noqa: F401
+    import app.models.position_lifecycle  # noqa: F401
     import app.models.decision           # noqa: F401
     import app.models.marketplace        # noqa: F401
     import app.models.task               # noqa: F401
