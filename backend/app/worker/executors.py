@@ -64,6 +64,16 @@ def _write_text_artifact(task_id: str, filename: str, content: str) -> str:
 def execute_task(task: dict[str, Any], worker_id: str) -> WorkerResult:
     task_type = task.get("task_type") or "generic_execution"
     spec = _decode_json(task.get("spec_payload"))
+    if task_type == "generic_execution" and _is_trading_generic_spec(spec):
+        return WorkerResult(
+            outcome={
+                "skipped": True,
+                "skip_reason": "trading_sources_execute_via_broker_pipeline",
+                "source_id": spec.get("source_id"),
+            },
+            notes="Skipped obsolete generic trading task. Hunter now routes trading sources through broker execution.",
+            engine="direct_api",
+        )
     if task_type == "digital_product_launch":
         return _execute_digital_product(task, spec)
     if task_type == "service_outreach":
@@ -74,6 +84,19 @@ def execute_task(task: dict[str, Any], worker_id: str) -> WorkerResult:
         f"Unsupported task_type: {task_type}",
         escalation_type="unrecoverable_failure",
         error_text=f"No hosted handler implemented for {task_type}",
+    )
+
+
+def _is_trading_generic_spec(spec: dict[str, Any]) -> bool:
+    category = str(spec.get("category") or "").strip().lower()
+    origin = str(spec.get("origin_module") or "").strip().lower()
+    notes = str(spec.get("notes") or "").lower()
+    description = str(spec.get("description") or "").lower()
+    return (
+        category == "trading"
+        or origin == "autotrader"
+        or "symbol:" in notes
+        or "symbol:" in description
     )
 
 

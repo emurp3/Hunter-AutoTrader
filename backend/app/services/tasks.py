@@ -439,8 +439,10 @@ _CATEGORY_TO_TASK_TYPE: dict[str, str] = {
 }
 
 
-def resolve_task_type(source) -> str:
-    """Map an IncomeSource to the appropriate task_type string."""
+def resolve_task_type(source, *, execution_path: Optional[str] = None) -> Optional[str]:
+    """Map an IncomeSource to the appropriate hosted worker task_type string."""
+    if execution_path == "trading":
+        return None
     if source.origin_module:
         t = _ORIGIN_TO_TASK_TYPE.get(source.origin_module)
         if t:
@@ -449,7 +451,7 @@ def resolve_task_type(source) -> str:
         t = _CATEGORY_TO_TASK_TYPE.get(source.category.lower())
         if t:
             return t
-    return "generic_execution"
+    return None
 
 
 # ── Auto-dispatch (called from orchestrator) ──────────────────────────────────
@@ -468,7 +470,17 @@ def auto_dispatch_for_source(source_id: str, session: Session) -> Optional[Task]
     if not source:
         return None
 
-    task_type = resolve_task_type(source)
+    from app.models.decision import OpportunityDecision
+
+    decision = session.exec(
+        select(OpportunityDecision).where(OpportunityDecision.source_id == source_id)
+    ).first()
+    task_type = resolve_task_type(
+        source,
+        execution_path=decision.execution_path if decision else None,
+    )
+    if not task_type:
+        return None
     idem_key = f"source:{source_id}:{task_type}"
 
     spec: dict[str, Any] = {

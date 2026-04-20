@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 
 from app.models.action_packet import ActionPacket, ExecutionState, PacketStatus
 from app.models.budget import AllocationStatus, BudgetAllocation
-from app.models.task import Task, TaskAttempt
+from app.models.task import Task, TaskAttempt, TaskStatus
 
 _MAX_ERROR_MESSAGE = 280
 _MAX_RECENT_ERRORS = 40
@@ -195,28 +195,49 @@ def get_task_type_summary(session: Session) -> dict[str, Any]:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     tasks = session.exec(select(Task).where(Task.created_at >= cutoff)).all()
     unsupported = [task for task in tasks if task.task_type not in _SUPPORTED_TASK_TYPES]
+    active_statuses = {
+        TaskStatus.created,
+        TaskStatus.dispatched,
+        TaskStatus.executing,
+        TaskStatus.retrying,
+    }
+    active_unsupported = [task for task in unsupported if task.status in active_statuses]
     counts = Counter(task.task_type for task in unsupported)
+    active_counts = Counter(task.task_type for task in active_unsupported)
     latest = None
+    for task in sorted(
+        active_unsupported,
+        key=lambda item: item.created_at,
+        reverse=True,
+    ):
+        latest = task
+        break
+    latest_historical = None
     for task in sorted(
         unsupported,
         key=lambda item: item.escalated_at or item.failed_at or item.created_at,
         reverse=True,
     ):
-        latest = task
+        latest_historical = task
         break
 
     return {
-        "status": "ok",
+        "status": "error" if active_unsupported else "ok",
         "last_success_at": _utc_now_iso(),
         "last_error_at": latest.escalated_at.isoformat() if latest and latest.escalated_at else (
-            latest.failed_at.isoformat() if latest and latest.failed_at else None
+            latest.failed_at.isoformat() if latest and latest.failed_at else (
+                latest.created_at.isoformat() if latest else None
+            )
         ),
         "error_message": f"Unsupported task_type: {latest.task_type}" if latest else None,
         "error_type": "UnsupportedTaskType" if latest else None,
         "affected_component": "execution.task_types",
+        "active_unsupported_task_count": len(active_unsupported),
+        "active_unsupported_task_types": sorted(active_counts.keys()),
         "unsupported_task_count_24h": len(unsupported),
         "unsupported_task_types": sorted(counts.keys()),
         "unsupported_task_type_counts": dict(sorted(counts.items())),
+        "latest_historical_unsupported_task_type": latest_historical.task_type if latest_historical else None,
     }
 
 

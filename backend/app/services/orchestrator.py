@@ -108,6 +108,7 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
     )
 
     # Decision engine — route to action state + execution path
+    decision = None
     decision_id = None
     try:
         from app.services import decision as decision_svc
@@ -119,7 +120,8 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
     # Auto-dispatch: high/elite always; also medium-band creation_lane opportunities
     task_id = None
     _should_dispatch = result.priority_band in (PriorityBand.elite, PriorityBand.high, PriorityBand.medium)
-    if _should_dispatch:
+    _is_worker_routable = bool(decision and decision.execution_path != "trading")
+    if _should_dispatch and _is_worker_routable:
         try:
             from app.services.tasks import auto_dispatch_for_source
             task = auto_dispatch_for_source(source.source_id, session)
@@ -130,12 +132,10 @@ def process_new_opportunity(source: IncomeSource, session: Session) -> dict:
 
     # Auto-trade: execution_ready trading decisions fire Alpaca orders immediately
     trade_placed = False
-    if decision_id:
+    if decision:
         try:
-            from app.services import decision as decision_svc
             from app.services.execution import auto_place_trade_for_source
-            dec = decision_svc.get_decision(source.source_id, session)
-            if dec and dec.execution_ready and dec.execution_path == "trading":
+            if decision.execution_ready and decision.execution_path == "trading":
                 trade_result = auto_place_trade_for_source(source.source_id, session)
                 trade_placed = trade_result is not None
         except Exception as _exc:  # noqa: BLE001

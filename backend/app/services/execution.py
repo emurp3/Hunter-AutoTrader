@@ -35,6 +35,7 @@ from app.models.income_source import IncomeSource, SourceStatus
 from app.models.provider_execution import ProviderExecution
 from app.models.strategy import Strategy, StrategyStatus
 from app.services import alerts as alert_svc
+from app.services import diagnostics as diag_svc
 from app.services import events as event_svc
 from app.services import position_lifecycle as lifecycle_svc
 
@@ -879,6 +880,222 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
     except Exception as exc:
         _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
         return None
+
+
+def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[TradeResult]:
+    """
+    Auto-place an Alpaca market order for an execution_ready trading source.
+    Called from the orchestrator pipeline and routes through packet execution
+    so live submissions move Hunter's execution state, provider records, and
+    diagnostics together.
+    """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    from sqlmodel import select as _select
+    from app.models.decision import ExecutionPath, OpportunityDecision
+
+    decision = session.exec(
+        _select(OpportunityDecision).where(OpportunityDecision.source_id == source_id)
+    ).first()
+    if not decision or not decision.execution_ready:
+        return None
+    if decision.execution_path != ExecutionPath.trading:
+        return None
+
+    source = session.exec(
+        _select(IncomeSource).where(IncomeSource.source_id == source_id)
+    ).first()
+    if not source:
+        return None
+
+    packet = _get_packet_for_source(source_id, session)
+
+    if not ALPACA_ENABLED:
+        reason = "Execution provider disabled"
+        _logger.debug("auto_place_trade: %s - skipping %s", reason, source_id)
+        diag_svc.record_error(
+            "execution.status",
+            reason,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": packet.id if packet else None},
+        )
+        _mark_packet_trade_skipped(packet, session, reason)
+        return None
+
+    if not packet:
+        reason = "No action packet exists for trading source"
+        _logger.warning("auto_place_trade: %s %s", reason, source_id)
+        diag_svc.record_error(
+            "execution.status",
+            reason,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": None},
+        )
+        return None
+
+    symbol = _extract_trade_symbol(source)
+    if not symbol:
+        reason = "No trade symbol found in source description or notes"
+        _logger.warning("auto_place_trade: %s - skipping %s", reason, source_id)
+        diag_svc.record_error(
+            "execution.status",
+            reason,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": packet.id},
+        )
+        _mark_packet_trade_skipped(packet, session, reason)
+        return None
+
+    allocation = _get_allocation(source_id, session)
+    if not allocation or allocation.status not in (AllocationStatus.planned, AllocationStatus.active):
+        reason = "No funded allocation is available for trade submission"
+        _logger.warning("auto_place_trade: %s - skipping %s", reason, source_id)
+        diag_svc.record_error(
+            "execution.status",
+            reason,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": packet.id},
+        )
+        _mark_packet_trade_skipped(packet, session, reason)
+        return None
+
+    notional = float(allocation.amount_allocated)
+    if not notional or notional <= 0:
+        reason = "Allocated notional is not greater than zero"
+        _logger.warning("auto_place_trade: %s - skipping %s", reason, source_id)
+        diag_svc.record_error(
+            "execution.status",
+            reason,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": packet.id},
+        )
+        _mark_packet_trade_skipped(packet, session, reason)
+        return None
+
+    side = _extract_trade_side(source)
+    order = TradeOrder(symbol=symbol, side=side, notional=notional, order_type="market", time_in_force="day")
+
+    try:
+        result = submit_packet_trade(packet.id, order, session)
+        diag_svc.record_success(
+            "execution.status",
+            metadata={
+                "source_id": source_id,
+                "packet_id": packet.id,
+                "symbol": symbol,
+                "side": side,
+                "notional": notional,
+                "submission_status": result.status,
+            },
+        )
+        _logger.info(
+            "auto_place_trade: packet=%s %s %s $%.2f notional - order_id=%s status=%s mode=%s",
+            packet.id, side.upper(), symbol, notional, result.order_id, result.status,
+            "paper" if ALPACA_PAPER else "live",
+        )
+        return result
+    except ValueError as exc:
+        err = str(exc)
+        if "already has a provider order in flight" in err:
+            diag_svc.record_success(
+                "execution.status",
+                metadata={
+                    "source_id": source_id,
+                    "packet_id": packet.id,
+                    "skip_reason": "provider_order_already_in_flight",
+                },
+            )
+            _logger.info("auto_place_trade: existing provider order in flight for source %s", source_id)
+            return None
+        diag_svc.record_error(
+            "execution.status",
+            err,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": packet.id},
+        )
+        _mark_packet_trade_skipped(packet, session, err)
+        _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
+        return None
+    except Exception as exc:
+        diag_svc.record_error(
+            "execution.status",
+            exc,
+            affected_component="execution.auto_trade",
+            metadata={"source_id": source_id, "packet_id": packet.id},
+        )
+        _mark_packet_trade_skipped(packet, session, str(exc), canceled=False)
+        _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
+        return None
+
+
+def _get_packet_for_source(source_id: str, session: Session) -> Optional[ActionPacket]:
+    return session.exec(
+        select(ActionPacket)
+        .where(ActionPacket.source_id == source_id)
+        .order_by(ActionPacket.created_at.desc())
+    ).first()
+
+
+def _mark_packet_trade_skipped(
+    packet: Optional[ActionPacket],
+    session: Session,
+    reason: str,
+    *,
+    canceled: bool = True,
+) -> None:
+    if not packet:
+        return
+    if packet.execution_state in (ExecutionState.completed, ExecutionState.failed, ExecutionState.canceled):
+        return
+    notes = f"Trade skipped before broker submission: {reason}"
+    try:
+        fail_packet_execution(
+            packet.id,
+            session,
+            failure_reason=reason,
+            notes=notes,
+            canceled=canceled,
+        )
+    except Exception:
+        now = datetime.now(timezone.utc)
+        packet.execution_state = ExecutionState.canceled if canceled else ExecutionState.failed
+        packet.execution_updated_at = now
+        packet.execution_notes = notes
+        if canceled:
+            packet.execution_canceled_at = packet.execution_canceled_at or now
+        else:
+            packet.execution_failed_at = packet.execution_failed_at or now
+        session.add(packet)
+
+        allocation = _get_allocation(packet.source_id, session)
+        if allocation:
+            allocation.status = AllocationStatus.canceled if canceled else AllocationStatus.failed
+            allocation.updated_at = now
+            if canceled:
+                allocation.canceled_at = allocation.canceled_at or now
+            else:
+                allocation.failed_at = allocation.failed_at or now
+            session.add(allocation)
+
+        existing_outcome = session.exec(
+            select(ExecutionOutcome)
+            .where(ExecutionOutcome.action_packet_id == packet.id)
+            .order_by(ExecutionOutcome.recorded_at.desc())
+        ).first()
+        if not existing_outcome:
+            session.add(
+                ExecutionOutcome(
+                    action_packet_id=packet.id,
+                    allocation_id=allocation.id if allocation else None,
+                    source_id=packet.source_id,
+                    execution_state=packet.execution_state,
+                    allocated_amount=allocation.amount_allocated if allocation else None,
+                    failure_reason=reason,
+                    notes=notes,
+                )
+            )
+        session.commit()
 
 
 def _extract_trade_symbol(source: IncomeSource) -> Optional[str]:
