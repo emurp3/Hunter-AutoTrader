@@ -822,7 +822,7 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
     internal_funded_count = len(db_funded)
 
     # ── Month-end review snapshot ─────────────────────────────────────────────
-    ending_bankroll = internal_bankroll
+    ending_bankroll = raw_internal_bankroll
     net_gain = round(ending_bankroll - starting_bankroll, 2)
     growth_pct = round((net_gain / starting_bankroll) * 100, 2) if starting_bankroll else 0.0
     doubling_threshold = round(starting_bankroll * 2, 2)
