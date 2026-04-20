@@ -827,8 +827,19 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   // Strategy / broker metadata
   const strategyMode = cs?.strategy_mode ?? budget?.strategy_mode ?? 'RECYCLE'
   const liveExecStrategy = cs?.live_execution_strategy ?? budget?.live_execution_strategy ?? 'INTRADAY_RECYCLE'
-  const executionMode = cs?.execution_mode ?? budget?.execution_mode ?? 'sandbox'
-  const isLiveMode = executionMode === 'live'
+  const brokerMode =
+    cs?.broker_mode ??
+    budget?.broker_mode ??
+    readiness?.broker_account_mode ??
+    readiness?.modules?.brokerage?.account_mode ??
+    'unknown'
+  const executionPolicyMode =
+    cs?.execution_mode ??
+    budget?.execution_mode ??
+    readiness?.execution_policy_mode ??
+    readiness?.execution_mode ??
+    'guardrailed'
+  const isLiveMode = brokerMode === 'live'
   const lastBrokerSyncAt = cs?.last_broker_sync_at ?? budget?.last_broker_sync_at ?? null
   const brokerSyncSuccess = cs?.broker_sync_success ?? budget?.broker_sync_success ?? false
   const mismatchDetected = cs?.mismatch_detected ?? budget?.mismatch_detected ?? false
@@ -848,16 +859,40 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const capitalReserveBuffer = brokerBuyingPower > 0
     ? Math.max(0, brokerBuyingPower - availableCapital)
     : 2.00
+  const brokerModeLabel =
+    brokerMode === 'live'
+      ? 'Live broker'
+      : brokerMode === 'paper'
+        ? 'Paper broker'
+        : 'Broker mode unknown'
+  const brokerModeBadge =
+    brokerMode === 'live'
+      ? 'LIVE BROKER'
+      : brokerMode === 'paper'
+        ? 'PAPER BROKER'
+        : 'BROKER UNKNOWN'
+  const executionPolicyLabel =
+    executionPolicyMode === 'live'
+      ? 'Live execution policy'
+      : executionPolicyMode === 'sandbox'
+        ? 'Guardrailed execution policy'
+        : `${String(executionPolicyMode).replace(/_/g, ' ')} execution policy`
+  const executionPolicyBadge =
+    executionPolicyMode === 'live'
+      ? 'LIVE EXECUTION'
+      : 'GUARDRAILED EXECUTION'
+  const brokerApiOnline =
+    brokerSyncSuccess ||
+    readiness?.broker_connection_ready ||
+    readiness?.modules?.brokerage?.connected ||
+    readiness?.modules?.sandbox_brokerage?.connected ||
+    false
   const capitalTruthLabel = brokerSyncSuccess
     ? 'Broker truth'
-    : isLiveMode
-      ? 'Internal ledger fallback'
-      : 'Sandbox ledger'
+    : 'Internal ledger fallback'
   const capitalTruthCopy = brokerSyncSuccess
     ? 'These capital numbers are sourced from the broker-reconciled capital endpoint and reflect account truth.'
-    : isLiveMode
-      ? 'Broker sync is unavailable, so Hunter is falling back to internal ledger values. The cards stay visible, but they are labeled as fallback.'
-      : 'Sandbox mode is using Hunter ledger values instead of a live broker account.'
+    : 'Broker sync is unavailable, so Hunter is falling back to internal ledger values. The cards stay visible, but they are labeled as fallback.'
   const capitalUnavailableCopy =
     'No broker or ledger capital payload is available yet. The broker block stays visible so missing capital data is explicit instead of hidden.'
   const capitalTruthTimestamp = lastBrokerSyncAt ? new Date(lastBrokerSyncAt).toLocaleTimeString() : null
@@ -1059,17 +1094,17 @@ export default function OperationsPage({ onBack, onAuthFail }) {
           {readiness && (
             <span
               className={`ops-status-badge ops-status-badge--${
-                readiness.execution_mode === 'live' ? 'live-mode' : 'sandbox-mode'
+                brokerMode === 'live' ? 'live-mode' : 'sandbox-mode'
               }`}
             >
-              {readiness.execution_mode === 'live' ? 'LIVE BROKER' : 'SANDBOX'}
+              {brokerModeBadge}
             </span>
           )}
           {readiness && (
             <span
-              className={`ops-status-badge ops-status-badge--${readiness.sandbox_ready ? 'ready' : 'not-ready'}`}
+              className={`ops-status-badge ops-status-badge--${brokerApiOnline ? 'ready' : 'not-ready'}`}
             >
-              {readiness.sandbox_ready ? 'BROKER CONNECTED' : 'BROKER OFFLINE'}
+              {brokerApiOnline ? 'BROKER API ONLINE' : 'BROKER API OFFLINE'}
             </span>
           )}
           <span className={`ops-status-badge ops-status-badge--${usingFallback ? 'fallback' : 'live'}`}>
@@ -1143,15 +1178,18 @@ export default function OperationsPage({ onBack, onAuthFail }) {
             <section className="ops-readiness-panel">
               <div className="ops-readiness-header">
                 <h3>System Readiness</h3>
-                <span className={`readiness-mode-badge readiness-mode-badge--${readiness.execution_mode}`}>
-                  {readiness.execution_mode === 'live' ? 'LIVE BROKER MODE' : `${readiness.execution_mode?.toUpperCase()} MODE`}
+                <span className={`readiness-mode-badge readiness-mode-badge--${brokerMode === 'live' ? 'live' : 'sandbox'}`}>
+                  {brokerMode === 'live' ? 'LIVE BROKER ACCOUNT' : brokerMode === 'paper' ? 'PAPER BROKER ACCOUNT' : 'BROKER ACCOUNT UNKNOWN'}
                 </span>
                 <span
                   className={`readiness-status-badge readiness-status-badge--${
-                    readiness.sandbox_ready ? 'ready' : 'blocked'
+                    brokerApiOnline ? 'ready' : 'blocked'
                   }`}
                 >
-                  {readiness.sandbox_ready ? 'Sandbox Ready' : 'Not Ready'}
+                  {brokerApiOnline ? 'Broker API Ready' : 'Broker API Offline'}
+                </span>
+                <span className={`readiness-mode-badge readiness-mode-badge--${executionPolicyMode === 'live' ? 'live' : 'sandbox'}`}>
+                  {executionPolicyBadge}
                 </span>
               </div>
 
@@ -1350,20 +1388,23 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                     <div className="ops-kicker" style={{display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap'}}>
                       <span>{fallbackActive || autotraderOffline ? 'Seed Mode — Capital Tracking Active' : 'Live Capital State'}</span>
                       <span style={{background:'#e8f4fd', color:'#0c63e4', borderRadius:'4px', padding:'2px 8px', fontSize:'11px', fontWeight:700}}>
-                        {strategyMode}
+                      {strategyMode}
                       </span>
                       <span style={{background:'#f0f0f0', color:'#555', borderRadius:'4px', padding:'2px 8px', fontSize:'11px'}}>
                         {liveExecStrategy}
                       </span>
-                      <span style={{background: isLiveMode ? '#d4edda' : '#fff3cd', color: isLiveMode ? '#155724' : '#856404', borderRadius:'4px', padding:'2px 8px', fontSize:'11px', fontWeight:600}}>
-                        {executionMode.toUpperCase()}
+                      <span style={{background: brokerMode === 'live' ? '#d4edda' : '#fff3cd', color: brokerMode === 'live' ? '#155724' : '#856404', borderRadius:'4px', padding:'2px 8px', fontSize:'11px', fontWeight:600}}>
+                        {brokerModeBadge}
+                      </span>
+                      <span style={{background: executionPolicyMode === 'live' ? '#d4edda' : '#f0f0f0', color: executionPolicyMode === 'live' ? '#155724' : '#555', borderRadius:'4px', padding:'2px 8px', fontSize:'11px', fontWeight:600}}>
+                        {executionPolicyBadge}
                       </span>
                     </div>
                     <h3>
                       Broker state stays visible even when planning is closed or broker sync is degraded.
                     </h3>
                     <p style={{fontSize:'12px', color:'#888', marginTop:'4px'}}>
-                      {hasCapitalSource ? capitalTruthCopy : capitalUnavailableCopy}
+                      {hasCapitalSource ? `${brokerModeLabel}. ${capitalTruthCopy}` : capitalUnavailableCopy}
                       {capitalTruthTimestamp && (
                         <> Last sync attempt: <strong>{capitalTruthTimestamp}</strong>{brokerSyncSuccess ? ' (verified)' : ' (unverified)'}</>
                       )}

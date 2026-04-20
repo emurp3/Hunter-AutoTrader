@@ -255,6 +255,8 @@ def sandbox_readiness(session: Session = Depends(get_session)):
     sandbox_ready = sandbox_creds_present and sandbox_connected and paper_enforced
 
     live_structurally_ready = live_config["live_mode_structurally_ready"]
+    broker_account_mode = "paper" if ALPACA_PAPER else "live"
+    execution_policy_mode = EXECUTION_MODE
 
     # Blockers
     blockers = []
@@ -299,6 +301,9 @@ def sandbox_readiness(session: Session = Depends(get_session)):
 
     return {
         "sandbox_ready": sandbox_ready,
+        "broker_connection_ready": sandbox_connected,
+        "broker_account_mode": broker_account_mode,
+        "execution_policy_mode": execution_policy_mode,
         "live_mode_structurally_ready": live_structurally_ready,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "execution_mode": EXECUTION_MODE,
@@ -312,6 +317,14 @@ def sandbox_readiness(session: Session = Depends(get_session)):
             "sandbox_brokerage": {
                 "status": "connected" if sandbox_connected else "disconnected",
                 "mode": "paper",
+                "account_mode": broker_account_mode,
+                **sandbox_brokerage,
+            },
+            "brokerage": {
+                "status": "connected" if sandbox_connected else "disconnected",
+                "provider": EXECUTION_PROVIDER,
+                "account_mode": broker_account_mode,
+                "execution_policy_mode": execution_policy_mode,
                 **sandbox_brokerage,
             },
             "live_brokerage": {
@@ -337,6 +350,8 @@ def sandbox_readiness(session: Session = Depends(get_session)):
         },
         "accounts": {
             "sandbox_account_connected": sandbox_connected,
+            "broker_account_connected": sandbox_connected,
+            "broker_account_mode": broker_account_mode,
             "sandbox_account_id": sandbox_brokerage.get("account_id"),
             "live_account_config_present": bool(LIVE_API_KEY and LIVE_SECRET_KEY),
             "live_account_connected": EXECUTION_MODE == "live" and bool(LIVE_API_KEY and LIVE_SECRET_KEY),
