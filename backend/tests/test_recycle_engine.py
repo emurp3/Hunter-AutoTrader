@@ -36,6 +36,12 @@ os.environ.setdefault("REPLACEMENT_RANK_THRESHOLD", "0.15")
 os.environ.setdefault("FORCE_SELL_END_OF_DAY", "true")
 os.environ.setdefault("ALLOW_OVERNIGHT_HOLD", "false")
 os.environ.setdefault("PYRAMIDING_ENABLED", "false")
+os.environ.setdefault("LIVE_EXECUTION_PROFILE", "FAST_RECYCLE")
+os.environ.setdefault("USE_ONLY_FAST_RECYCLE_BUCKET", "true")
+os.environ.setdefault("FAST_RECYCLE_TRANCHE", "50")
+os.environ.setdefault("FAST_RECYCLE_MAX_HOLD_MINUTES", "45")
+os.environ.setdefault("FAST_RECYCLE_MAX_POSITION_DOLLARS", "15.0")
+os.environ.setdefault("FAST_RECYCLE_MAX_OPEN_POSITIONS", "3")
 
 import pytest
 
@@ -194,6 +200,26 @@ class TestEvaluateExits:
         assert len(decisions) == 1
         assert decisions[0].exit_reason == ExitReason.OVERNIGHT_PREVENTION
 
+    def test_fast_recycle_positions_use_fast_hold_limit(self):
+        from app.services.recycle_engine import evaluate_exits, ExitReason
+
+        pos = _make_position("AAPL", upl_pct=0.001, hold_minutes=50.0)
+        state = _make_broker_state(positions=[pos])
+        decisions = evaluate_exits(
+            state,
+            position_meta={
+                "AAPL": {
+                    "capital_bucket": "fast_recycle",
+                    "max_hold_minutes": 30.0,
+                }
+            },
+        )
+
+        assert len(decisions) == 1
+        assert decisions[0].exit_reason == ExitReason.MAX_HOLD_TIME
+        assert decisions[0].capital_bucket == "fast_recycle"
+        assert decisions[0].stale_position is True
+
 
 # ── Entry evaluation tests ────────────────────────────────────────────────────
 
@@ -308,6 +334,77 @@ class TestEvaluateEntries:
         assert "HIGH" in symbols
         assert "MED" in symbols
         assert "LOW" not in symbols
+
+    def test_fast_recycle_entries_use_bucket_caps_not_legacy_slot_pressure(self):
+        from app.services.recycle_engine import FastRecycleState, evaluate_entries
+        import app.services.recycle_engine as re_mod
+
+        orig_global_max = re_mod.MAX_OPEN_POSITIONS
+        orig_fast_max_dollars = re_mod.FAST_RECYCLE_MAX_POSITION_DOLLARS
+        try:
+            re_mod.MAX_OPEN_POSITIONS = 1
+            re_mod.FAST_RECYCLE_MAX_POSITION_DOLLARS = 12.0
+            state = _make_broker_state(
+                positions=[_make_position("LEG1"), _make_position("LEG2")],
+                buying_power=80.0,
+                effective_buying_power=40.0,
+                cash=80.0,
+            )
+            fast_state = FastRecycleState(
+                total_capital=50.0,
+                gross_capital=50.0,
+                available_to_deploy=18.0,
+                deployed_capital=30.0,
+                open_positions_count=0,
+                legacy_open_positions_count=2,
+                enabled=True,
+            )
+            candidates = self._candidates([("AAPL", 0.82)])
+            entries = evaluate_entries(state, candidates, fast_recycle=fast_state)
+        finally:
+            re_mod.MAX_OPEN_POSITIONS = orig_global_max
+            re_mod.FAST_RECYCLE_MAX_POSITION_DOLLARS = orig_fast_max_dollars
+
+        assert len(entries) == 1
+        assert entries[0].capital_bucket == "fast_recycle"
+        assert entries[0].execution_profile == "FAST_RECYCLE"
+        assert entries[0].notional <= 12.0
+
+    def test_pending_sell_order_blocks_new_fast_entry(self):
+        from app.services.recycle_engine import FastRecycleState, evaluate_entries
+        from app.services.broker_reconciliation import OpenOrderSnapshot
+
+        sell_order = OpenOrderSnapshot(
+            order_id="sell-1",
+            symbol="AAPL",
+            side="sell",
+            qty=1.0,
+            notional=None,
+            status="new",
+            submitted_at=None,
+            age_seconds=10.0,
+            is_stale=False,
+        )
+        state = _make_broker_state(
+            positions=[],
+            buying_power=80.0,
+            effective_buying_power=40.0,
+            open_sell_orders=[sell_order],
+            cash=80.0,
+        )
+        fast_state = FastRecycleState(
+            total_capital=50.0,
+            gross_capital=50.0,
+            available_to_deploy=18.0,
+            deployed_capital=0.0,
+            open_positions_count=0,
+            legacy_open_positions_count=0,
+            enabled=True,
+        )
+        candidates = self._candidates([("AAPL", 0.82)])
+        entries = evaluate_entries(state, candidates, fast_recycle=fast_state)
+
+        assert entries == []
 
 
 # ── Replacement evaluation tests ──────────────────────────────────────────────

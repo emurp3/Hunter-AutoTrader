@@ -29,6 +29,8 @@ from app.config import (
     DEEPSEEK_API_KEY,
     EXECUTION_MODE,
     EXECUTION_PROVIDER,
+    FAST_RECYCLE_TRANCHE,
+    LIVE_EXECUTION_PROFILE,
     GROK_API_KEY,
     LIVE_API_KEY,
     LIVE_BASE_URL,
@@ -38,6 +40,7 @@ from app.config import (
     SANDBOX_SECRET_KEY,
     SOURCES_WEEKLY_MINIMUM,
     STRATEGY_WEEKLY_MINIMUM,
+    USE_ONLY_FAST_RECYCLE_BUCKET,
     VENICE_API_KEY,
     WEEKLY_BUDGET,
 )
@@ -365,6 +368,9 @@ def sandbox_readiness(session: Session = Depends(get_session)):
             "starting_bankroll": open_budget.starting_bankroll if open_budget else WEEKLY_BUDGET,
             "available": budget_status.get("available_capital", 0),
             "status": "open" if open_budget else "no_cycle",
+            "fast_recycle_tranche": FAST_RECYCLE_TRANCHE,
+            "live_execution_profile": LIVE_EXECUTION_PROFILE,
+            "use_only_fast_recycle_bucket": USE_ONLY_FAST_RECYCLE_BUCKET,
         },
         "env_vars": env_check,
         "live_activation": {

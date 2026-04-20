@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
-from app.config import MAX_HOLD_MINUTES
+from app.config import FAST_RECYCLE_MAX_HOLD_MINUTES, MAX_HOLD_MINUTES
 from app.models.position_lifecycle import PositionLifecycle
 
 
@@ -19,6 +20,8 @@ def record_entry_submission(
     provider_order_id: Optional[str] = None,
     entered_at: Optional[datetime] = None,
     max_hold_minutes: Optional[float] = None,
+    capital_bucket: str = "legacy",
+    execution_profile: Optional[str] = None,
     commit: bool = True,
 ) -> PositionLifecycle:
     now = _coerce_dt(entered_at) or datetime.now(timezone.utc)
@@ -36,12 +39,16 @@ def record_entry_submission(
             packet_id=packet_id,
             allocation_id=allocation_id,
             entered_at=now,
+            capital_bucket=capital_bucket,
+            execution_profile=execution_profile,
             max_hold_minutes=float(max_hold_minutes or MAX_HOLD_MINUTES),
         )
     lifecycle.status = "open"
     lifecycle.source_id = source_id or lifecycle.source_id
     lifecycle.packet_id = packet_id or lifecycle.packet_id
     lifecycle.allocation_id = allocation_id or lifecycle.allocation_id
+    lifecycle.capital_bucket = capital_bucket or lifecycle.capital_bucket or "legacy"
+    lifecycle.execution_profile = execution_profile or lifecycle.execution_profile
     lifecycle.entered_at = lifecycle.entered_at or now
     lifecycle.entry_order_id = provider_order_id or lifecycle.entry_order_id
     lifecycle.max_hold_minutes = float(lifecycle.max_hold_minutes or max_hold_minutes or MAX_HOLD_MINUTES)
@@ -63,6 +70,8 @@ def record_exit_submission(
     source_id: Optional[str] = None,
     packet_id: Optional[int] = None,
     submitted_at: Optional[datetime] = None,
+    stale_reason: Optional[str] = None,
+    exit_reason: Optional[str] = None,
     commit: bool = True,
 ) -> Optional[PositionLifecycle]:
     lifecycle = _find_latest_open_lifecycle(
@@ -76,6 +85,10 @@ def record_exit_submission(
     now = _coerce_dt(submitted_at) or datetime.now(timezone.utc)
     lifecycle.exit_submitted_at = lifecycle.exit_submitted_at or now
     lifecycle.exit_order_id = provider_order_id or lifecycle.exit_order_id
+    lifecycle.exit_reason = exit_reason or lifecycle.exit_reason
+    if stale_reason:
+        lifecycle.stale_marked_at = lifecycle.stale_marked_at or now
+        lifecycle.stale_reason = stale_reason
     lifecycle.updated_at = datetime.now(timezone.utc)
     session.add(lifecycle)
     if commit:
@@ -94,6 +107,7 @@ def close_lifecycle_for_execution(
     packet_id: Optional[int] = None,
     actual_return: Optional[float] = None,
     exited_at: Optional[datetime] = None,
+    exit_reason: Optional[str] = None,
     commit: bool = True,
 ) -> Optional[PositionLifecycle]:
     lifecycle = _find_latest_open_lifecycle(
@@ -109,6 +123,7 @@ def close_lifecycle_for_execution(
     lifecycle.exited_at = now
     lifecycle.status = "closed"
     lifecycle.realized_pl = actual_return
+    lifecycle.exit_reason = exit_reason or lifecycle.exit_reason
     _compute_closed_metrics(lifecycle)
     lifecycle.updated_at = datetime.now(timezone.utc)
     session.add(lifecycle)
@@ -138,7 +153,21 @@ def sync_lifecycles_with_broker_state(session: Session, broker_state) -> None:
         lifecycle.entered_at = lifecycle.entered_at or broker_entry_at
         lifecycle.entry_filled_at = lifecycle.entry_filled_at or broker_entry_at
         lifecycle.hold_duration_minutes = position.hold_minutes
-        lifecycle.max_hold_minutes = float(lifecycle.max_hold_minutes or MAX_HOLD_MINUTES)
+        lifecycle.max_hold_minutes = float(
+            lifecycle.max_hold_minutes
+            or (
+                FAST_RECYCLE_MAX_HOLD_MINUTES
+                if lifecycle.capital_bucket == "fast_recycle"
+                else MAX_HOLD_MINUTES
+            )
+        )
+        if (
+            lifecycle.max_hold_minutes is not None
+            and position.hold_minutes is not None
+            and position.hold_minutes >= lifecycle.max_hold_minutes
+        ):
+            lifecycle.stale_marked_at = lifecycle.stale_marked_at or now
+            lifecycle.stale_reason = lifecycle.stale_reason or "max_hold_exceeded"
         lifecycle.updated_at = now
         session.add(lifecycle)
 
@@ -170,11 +199,16 @@ def serialize_lifecycle(lifecycle: Optional[PositionLifecycle]) -> Optional[dict
         "packet_id": lifecycle.packet_id,
         "allocation_id": lifecycle.allocation_id,
         "status": lifecycle.status,
+        "capital_bucket": lifecycle.capital_bucket,
+        "execution_profile": lifecycle.execution_profile,
         "entered_at": _iso(lifecycle.entered_at),
         "entry_filled_at": _iso(lifecycle.entry_filled_at),
         "exit_submitted_at": _iso(lifecycle.exit_submitted_at),
         "exited_at": _iso(lifecycle.exited_at),
         "first_profitable_at": _iso(lifecycle.first_profitable_at),
+        "stale_marked_at": _iso(lifecycle.stale_marked_at),
+        "stale_reason": lifecycle.stale_reason,
+        "exit_reason": lifecycle.exit_reason,
         "hold_duration_minutes": lifecycle.hold_duration_minutes,
         "time_to_realized_profit_minutes": lifecycle.time_to_realized_profit_minutes,
         "max_hold_minutes": lifecycle.max_hold_minutes,
@@ -201,6 +235,7 @@ def get_latest_lifecycle(
     symbol: Optional[str] = None,
     source_id: Optional[str] = None,
     packet_id: Optional[int] = None,
+    capital_bucket: Optional[str] = None,
 ) -> Optional[PositionLifecycle]:
     statement = select(PositionLifecycle)
     if packet_id is not None:
@@ -209,8 +244,10 @@ def get_latest_lifecycle(
         statement = statement.where(PositionLifecycle.source_id == source_id)
     if symbol:
         statement = statement.where(PositionLifecycle.symbol == symbol.upper())
+    if capital_bucket:
+        statement = statement.where(PositionLifecycle.capital_bucket == capital_bucket)
     statement = statement.order_by(PositionLifecycle.updated_at.desc(), PositionLifecycle.created_at.desc())
-    return session.exec(statement).first()
+    return _exec_first_safe(session, statement)
 
 
 def enrich_broker_positions_with_lifecycle(session: Session, positions: list[dict]) -> list[dict]:
@@ -223,13 +260,30 @@ def enrich_broker_positions_with_lifecycle(session: Session, positions: list[dic
         enriched.append(
             {
                 **position,
+                "capital_bucket": lifecycle.capital_bucket if lifecycle else "legacy",
+                "execution_profile": lifecycle.execution_profile if lifecycle else None,
                 "entered_at": _iso(lifecycle.entered_at) if lifecycle else None,
                 "entry_filled_at": _iso(lifecycle.entry_filled_at) if lifecycle else None,
+                "stale_marked_at": _iso(lifecycle.stale_marked_at) if lifecycle else None,
+                "stale_reason": lifecycle.stale_reason if lifecycle else None,
                 "max_hold_minutes": max_hold,
                 "over_max_hold": bool(current_hold is not None and max_hold is not None and current_hold >= max_hold),
             }
         )
     return enriched
+
+
+def get_lifecycles_by_bucket(
+    session: Session,
+    *,
+    capital_bucket: str,
+    status: Optional[str] = None,
+) -> list[PositionLifecycle]:
+    statement = select(PositionLifecycle).where(PositionLifecycle.capital_bucket == capital_bucket)
+    if status:
+        statement = statement.where(PositionLifecycle.status == status)
+    statement = statement.order_by(PositionLifecycle.updated_at.desc(), PositionLifecycle.created_at.desc())
+    return _exec_all_safe(session, statement)
 
 
 def _find_latest_open_lifecycle(
@@ -250,7 +304,29 @@ def _find_latest_open_lifecycle(
     if allocation_id is not None:
         statement = statement.where(PositionLifecycle.allocation_id == allocation_id)
     statement = statement.order_by(PositionLifecycle.updated_at.desc(), PositionLifecycle.created_at.desc())
-    return session.exec(statement).first()
+    return _exec_first_safe(session, statement)
+
+
+def _exec_first_safe(session: Session, statement):
+    try:
+        return session.exec(statement).first()
+    except OperationalError as exc:
+        if _is_missing_table_error(exc):
+            return None
+        raise
+
+
+def _exec_all_safe(session: Session, statement) -> list:
+    try:
+        return list(session.exec(statement).all())
+    except OperationalError as exc:
+        if _is_missing_table_error(exc):
+            return []
+        raise
+
+
+def _is_missing_table_error(exc: OperationalError) -> bool:
+    return "no such table" in str(exc).lower()
 
 
 def _compute_closed_metrics(lifecycle: PositionLifecycle) -> None:

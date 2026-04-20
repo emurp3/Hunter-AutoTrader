@@ -881,6 +881,19 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const openBuyOrdersCount = cs?.open_buy_orders_count ?? cs?.broker?.open_buy_orders_count ?? 0
   const openSellOrdersCount = cs?.broker?.open_sell_orders_count ?? 0
   const openOrdersCount = openBuyOrdersCount + openSellOrdersCount
+  const fastRecycle = cs?.fast_recycle ?? budget?.fast_recycle ?? null
+  const fastRecycleEnabled = Boolean(fastRecycle?.enabled)
+  const fastTrancheTotal = fastRecycle?.total_tranche ?? 0
+  const fastTrancheAvailable = fastRecycle?.available_capital ?? 0
+  const fastTrancheDeployed = fastRecycle?.deployed_capital ?? 0
+  const fastTrancheAvgHold = fastRecycle?.average_hold_minutes ?? null
+  const fastTrancheAvgTimeToProfit = fastRecycle?.average_time_to_realized_profit_minutes ?? null
+  const fastTrancheWinRate = fastRecycle?.recycle_win_rate ?? null
+  const fastTrancheStaleCount = fastRecycle?.stale_positions_count ?? 0
+  const fastTrancheReuseCount = fastRecycle?.capital_velocity_reuse_count ?? 0
+  const fastLegacyDeployed = fastRecycle?.legacy_capital_deployed ?? 0
+  const fastOpenPositions = fastRecycle?.fast_positions ?? brokerPositions.filter((position) => position.capital_bucket === 'fast_recycle')
+  const legacyPositions = fastRecycle?.legacy_positions ?? brokerPositions.filter((position) => position.capital_bucket !== 'fast_recycle')
   // CAPITAL_RESERVE_BUFFER matches backend default ($2.00 env: CAPITAL_RESERVE_BUFFER)
   const capitalReserveBuffer = brokerBuyingPower > 0
     ? Math.max(0, brokerBuyingPower - availableCapital)
@@ -1639,6 +1652,70 @@ export default function OperationsPage({ onBack, onAuthFail }) {
 
                   <div className="budget-state-panel">
                     <div className="budget-state-panel__header">
+                      <h3>Fast Recycle Tranche</h3>
+                      <span className={`budget-status-pill budget-status-pill--${fastRecycleEnabled ? 'open' : 'no_open_budget'}`}>
+                        {fastRecycleEnabled ? (fastRecycle?.profile ?? 'FAST') : 'INACTIVE'}
+                      </span>
+                    </div>
+                    <div className="budget-row budget-row--secondary">
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatCurrency(fastTrancheTotal) : '—'}</div>
+                        <div className="budget-label">Tranche Total</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatCurrency(fastTrancheDeployed) : '—'}</div>
+                        <div className="budget-label">Deployed From Tranche</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatCurrency(fastTrancheAvailable) : '—'}</div>
+                        <div className="budget-label">Available In Tranche</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatDurationMinutes(fastTrancheAvgHold) : '—'}</div>
+                        <div className="budget-label">Average Hold Time</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatDurationMinutes(fastTrancheAvgTimeToProfit) : '—'}</div>
+                        <div className="budget-label">Time To Realized Profit</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled && fastTrancheWinRate != null ? `${(fastTrancheWinRate * 100).toFixed(0)}%` : '—'}</div>
+                        <div className="budget-label">Recycle Win Rate</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className={`budget-value${fastTrancheStaleCount > 0 ? ' budget-value--neg' : ''}`}>
+                          {fastRecycleEnabled ? formatCount(fastTrancheStaleCount) : '—'}
+                        </div>
+                        <div className="budget-label">Stale Position Count</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatCount(fastTrancheReuseCount) : '—'}</div>
+                        <div className="budget-label">Capital Velocity / Reuse Count</div>
+                      </div>
+                      <div className="budget-cell">
+                        <div className="budget-value">{fastRecycleEnabled ? formatCurrency(fastLegacyDeployed) : '—'}</div>
+                        <div className="budget-label">Legacy Capital Deployed</div>
+                      </div>
+                    </div>
+                    <div className="budget-meta">
+                      <span>
+                        {fastRecycleEnabled
+                          ? 'Fast recycle capital is tracked separately from legacy positions and only deploys while the tranche and broker buying power are both available.'
+                          : 'Fast recycle profile is inactive.'}
+                      </span>
+                      {fastRecycleEnabled && (
+                        <>
+                          <span className="budget-sep">·</span>
+                          <span>{formatCount(fastOpenPositions.length)} fast positions</span>
+                          <span className="budget-sep">·</span>
+                          <span>{formatCount(legacyPositions.length)} legacy positions</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="budget-state-panel">
+                    <div className="budget-state-panel__header">
                       <h3>Pipeline / Planning State</h3>
                       <span className={`budget-status-pill budget-status-pill--${budgetStatus}`}>
                         {budgetStatus.toUpperCase()}
@@ -1993,6 +2070,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                               className={`timing-pill${position.over_max_hold ? ' timing-pill--warn' : ''}`}
                             >
                               <strong>{position.symbol}</strong>
+                              <span>{position.capital_bucket === 'fast_recycle' ? 'Fast recycle' : 'Legacy capital'}</span>
                               <span>Open hold {formatDurationMinutes(position.hold_minutes)}</span>
                               <span>Max {formatDurationMinutes(position.max_hold_minutes)}</span>
                             </div>

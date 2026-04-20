@@ -321,6 +321,20 @@ STRATEGY_MODE: str = os.getenv("STRATEGY_MODE", "RECYCLE").upper()
 LIVE_EXECUTION_STRATEGY: str = os.getenv(
     "LIVE_EXECUTION_STRATEGY", "INTRADAY_RECYCLE"
 ).upper()
+LIVE_EXECUTION_PROFILE: str = os.getenv(
+    "LIVE_EXECUTION_PROFILE", "FAST_RECYCLE"
+).upper()
+USE_ONLY_FAST_RECYCLE_BUCKET: bool = _get_bool("USE_ONLY_FAST_RECYCLE_BUCKET", True)
+FAST_RECYCLE_TRANCHE: float = float(os.getenv("FAST_RECYCLE_TRANCHE", "50"))
+FAST_RECYCLE_MAX_HOLD_MINUTES: int = int(
+    os.getenv("FAST_RECYCLE_MAX_HOLD_MINUTES", "45")
+)
+FAST_RECYCLE_MAX_POSITION_DOLLARS: float = float(
+    os.getenv("FAST_RECYCLE_MAX_POSITION_DOLLARS", "15.0")
+)
+FAST_RECYCLE_MAX_OPEN_POSITIONS: int = int(
+    os.getenv("FAST_RECYCLE_MAX_OPEN_POSITIONS", "3")
+)
 
 # ── Position sizing ───────────────────────────────────────────────────────────
 # MAX_OPEN_POSITIONS — maximum simultaneous live positions

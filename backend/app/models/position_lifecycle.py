@@ -11,11 +11,16 @@ class PositionLifecycle(SQLModel, table=True):
     allocation_id: Optional[int] = Field(default=None, index=True)
     symbol: str = Field(index=True)
     status: str = Field(default="open", index=True)
+    capital_bucket: str = Field(default="legacy", index=True)
+    execution_profile: Optional[str] = Field(default=None, index=True)
     entered_at: Optional[datetime] = None
     entry_filled_at: Optional[datetime] = None
     exit_submitted_at: Optional[datetime] = None
     exited_at: Optional[datetime] = None
     first_profitable_at: Optional[datetime] = None
+    stale_marked_at: Optional[datetime] = None
+    stale_reason: Optional[str] = None
+    exit_reason: Optional[str] = None
     hold_duration_minutes: Optional[float] = None
     time_to_realized_profit_minutes: Optional[float] = None
     max_hold_minutes: Optional[float] = None

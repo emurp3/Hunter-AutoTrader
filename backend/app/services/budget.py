@@ -25,9 +25,13 @@ from app.config import (
     APPROVAL_REQUIRED_OVER,
     BUDGET_STRICT_MODE,
     EXECUTION_MODE,
+    CAPITAL_RESERVE_BUFFER,
+    FAST_RECYCLE_TRANCHE,
     FLIP_TARGET_MULTIPLIER,
+    LIVE_EXECUTION_PROFILE,
     MAX_ALLOCATION_PER_OPPORTUNITY,
     STRATEGY_MODE,
+    USE_ONLY_FAST_RECYCLE_BUCKET,
     LIVE_EXECUTION_STRATEGY,
     WEEKLY_BUDGET,
 )
@@ -767,6 +771,100 @@ def _compute_month_end_review(budget: WeeklyBudget) -> dict:
     }
 
 
+def _build_fast_recycle_snapshot(session: Session, broker_dict: dict) -> dict:
+    from app.services import position_lifecycle as lifecycle_svc
+
+    fast_enabled = LIVE_EXECUTION_PROFILE == "FAST_RECYCLE" and USE_ONLY_FAST_RECYCLE_BUCKET
+    positions = broker_dict.get("positions", []) if isinstance(broker_dict, dict) else []
+    open_buy_orders = broker_dict.get("open_buy_orders", []) if isinstance(broker_dict, dict) else []
+    open_positions_count = broker_dict.get("open_positions_count", 0) if isinstance(broker_dict, dict) else 0
+    effective_buying_power = float(broker_dict.get("effective_buying_power", 0.0) or 0.0)
+
+    closed_fast = lifecycle_svc.get_lifecycles_by_bucket(
+        session,
+        capital_bucket="fast_recycle",
+        status="closed",
+    )
+    open_fast = lifecycle_svc.get_lifecycles_by_bucket(
+        session,
+        capital_bucket="fast_recycle",
+        status="open",
+    )
+
+    fast_symbols = {lifecycle.symbol.upper() for lifecycle in open_fast}
+    fast_order_ids = {lifecycle.entry_order_id for lifecycle in open_fast if lifecycle.entry_order_id}
+    fast_positions = [position for position in positions if position.get("symbol", "").upper() in fast_symbols]
+    legacy_positions = [position for position in positions if position.get("symbol", "").upper() not in fast_symbols]
+    fast_open_buy_orders = [
+        order
+        for order in open_buy_orders
+        if order.get("order_id") in fast_order_ids or order.get("symbol", "").upper() in fast_symbols
+    ]
+
+    realized_fast_pl = round(sum(float(lifecycle.realized_pl or 0.0) for lifecycle in closed_fast), 2)
+    tranche_total = round(FAST_RECYCLE_TRANCHE, 2)
+    gross_fast_capital = round(max(0.0, tranche_total + realized_fast_pl), 2)
+    deployed_fast = round(
+        sum(float(position.get("market_value") or 0.0) for position in fast_positions)
+        + sum(float(order.get("notional") or 0.0) for order in fast_open_buy_orders),
+        2,
+    )
+    internal_fast_available = round(
+        max(0.0, gross_fast_capital - deployed_fast - CAPITAL_RESERVE_BUFFER),
+        2,
+    )
+    available_fast = round(max(0.0, min(internal_fast_available, effective_buying_power)), 2)
+    legacy_deployed = round(
+        max(0.0, float(broker_dict.get("committed_capital", 0.0) or 0.0) - deployed_fast),
+        2,
+    )
+    stale_positions_count = sum(
+        1
+        for position in fast_positions
+        if position.get("over_max_hold") or position.get("stale_marked_at")
+    )
+    closed_with_hold = [lifecycle for lifecycle in closed_fast if lifecycle.hold_duration_minutes is not None]
+    avg_hold_minutes = round(
+        sum(float(lifecycle.hold_duration_minutes or 0.0) for lifecycle in closed_with_hold) / len(closed_with_hold),
+        2,
+    ) if closed_with_hold else None
+    profitable_fast = [lifecycle for lifecycle in closed_fast if (lifecycle.realized_pl or 0.0) > 0]
+    win_rate = round(len(profitable_fast) / len(closed_fast), 4) if closed_fast else None
+    realized_profit_times = [
+        float(lifecycle.time_to_realized_profit_minutes)
+        for lifecycle in profitable_fast
+        if lifecycle.time_to_realized_profit_minutes is not None
+    ]
+    avg_time_to_realized_profit = round(
+        sum(realized_profit_times) / len(realized_profit_times),
+        2,
+    ) if realized_profit_times else None
+    reuse_count = len(closed_fast)
+
+    return {
+        "enabled": fast_enabled,
+        "profile": LIVE_EXECUTION_PROFILE,
+        "use_only_fast_recycle_bucket": USE_ONLY_FAST_RECYCLE_BUCKET,
+        "total_tranche": tranche_total,
+        "gross_capital": gross_fast_capital,
+        "deployed_capital": deployed_fast,
+        "available_capital": available_fast,
+        "internal_available_capital": internal_fast_available,
+        "realized_pl": realized_fast_pl,
+        "average_hold_minutes": avg_hold_minutes,
+        "average_time_to_realized_profit_minutes": avg_time_to_realized_profit,
+        "recycle_win_rate": win_rate,
+        "stale_positions_count": stale_positions_count,
+        "capital_velocity_reuse_count": reuse_count,
+        "legacy_capital_deployed": legacy_deployed,
+        "legacy_open_positions_count": len(legacy_positions),
+        "fast_open_positions_count": len(fast_positions),
+        "open_positions_count": open_positions_count,
+        "fast_positions": fast_positions,
+        "legacy_positions": legacy_positions,
+    }
+
+
 # ── Broker-reconciled capital state (live-mode authoritative view) ─────────────
 
 def get_broker_reconciled_capital_state(session: Session) -> dict:
@@ -862,6 +960,7 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
         session,
         broker_dict.get("positions", []),
     )
+    fast_recycle = _build_fast_recycle_snapshot(session, broker_dict)
 
     # Use broker truth whenever Alpaca is enabled and sync succeeded.
     # This applies in BOTH live mode AND sandbox/paper mode — Alpaca positions
@@ -919,6 +1018,7 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
         "funded_packets":           display_funded_packets,
         "unrealized_pl":            round(display_unrealized_pl, 2),
         "effective_buying_power":   round(display_effective_bp, 2),
+        "fast_recycle":             fast_recycle,
 
         # ── Internal ledger values (audit trail, realized P/L) ────────────────
         "starting_bankroll":        starting_bankroll,
@@ -939,6 +1039,7 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
         # ── Strategy metadata ─────────────────────────────────────────────────
         "strategy_mode":            STRATEGY_MODE,
         "live_execution_strategy":  LIVE_EXECUTION_STRATEGY,
+        "live_execution_profile":   LIVE_EXECUTION_PROFILE,
         "execution_mode":           EXECUTION_MODE,
         "is_live_mode":             is_live,
 

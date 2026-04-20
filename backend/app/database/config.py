@@ -101,6 +101,17 @@ def _migrate_sqlite_tables() -> None:
         )
         _ensure_columns(
             conn,
+            "positionlifecycle",
+            {
+                "capital_bucket": "TEXT DEFAULT 'legacy'",
+                "execution_profile": "TEXT",
+                "stale_marked_at": "TIMESTAMP",
+                "stale_reason": "TEXT",
+                "exit_reason": "TEXT",
+            },
+        )
+        _ensure_columns(
+            conn,
             "opportunitydecision",
             {
                 "feedback_adjustment": "REAL DEFAULT 0.0",

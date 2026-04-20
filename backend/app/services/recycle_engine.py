@@ -47,7 +47,12 @@ from app.config import (
     ALPACA_PAPER,
     CAPITAL_RESERVE_BUFFER,
     EXECUTION_MODE,
+    FAST_RECYCLE_MAX_HOLD_MINUTES,
+    FAST_RECYCLE_MAX_OPEN_POSITIONS,
+    FAST_RECYCLE_MAX_POSITION_DOLLARS,
+    FAST_RECYCLE_TRANCHE,
     FORCE_SELL_END_OF_DAY,
+    LIVE_EXECUTION_PROFILE,
     LIVE_EXECUTION_STRATEGY,
     MAX_HOLD_MINUTES,
     MAX_OPEN_POSITIONS,
@@ -57,9 +62,11 @@ from app.config import (
     PYRAMIDING_ENABLED,
     RECYCLE_EOD_FLATTEN_MINUTES_BEFORE,
     REPLACEMENT_RANK_THRESHOLD,
+    STALE_ORDER_TIMEOUT_SECONDS,
     STOP_LOSS_PCT,
     STRATEGY_MODE,
     TARGET_PROFIT_PCT,
+    USE_ONLY_FAST_RECYCLE_BUCKET,
 )
 from app.services.broker_reconciliation import (
     BrokerCapitalState,
@@ -112,6 +119,9 @@ class ExitDecision:
     unrealized_pl_pct: float
     hold_minutes: Optional[float]
     market_value: float
+    capital_bucket: str = "legacy"
+    max_hold_minutes: Optional[float] = None
+    stale_position: bool = False
 
 
 @dataclass
@@ -121,6 +131,12 @@ class EntryDecision:
     confidence: float
     score: float
     source_id: Optional[str]
+    capital_bucket: str = "legacy"
+    execution_profile: Optional[str] = None
+    max_hold_minutes: Optional[float] = None
+    entry_guard: str = "no_duplicate_symbol_and_sufficient_buying_power"
+    stop_loss_pct: float = STOP_LOSS_PCT
+    profit_target_pct: float = TARGET_PROFIT_PCT
 
 
 @dataclass
@@ -160,6 +176,18 @@ class RecycleCycleResult:
     is_live_mode: bool = EXECUTION_MODE == "live"
     cycle_skipped: bool = False
     skip_reason: Optional[str] = None
+    fast_recycle: Optional[dict] = None
+
+
+@dataclass
+class FastRecycleState:
+    total_capital: float
+    gross_capital: float
+    available_to_deploy: float
+    deployed_capital: float
+    open_positions_count: int
+    legacy_open_positions_count: int
+    enabled: bool
 
 
 # ── EOD detection ─────────────────────────────────────────────────────────────
@@ -208,7 +236,11 @@ def _is_outside_market_hours() -> bool:
 
 # ── Exit evaluation ───────────────────────────────────────────────────────────
 
-def evaluate_exits(broker_state: BrokerCapitalState) -> list[ExitDecision]:
+def evaluate_exits(
+    broker_state: BrokerCapitalState,
+    *,
+    position_meta: Optional[dict[str, dict]] = None,
+) -> list[ExitDecision]:
     """
     Examine all open positions and return a list of ExitDecisions.
     Every RECYCLE-mode position must have a defined exit pathway.
@@ -223,6 +255,12 @@ def evaluate_exits(broker_state: BrokerCapitalState) -> list[ExitDecision]:
         reason: Optional[str] = None
         upl_pct = pos.unrealized_pl_pct
         hold_min = pos.hold_minutes
+        meta = position_meta.get(pos.symbol.upper(), {}) if position_meta else {}
+        capital_bucket = meta.get("capital_bucket", "legacy")
+        max_hold_limit = float(
+            meta.get("max_hold_minutes")
+            or (FAST_RECYCLE_MAX_HOLD_MINUTES if capital_bucket == "fast_recycle" else MAX_HOLD_MINUTES)
+        )
 
         # 1. Profit target
         if upl_pct >= TARGET_PROFIT_PCT:
@@ -233,7 +271,7 @@ def evaluate_exits(broker_state: BrokerCapitalState) -> list[ExitDecision]:
             reason = ExitReason.STOP_LOSS
 
         # 3. Max hold time
-        elif hold_min is not None and hold_min >= MAX_HOLD_MINUTES:
+        elif hold_min is not None and hold_min >= max_hold_limit:
             reason = ExitReason.MAX_HOLD_TIME
 
         # 4. EOD flattening (RECYCLE mode never holds overnight unless explicitly allowed)
@@ -251,6 +289,9 @@ def evaluate_exits(broker_state: BrokerCapitalState) -> list[ExitDecision]:
                 unrealized_pl_pct=round(upl_pct * 100, 3),
                 hold_minutes=hold_min,
                 market_value=pos.market_value,
+                capital_bucket=capital_bucket,
+                max_hold_minutes=max_hold_limit,
+                stale_position=reason == ExitReason.MAX_HOLD_TIME,
             ))
             logger.info(
                 "recycle_engine: exit_ready %s reason=%s upl=%.3f%% hold=%.0fm",
@@ -363,6 +404,8 @@ def execute_exits(exit_decisions: list[ExitDecision]) -> tuple[list[dict], list[
                         symbol=decision.symbol,
                         provider_order_id=result.order_id,
                         submitted_at=datetime.now(timezone.utc),
+                        stale_reason="max_hold_exceeded" if decision.stale_position else None,
+                        exit_reason=decision.exit_reason,
                     )
             except Exception as lifecycle_exc:
                 logger.warning(
@@ -399,6 +442,8 @@ def execute_exits(exit_decisions: list[ExitDecision]) -> tuple[list[dict], list[
 def evaluate_entries(
     broker_state: BrokerCapitalState,
     candidates: list[dict],
+    *,
+    fast_recycle: Optional[FastRecycleState] = None,
 ) -> list[EntryDecision]:
     """
     Select eligible entry candidates given current broker state.
@@ -418,20 +463,41 @@ def evaluate_entries(
     if not candidates:
         return []
 
-    current_bankroll = broker_state.current_bankroll
-    effective_bp = broker_state.effective_buying_power
-    open_count = broker_state.open_positions_count
+    fast_mode = bool(
+        fast_recycle
+        and fast_recycle.enabled
+        and LIVE_EXECUTION_PROFILE == "FAST_RECYCLE"
+        and USE_ONLY_FAST_RECYCLE_BUCKET
+    )
+    current_bankroll = fast_recycle.gross_capital if fast_mode else broker_state.current_bankroll
+    effective_bp = fast_recycle.available_to_deploy if fast_mode else broker_state.effective_buying_power
+    open_count = fast_recycle.open_positions_count if fast_mode else broker_state.open_positions_count
+    max_positions_limit = FAST_RECYCLE_MAX_OPEN_POSITIONS if fast_mode else MAX_OPEN_POSITIONS
+    max_position_dollars = FAST_RECYCLE_MAX_POSITION_DOLLARS if fast_mode else MAX_POSITION_DOLLARS
+    max_hold_minutes = FAST_RECYCLE_MAX_HOLD_MINUTES if fast_mode else MAX_HOLD_MINUTES
     held_symbols = {p.symbol.upper() for p in broker_state.positions}
-    pending_symbols = {o.symbol.upper() for o in broker_state.open_buy_orders}
+    pending_symbols = {
+        o.symbol.upper()
+        for o in [*broker_state.open_buy_orders, *broker_state.open_sell_orders]
+    }
 
     entries: list[EntryDecision] = []
     budget_remaining = effective_bp
 
-    for c in sorted(candidates, key=lambda x: x.get("confidence", 0.0), reverse=True):
-        if open_count + len(entries) >= MAX_OPEN_POSITIONS:
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda x: (
+            _candidate_expected_hold_minutes(x, max_hold_minutes) if fast_mode else 0,
+            -float(x.get("confidence", 0.0)),
+            -float(x.get("estimated_profit", 0.0)),
+        ),
+    )
+
+    for c in sorted_candidates:
+        if open_count + len(entries) >= max_positions_limit:
             logger.debug(
                 "evaluate_entries: MAX_OPEN_POSITIONS=%d reached — no more entries",
-                MAX_OPEN_POSITIONS,
+                max_positions_limit,
             )
             break
 
@@ -453,7 +519,12 @@ def evaluate_entries(
         estimated_profit = float(c.get("estimated_profit", 0.0))
 
         # Size the position
-        notional = _compute_notional(estimated_profit, current_bankroll, budget_remaining)
+        notional = _compute_notional(
+            estimated_profit,
+            current_bankroll,
+            budget_remaining,
+            max_position_dollars=max_position_dollars,
+        )
         if notional <= 0:
             logger.debug("evaluate_entries: %s notional=$0 — skip", symbol)
             continue
@@ -473,6 +544,9 @@ def evaluate_entries(
             confidence=confidence,
             score=float(c.get("score", 0.0)),
             source_id=c.get("source_id"),
+            capital_bucket="fast_recycle" if fast_mode else "legacy",
+            execution_profile=LIVE_EXECUTION_PROFILE if fast_mode else LIVE_EXECUTION_STRATEGY,
+            max_hold_minutes=max_hold_minutes,
         ))
         budget_remaining -= notional
         logger.info(
@@ -501,6 +575,8 @@ def _compute_notional(
     estimated_profit: float,
     current_bankroll: float,
     budget_remaining: float,
+    *,
+    max_position_dollars: float = MAX_POSITION_DOLLARS,
 ) -> float:
     """
     Compute a safe position size that fits within the strategy caps.
@@ -510,7 +586,7 @@ def _compute_notional(
         return 0.0
 
     bankroll_cap = round(current_bankroll * MAX_POSITION_PCT_OF_BANKROLL, 2)
-    dollar_cap = MAX_POSITION_DOLLARS
+    dollar_cap = max_position_dollars
     budget_cap = round(max(0.0, budget_remaining - MIN_REQUIRED_BUYING_POWER - CAPITAL_RESERVE_BUFFER), 2)
 
     notional = round(min(dollar_cap, bankroll_cap, budget_cap), 2)
@@ -578,6 +654,9 @@ def execute_entries(entry_decisions: list[EntryDecision]) -> tuple[list[dict], l
                         source_id=entry.source_id,
                         provider_order_id=result.order_id,
                         entered_at=datetime.now(timezone.utc),
+                        max_hold_minutes=entry.max_hold_minutes,
+                        capital_bucket=entry.capital_bucket,
+                        execution_profile=entry.execution_profile,
                     )
             except Exception as lifecycle_exc:
                 logger.warning(
@@ -665,6 +744,115 @@ def _load_live_candidates() -> list[dict]:
         return []
 
 
+def _candidate_expected_hold_minutes(candidate: dict, default_hold_minutes: int) -> float:
+    raw = candidate.get("expected_hold_minutes") or candidate.get("max_hold_minutes")
+    try:
+        value = float(raw)
+        return value if value > 0 else float(default_hold_minutes)
+    except (TypeError, ValueError):
+        return float(default_hold_minutes)
+
+
+def _get_position_bucket_map() -> dict[str, dict]:
+    from sqlmodel import Session
+    from app.database.config import engine
+    from app.services import position_lifecycle as lifecycle_svc
+
+    with Session(engine) as session:
+        open_fast = lifecycle_svc.get_lifecycles_by_bucket(
+            session,
+            capital_bucket="fast_recycle",
+            status="open",
+        )
+        open_legacy = lifecycle_svc.get_lifecycles_by_bucket(
+            session,
+            capital_bucket="legacy",
+            status="open",
+        )
+        open_lifecycles = [*open_fast, *open_legacy]
+        return {
+            lifecycle.symbol.upper(): (lifecycle_svc.serialize_lifecycle(lifecycle) or {})
+            for lifecycle in open_lifecycles
+        }
+
+
+def _get_fast_recycle_state(broker_state: BrokerCapitalState) -> FastRecycleState:
+    if LIVE_EXECUTION_PROFILE != "FAST_RECYCLE" or not USE_ONLY_FAST_RECYCLE_BUCKET:
+        return FastRecycleState(
+            total_capital=FAST_RECYCLE_TRANCHE,
+            gross_capital=FAST_RECYCLE_TRANCHE,
+            available_to_deploy=0.0,
+            deployed_capital=0.0,
+            open_positions_count=0,
+            legacy_open_positions_count=broker_state.open_positions_count,
+            enabled=False,
+        )
+
+    from sqlmodel import Session
+    from app.database.config import engine
+    from app.services import position_lifecycle as lifecycle_svc
+
+    with Session(engine) as session:
+        open_fast = lifecycle_svc.get_lifecycles_by_bucket(
+            session,
+            capital_bucket="fast_recycle",
+            status="open",
+        )
+        closed_fast = lifecycle_svc.get_lifecycles_by_bucket(
+            session,
+            capital_bucket="fast_recycle",
+            status="closed",
+        )
+
+    fast_symbols = {lifecycle.symbol.upper() for lifecycle in open_fast}
+    fast_order_ids = {lifecycle.entry_order_id for lifecycle in open_fast if lifecycle.entry_order_id}
+    fast_positions = [pos for pos in broker_state.positions if pos.symbol.upper() in fast_symbols]
+    fast_open_orders = [
+        order for order in broker_state.open_buy_orders
+        if order.order_id in fast_order_ids or order.symbol.upper() in fast_symbols
+    ]
+
+    realized_fast = round(
+        sum(float(lifecycle.realized_pl or 0.0) for lifecycle in closed_fast),
+        2,
+    )
+    gross_capital = round(max(0.0, FAST_RECYCLE_TRANCHE + realized_fast), 2)
+    deployed_capital = round(
+        sum(float(pos.market_value or 0.0) for pos in fast_positions)
+        + sum(float(order.notional or 0.0) for order in fast_open_orders),
+        2,
+    )
+    internal_available = round(
+        max(0.0, gross_capital - deployed_capital - CAPITAL_RESERVE_BUFFER),
+        2,
+    )
+    available_to_deploy = round(
+        max(0.0, min(internal_available, broker_state.effective_buying_power)),
+        2,
+    )
+    return FastRecycleState(
+        total_capital=FAST_RECYCLE_TRANCHE,
+        gross_capital=gross_capital,
+        available_to_deploy=available_to_deploy,
+        deployed_capital=deployed_capital,
+        open_positions_count=len(fast_positions),
+        legacy_open_positions_count=max(0, broker_state.open_positions_count - len(fast_positions)),
+        enabled=True,
+    )
+
+
+def _fast_recycle_state_to_dict(state: FastRecycleState) -> dict:
+    return {
+        "enabled": state.enabled,
+        "total_capital": round(state.total_capital, 2),
+        "gross_capital": round(state.gross_capital, 2),
+        "available_to_deploy": round(state.available_to_deploy, 2),
+        "deployed_capital": round(state.deployed_capital, 2),
+        "open_positions_count": state.open_positions_count,
+        "legacy_open_positions_count": state.legacy_open_positions_count,
+    }
+
+
 # ── Main cycle ────────────────────────────────────────────────────────────────
 
 def run_recycle_cycle() -> RecycleCycleResult:
@@ -701,9 +889,13 @@ def run_recycle_cycle() -> RecycleCycleResult:
 
         broker_state = get_broker_capital_state()
         result.broker_state = broker_capital_state_to_dict(broker_state)
+        result.fast_recycle = _fast_recycle_state_to_dict(_get_fast_recycle_state(broker_state))
 
         if broker_state.open_positions_count > 0:
-            exit_decisions = evaluate_exits(broker_state)
+            exit_decisions = evaluate_exits(
+                broker_state,
+                position_meta=_get_position_bucket_map(),
+            )
             if exit_decisions:
                 exits_ok, exits_fail = execute_exits(exit_decisions)
                 result.exit_decisions = [vars(d) for d in exit_decisions]
@@ -720,6 +912,8 @@ def run_recycle_cycle() -> RecycleCycleResult:
     # ── Step 2: Sync broker state ─────────────────────────────────────────────
     broker_state = get_broker_capital_state()
     result.broker_state = broker_capital_state_to_dict(broker_state)
+    fast_recycle = _get_fast_recycle_state(broker_state)
+    result.fast_recycle = _fast_recycle_state_to_dict(fast_recycle)
 
     if not broker_state.sync_success:
         result.errors.append(f"broker_sync_failed: {broker_state.sync_error}")
@@ -736,7 +930,10 @@ def run_recycle_cycle() -> RecycleCycleResult:
     )
 
     # ── Step 3: Evaluate and execute exits ───────────────────────────────────
-    exit_decisions = evaluate_exits(broker_state)
+    exit_decisions = evaluate_exits(
+        broker_state,
+        position_meta=_get_position_bucket_map(),
+    )
 
     if exit_decisions:
         exits_ok, exits_fail = execute_exits(exit_decisions)
@@ -790,7 +987,11 @@ def run_recycle_cycle() -> RecycleCycleResult:
             broker_state.effective_buying_power,
         )
     else:
-        entry_decisions = evaluate_entries(broker_state, candidates)
+        entry_decisions = evaluate_entries(
+            broker_state,
+            candidates,
+            fast_recycle=fast_recycle,
+        )
         if entry_decisions:
             entries_ok, entries_fail = execute_entries(entry_decisions)
             result.entry_decisions = [vars(e) for e in entry_decisions]
@@ -803,6 +1004,7 @@ def run_recycle_cycle() -> RecycleCycleResult:
     # ── Step 8: Final broker sync ─────────────────────────────────────────────
     final_state = get_broker_capital_state()
     result.broker_state_post = broker_capital_state_to_dict(final_state)
+    result.fast_recycle = _fast_recycle_state_to_dict(_get_fast_recycle_state(final_state))
 
     logger.info(
         "run_recycle_cycle: complete — exits=%d entries=%d stale_cancelled=%d "
@@ -825,9 +1027,11 @@ def get_cycle_status() -> dict:
     Used by the /budget/capital-state and /system/status endpoints.
     """
     broker_state = get_broker_capital_state()
+    fast_recycle = _get_fast_recycle_state(broker_state)
     return {
         "strategy_mode": STRATEGY_MODE,
         "live_execution_strategy": LIVE_EXECUTION_STRATEGY,
+        "live_execution_profile": LIVE_EXECUTION_PROFILE,
         "execution_mode": EXECUTION_MODE,
         "is_live": EXECUTION_MODE == "live",
         "is_paper": ALPACA_PAPER,
@@ -845,8 +1049,14 @@ def get_cycle_status() -> dict:
             "force_sell_end_of_day": FORCE_SELL_END_OF_DAY,
             "allow_overnight_hold": ALLOW_OVERNIGHT_HOLD,
             "pyramiding_enabled": PYRAMIDING_ENABLED,
+            "fast_recycle_tranche": FAST_RECYCLE_TRANCHE,
+            "fast_recycle_max_hold_minutes": FAST_RECYCLE_MAX_HOLD_MINUTES,
+            "fast_recycle_max_position_dollars": FAST_RECYCLE_MAX_POSITION_DOLLARS,
+            "fast_recycle_max_open_positions": FAST_RECYCLE_MAX_OPEN_POSITIONS,
+            "use_only_fast_recycle_bucket": USE_ONLY_FAST_RECYCLE_BUCKET,
         },
         "broker_state": broker_capital_state_to_dict(broker_state),
+        "fast_recycle": _fast_recycle_state_to_dict(fast_recycle),
         "near_market_close": _is_near_market_close(),
         "outside_market_hours": _is_outside_market_hours(),
     }
