@@ -749,16 +749,54 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const top10 = pipeline?.top_10 ?? []
   const recentEvents = events?.events ?? []
   const endpointStatus = usingFallback ? 'API Offline' : 'API Online'
-  const liveDataStatus = atStatus?.live_data_status ?? 'missing'
-  const fallbackActive = Boolean(atStatus?.using_fallback || atStatus?.current_data_mode === 'seed')
-  const liveFeedReady = liveDataStatus === 'ready'
+  const readinessAutotrader = readiness?.modules?.autotrader ?? null
+  const readinessLiveStatus = readinessAutotrader?.live_data_status ?? null
+  const readinessSourceType = readinessAutotrader?.source_type ?? null
+  const readinessDataMode = readinessAutotrader?.current_data_mode ?? null
+  const readinessLastStatus = readinessAutotrader?.last_status ?? null
+  const readinessLastScanAt = readinessAutotrader?.last_scan_at ?? null
+  const readinessIntakeCount = readiness?.quotas?.source_discovery?.sources_found_this_week ?? 0
+  const liveOpportunityCount = liveOpportunities?.total ?? 0
+  const autotraderStatusLagging =
+    atStatus?.live_data_status !== 'ready' &&
+    readinessLiveStatus === 'ready'
+
+  const liveDataStatus = autotraderStatusLagging
+    ? readinessLiveStatus
+    : (atStatus?.live_data_status ?? readinessLiveStatus ?? 'missing')
+  const fallbackActive = Boolean(
+    atStatus?.using_fallback ||
+    atStatus?.current_data_mode === 'seed' ||
+    readinessDataMode === 'seed',
+  )
+  const liveFeedReady =
+    liveDataStatus === 'ready' ||
+    liveOpportunityCount > 0
+  const effectiveSourceType = autotraderStatusLagging
+    ? (readinessSourceType ?? atStatus?.config?.source_type ?? 'unknown')
+    : (atStatus?.config?.source_type ?? readinessSourceType ?? 'unknown')
+  const effectiveLastScanStatus = autotraderStatusLagging
+    ? (readinessLastStatus ?? atStatus?.last_scan_status ?? 'never_run')
+    : (atStatus?.last_scan_status ?? readinessLastStatus ?? 'never_run')
+  const effectiveLastScanAt = autotraderStatusLagging
+    ? (readinessLastScanAt ?? atStatus?.last_scan_at ?? null)
+    : (atStatus?.last_scan_at ?? readinessLastScanAt ?? null)
+  const effectiveLiveDataMessage = autotraderStatusLagging
+    ? 'Live intake source is healthy. Dashboard status was lagging behind the latest readiness refresh.'
+    : (atStatus?.live_data_message ?? atStatus?.last_error ?? 'Operational data unavailable.')
   const autotraderOffline = !liveFeedReady
-  const intakeCount = intakeSummary?.total_from_autotrader ?? 0
+  const intakeCount = Math.max(
+    intakeSummary?.total_from_autotrader ?? 0,
+    liveOpportunityCount,
+    readinessIntakeCount,
+  )
   const autoTraderHeadline = autotraderOffline ? 'AutoTrader offline / no live data' : 'AutoTrader live'
   const autoTraderModeLabel = fallbackActive
     ? 'Seed fallback active'
     : liveFeedReady
-      ? 'Live bridge active'
+      ? autotraderStatusLagging
+        ? 'Live intake verified'
+        : 'Live bridge active'
       : 'No usable intake source'
 
   const missionSummary = useMemo(() => {
@@ -774,12 +812,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
       return 'Live AutoTrader data is unavailable. Run intake to pull from the emergency seed source until the bridge is repaired.'
     }
 
-    if (atStatus?.last_scan_status === 'success') {
+    if (effectiveLastScanStatus === 'success' || liveOpportunityCount > 0) {
       return 'Hunter is connected and ready for a live intake run or quota enforcement pass.'
     }
 
       return 'Hunter is connected. Run an intake pass or quota check to validate the first task end to end.'
-  }, [atStatus, autotraderOffline, fallbackActive, usingFallback])
+  }, [autotraderOffline, effectiveLastScanStatus, fallbackActive, liveOpportunityCount, usingFallback])
 
   const fundedOpportunities = useMemo(() => {
     if (Array.isArray(allocations) && allocations.length > 0) {
@@ -1280,6 +1318,11 @@ export default function OperationsPage({ onBack, onAuthFail }) {
               AutoTrader offline / no live data. {fallbackActive
                 ? 'Hunter is using seed_opportunities.json for intake.'
                 : 'Run intake to activate seed fallback until autotrader.json is healthy again.'}
+            </div>
+          )}
+          {!usingFallback && autotraderStatusLagging && (
+            <div className="ops-no-data ops-no-data--info">
+              Live intake is verified from the latest readiness check. AutoTrader status cards were lagging behind and are being reconciled to live source truth.
             </div>
           )}
 
@@ -2217,25 +2260,25 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                 <div className="at-status-row">
                   <StatusDot ok={liveFeedReady} label={liveFeedReady ? 'Live data ready' : 'Live data offline'} />
                   <StatusDot ok={fallbackActive} label={fallbackActive ? 'Seed fallback active' : 'Fallback idle'} />
-                  <span className={`at-scan-status at-scan-status--${atStatus.last_scan_status ?? 'never'}`}>
-                    {atStatus.last_scan_status ?? 'never run'}
+                  <span className={`at-scan-status at-scan-status--${effectiveLastScanStatus ?? 'never'}`}>
+                    {effectiveLastScanStatus ?? 'never run'}
                   </span>
-                  {atStatus.last_scan_at && (
+                  {effectiveLastScanAt && (
                     <span className="at-scan-time">
-                      Last scan {new Date(atStatus.last_scan_at).toLocaleString()}
+                      Last scan {new Date(effectiveLastScanAt).toLocaleString()}
                     </span>
                   )}
                 </div>
                 <div className={`at-health-banner at-health-banner--${liveFeedReady ? 'live' : 'offline'}`}>
                   <strong>{autoTraderHeadline}</strong>
-                  <span>{atStatus.live_data_message ?? atStatus.last_error}</span>
+                  <span>{effectiveLiveDataMessage}</span>
                 </div>
                 {fallbackActive && (
                   <div className="at-fallback-banner">
                     Seed fallback is active from <code>{atStatus.config?.seed_path}</code>.
                   </div>
                 )}
-                {atStatus.last_error && <div className="at-error">! {atStatus.last_error}</div>}
+                {atStatus.last_error && !autotraderStatusLagging && <div className="at-error">! {atStatus.last_error}</div>}
                 <div className="at-counts">
                   {[
                     ['Scanned', atStatus.last_scan_counts?.scanned],
@@ -2252,11 +2295,11 @@ export default function OperationsPage({ onBack, onAuthFail }) {
                 </div>
                 <div className="at-config">
                   <span className="at-config-key">mode</span>
-                  <span className="at-config-val">{atStatus.current_data_mode}</span>
+                  <span className="at-config-val">{autotraderStatusLagging ? (readinessDataMode ?? atStatus.current_data_mode) : atStatus.current_data_mode}</span>
                   <span className="at-config-key">live status</span>
                   <span className="at-config-val">{liveDataStatus}</span>
                   <span className="at-config-key">source</span>
-                  <span className="at-config-val">{atStatus.config?.source_type}</span>
+                  <span className="at-config-val">{effectiveSourceType}</span>
                   <span className="at-config-key">profit</span>
                   <span className="at-config-val">
                     ${(intakeSummary?.total_estimated_monthly_profit ?? 0).toLocaleString()}
