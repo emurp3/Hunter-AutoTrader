@@ -47,7 +47,7 @@ from app.config import (
 from app.database.config import get_session
 from app.services import budget as budget_svc
 from app.services import strategies as strategy_svc
-from app.services.autotrader import get_intake_state
+from app.services.autotrader import refresh_intake_state
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -116,7 +116,7 @@ def _check_live_config_structure() -> dict:
 
 
 def _check_autotrader() -> dict:
-    state = get_intake_state()
+    state = refresh_intake_state()
     return {
         "configured": state.source_configured,
         "source_type": AUTOTRADER_SOURCE_TYPE or None,

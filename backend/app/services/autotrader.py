@@ -123,6 +123,55 @@ def get_intake_state() -> _IntakeState:
     return _state
 
 
+def refresh_intake_state(*, bootstrap_file_source: bool = False) -> _IntakeState:
+    snapshot = assess_live_source()
+
+    if (
+        bootstrap_file_source
+        and snapshot.source_type == "file"
+        and snapshot.status in {"missing", "empty", "stale", "invalid"}
+    ):
+        try:
+            from app.services.trading_candidates import generate_trading_candidates_detailed
+
+            generated = generate_trading_candidates_detailed()
+            if generated.get("candidates_written", 0) > 0:
+                snapshot = assess_live_source()
+            elif generated.get("error"):
+                _state.last_error = generated["error"]
+        except Exception as exc:  # noqa: BLE001
+            _state.last_error = str(exc)
+
+    _state.last_source_type = snapshot.source_type
+    _state.source_configured = snapshot.source_type in ("file", "http", "live")
+    _state.source_reachable = snapshot.status == "ready"
+    _state.live_data_status = snapshot.status
+    _state.live_data_message = snapshot.message
+    _state.live_data_path = snapshot.path
+    _state.live_data_updated_at = snapshot.updated_at
+    _state.live_data_record_count = snapshot.record_count
+    _state.stale_after_hours = _stale_after_hours()
+    _state.fallback_path = str(_configured_seed_path())
+    if _state.last_scan_at is None:
+        _state.current_data_mode = "live" if snapshot.status == "ready" else "offline"
+    return _state
+
+
+def bootstrap_intake(session: Session) -> IntakeResult | None:
+    state = refresh_intake_state(bootstrap_file_source=True)
+    source_type = state.last_source_type
+
+    if source_type in ("file", "http") and state.live_data_status == "ready" and state.last_scan_at is None:
+        logger.info("bootstrap_intake: priming %s intake on startup", source_type)
+        return run_intake(session)
+
+    if source_type == "live" and state.last_scan_at is None:
+        logger.info("bootstrap_intake: priming live source acquisition on startup")
+        return _run_live_intake(session)
+
+    return None
+
+
 def _configured_source_type() -> str:
     # Re-read from .env files on every call so changes take effect without restart.
     # dotenv_values() reads the file but does not modify os.environ.

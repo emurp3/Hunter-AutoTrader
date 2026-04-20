@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from app.database.config import engine, get_session
 from app.models.income_source import IncomeSource
 from app.models.decision import OpportunityDecision
-from app.services.autotrader import get_intake_state, run_intake
+from app.services.autotrader import get_intake_state, refresh_intake_state, run_intake
 from app.services.source_acquisition import get_latest_results, get_source_status
 from app.auth.jwt import get_current_user, require_admin
 from app.auth.models import UserInDB
@@ -55,6 +55,7 @@ def _run_intake_background() -> None:
 
 @router.get("/status")
 def autotrader_status(_: UserInDB = Depends(get_current_user)) -> dict:
+    refresh_intake_state()
     state = get_intake_state()
 
     return {
@@ -90,10 +91,13 @@ def autotrader_status(_: UserInDB = Depends(get_current_user)) -> dict:
 
 @router.get("/intake-summary")
 def intake_summary(session: Session = Depends(get_session), _: UserInDB = Depends(get_current_user)) -> dict:
-    state = get_intake_state()
+    state = refresh_intake_state()
+    intake_origins = ["autotrader", "autotrader_seed"]
+    if state.last_source_type == "live" or state.current_data_mode == "live":
+        intake_origins = [*intake_origins, "social_listener", "gig_scanner", "github_scanner", "marketplace_scanner", "local_business_prospector", "digital_product_scanner", "rfp_scanner", "affiliate_scanner"]
     sources = session.exec(
         select(IncomeSource)
-        .where(IncomeSource.origin_module.in_(["autotrader", "autotrader_seed"]))
+        .where(IncomeSource.origin_module.in_(intake_origins))
         .order_by(IncomeSource.score.desc())
     ).all()
 

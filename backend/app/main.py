@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session
 
 from app.database.config import create_db_and_tables
 from app.routers.autotrader import router as autotrader_router
@@ -46,6 +47,14 @@ _SCHEDULER_TZ = "America/New_York"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+    try:
+        from app.database.config import engine
+        from app.services.autotrader import bootstrap_intake
+
+        with Session(engine) as session:
+            bootstrap_intake(session)
+    except Exception:
+        pass
     scheduler.add_job(
         daily_scan_task,
         "cron",
