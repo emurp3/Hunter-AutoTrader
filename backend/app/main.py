@@ -27,6 +27,7 @@ from app.routers.decisions import router as decisions_router
 from app.routers.marketplace import router as marketplace_router
 from app.routers.tasks import router as tasks_router
 from app.routers.auth import router as auth_router
+from app.routers.diag import router as diag_router
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
@@ -115,6 +116,7 @@ app.include_router(decisions_router)
 app.include_router(marketplace_router)
 app.include_router(tasks_router)
 app.include_router(auth_router)
+app.include_router(diag_router)
 
 # ── Static file serving (production only) ────────────────────────────────────
 # _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).

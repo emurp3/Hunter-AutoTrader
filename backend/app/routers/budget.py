@@ -5,6 +5,7 @@ from app.config import APPROVAL_REQUIRED_OVER, BUDGET_STRICT_MODE, HUNTER_OPERAT
 from app.database.config import get_session
 from app.models.marketplace import BankrollReconciliation, BankrollReconciliationCreate
 from app.services import budget as budget_svc
+from app.services import diagnostics as diag_svc
 from app.models.budget import (
     AllocationStatus,
     BudgetAllocation,
@@ -103,7 +104,37 @@ def get_capital_state(session: Session = Depends(get_session)) -> dict:
     Always includes: last_broker_sync_at, mismatch_detected,
     strategy_mode, live_execution_strategy.
     """
-    return get_broker_reconciled_capital_state(session)
+    try:
+        capital_state = get_broker_reconciled_capital_state(session)
+        open_budget = budget_svc.get_open_budget(session)
+        metadata = diag_svc.build_capital_metadata(
+            budget_payload={"budget": {"status": "open" if open_budget else "no_open_budget"}},
+            capital_state=capital_state,
+            readiness_budget_open=bool(open_budget),
+        )
+        diag_svc.record_success("budget.capital_state", metadata=metadata)
+        if capital_state.get("broker_sync_success"):
+            diag_svc.record_success(
+                "broker.sync",
+                metadata={
+                    "last_broker_sync_at": capital_state.get("last_broker_sync_at"),
+                    "broker_state_label": "broker truth",
+                },
+            )
+        else:
+            diag_svc.record_error(
+                "broker.sync",
+                capital_state.get("broker_sync_error") or "Broker sync unavailable",
+                status="degraded",
+                metadata={
+                    "last_broker_sync_at": capital_state.get("last_broker_sync_at"),
+                    "broker_state_label": "fallback/internal ledger",
+                },
+            )
+        return capital_state
+    except Exception as exc:
+        diag_svc.record_error("budget.capital_state", exc, affected_component="budget.capital_state")
+        raise
 
 
 # ── GET /budget/current ───────────────────────────────────────────────────────
@@ -114,14 +145,15 @@ def get_current(session: Session = Depends(get_session)) -> dict:
     Return the active bankroll with broker-reconciled capital stats.
     In live mode, capital display values are sourced from Alpaca directly.
     """
-    # Get broker-reconciled state (broker truth wins in live mode)
-    reconciled = get_broker_reconciled_capital_state(session)
+    try:
+        # Get broker-reconciled state (broker truth wins in live mode)
+        reconciled = get_broker_reconciled_capital_state(session)
 
-    budget = ensure_bankroll(session)
-    allocations = get_allocations_for_budget(session, budget.id)
-    review = reconciled.get("month_end_review", {})
+        budget = ensure_bankroll(session)
+        allocations = get_allocations_for_budget(session, budget.id)
+        review = reconciled.get("month_end_review", {})
 
-    return {
+        payload = {
         "budget": budget,
         # ── Broker-authoritative display values ──────────────────────────────
         "starting_bankroll": reconciled["starting_bankroll"],
@@ -174,7 +206,17 @@ def get_current(session: Session = Depends(get_session)) -> dict:
             }
             for allocation in allocations
         ],
-    }
+        }
+        metadata = diag_svc.build_capital_metadata(
+            budget_payload=payload,
+            capital_state=reconciled,
+            readiness_budget_open=bool(budget_svc.get_open_budget(session)),
+        )
+        diag_svc.record_success("budget.current", metadata=metadata)
+        return payload
+    except Exception as exc:
+        diag_svc.record_error("budget.current", exc, affected_component="budget.current")
+        raise
 
 
 # ── POST /budget/allocate ─────────────────────────────────────────────────────

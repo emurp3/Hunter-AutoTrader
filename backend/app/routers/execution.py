@@ -6,6 +6,7 @@ from sqlmodel import Session
 
 from app.database.config import get_session
 from app.integration.brokerage.base import TradeOrder
+from app.services import diagnostics as diag_svc
 from app.services import execution as exec_svc
 
 router = APIRouter(prefix="/execution", tags=["execution"])
@@ -144,7 +145,20 @@ def fail_execution(
 
 @router.get("/status")
 def execution_status(session: Session = Depends(get_session)):
-    return exec_svc.get_execution_status(session)
+    try:
+        payload = exec_svc.get_execution_status(session)
+        diag_svc.record_success(
+            "execution.status",
+            metadata={
+                "active": payload.get("counts", {}).get("active", 0),
+                "completed": payload.get("counts", {}).get("completed", 0),
+                "failed": payload.get("counts", {}).get("failed", 0),
+            },
+        )
+        return payload
+    except Exception as exc:
+        diag_svc.record_error("execution.status", exc, affected_component="execution.status")
+        raise
 
 
 @router.get("/provider-status")

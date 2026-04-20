@@ -136,6 +136,7 @@ const fallbackData = {
     weakest_lane: null,
     average_return_per_opportunity_type: [],
   },
+  diagnostics: null,
 }
 
 function buildScanSignature(status) {
@@ -423,6 +424,11 @@ async function loadOperationalData() {
     dailyReportResult,
     liveOpportunitiesResult,
     transactionsResult,
+    diagHealthResult,
+    diagCapitalResult,
+    diagExecutionResult,
+    diagErrorsResult,
+    diagTaskTypesResult,
   ] = await Promise.allSettled([
     requestJson('/operations/summary'),
     requestJson('/alerts/?active_only=true'),
@@ -442,6 +448,11 @@ async function loadOperationalData() {
     requestJson('/reports/daily'),
     requestJson('/autotrader/opportunities?limit=20'),
     requestJson('/budget/transactions?limit=200'),
+    requestJson('/diag/health-summary'),
+    requestJson('/diag/capital-status'),
+    requestJson('/diag/execution-status'),
+    requestJson('/diag/recent-errors?limit=8'),
+    requestJson('/diag/task-type-summary'),
   ])
 
   if (
@@ -477,6 +488,13 @@ async function loadOperationalData() {
     dailyReport: dailyReportResult.status === 'fulfilled' ? dailyReportResult.value : null,
     liveOpportunities: liveOpportunitiesResult.status === 'fulfilled' ? liveOpportunitiesResult.value : null,
     transactions: transactionsResult.status === 'fulfilled' ? transactionsResult.value : null,
+    diagnostics: {
+      health: diagHealthResult.status === 'fulfilled' ? diagHealthResult.value : null,
+      capital: diagCapitalResult.status === 'fulfilled' ? diagCapitalResult.value : null,
+      execution: diagExecutionResult.status === 'fulfilled' ? diagExecutionResult.value : null,
+      recentErrors: diagErrorsResult.status === 'fulfilled' ? diagErrorsResult.value : null,
+      taskTypes: diagTaskTypesResult.status === 'fulfilled' ? diagTaskTypesResult.value : null,
+    },
   }
 }
 
@@ -500,6 +518,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const [dailyReport, setDailyReport] = useState(null)
   const [liveOpportunities, setLiveOpportunities] = useState(null)
   const [transactions, setTransactions] = useState(null)
+  const [diagnostics, setDiagnostics] = useState(fallbackData.diagnostics)
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [txSortKey, setTxSortKey] = useState('timestamp')
   const [txSortDir, setTxSortDir] = useState('desc')
@@ -537,6 +556,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     setDailyReport(data.dailyReport ?? null)
     setLiveOpportunities(data.liveOpportunities ?? null)
     setTransactions(data.transactions ?? null)
+    setDiagnostics(data.diagnostics ?? fallbackData.diagnostics)
   }
 
   async function waitForIntakeCompletion(previousSignature) {
@@ -842,6 +862,24 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     'No broker or ledger capital payload is available yet. The broker block stays visible so missing capital data is explicit instead of hidden.'
   const capitalTruthTimestamp = lastBrokerSyncAt ? new Date(lastBrokerSyncAt).toLocaleTimeString() : null
   const currentBankrollLabel = brokerSyncSuccess ? 'Current Bankroll / Portfolio Value' : 'Current Bankroll'
+  const diagCapital = diagnostics?.capital
+  const diagExecution = diagnostics?.execution
+  const diagErrors = diagnostics?.recentErrors?.errors ?? []
+  const diagTaskTypes = diagnostics?.taskTypes
+  const diagnosticStatusLabel = diagCapital?.ui_source === 'broker'
+    ? 'Broker truth'
+    : diagCapital?.ui_source === 'fallback'
+      ? 'Fallback / internal ledger'
+      : 'No payload'
+  const diagnosticPlanningLabel = diagCapital?.planning_state_source_label ?? 'unknown'
+  const diagnosticInconsistent = Boolean(diagCapital?.states_inconsistent)
+  const capitalEndpointStatus = diagCapital?.budget_capital_state_endpoint_status ?? 'unknown'
+  const currentEndpointStatus = diagCapital?.budget_current_endpoint_status ?? 'unknown'
+  const diagLastError =
+    diagErrors[0]?.error_message ??
+    diagCapital?.error_message ??
+    diagExecution?.error_message ??
+    'No recent captured capital or execution exception.'
 
   async function runCommand(type) {
     const commands = {
@@ -1188,6 +1226,87 @@ export default function OperationsPage({ onBack, onAuthFail }) {
             <div className="ops-summary-chip">
               <span className="ops-summary-label">Capital status</span>
               <strong>{budgetStatus === 'open' ? 'Bankroll active' : budgetStatus}</strong>
+            </div>
+          </section>
+
+          <section className="ops-section">
+            <div className="ops-section-header">
+              <h2>Diagnostic Snapshot</h2>
+              <span className={`budget-status-pill budget-status-pill--${diagnosticInconsistent ? 'no_open_budget' : 'open'}`}>
+                {diagnosticInconsistent ? 'ATTENTION' : 'LIVE DIAG'}
+              </span>
+            </div>
+            <div className="diag-snapshot-grid">
+              <div className="diag-snapshot-card">
+                <div className="diag-snapshot-title">Capital Endpoints</div>
+                <div className="diag-snapshot-row">
+                  <span>/budget/current</span>
+                  <strong>{currentEndpointStatus}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>/budget/capital-state</span>
+                  <strong>{capitalEndpointStatus}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Broker state mode</span>
+                  <strong>{diagnosticStatusLabel}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Planning source</span>
+                  <strong>{diagnosticPlanningLabel}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Last broker sync</span>
+                  <strong>{diagCapital?.last_successful_broker_sync_at ? formatRelativeDate(diagCapital.last_successful_broker_sync_at) : '—'}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Last broker sync failure</span>
+                  <strong>{diagCapital?.last_failed_broker_sync_at ? formatRelativeDate(diagCapital.last_failed_broker_sync_at) : '—'}</strong>
+                </div>
+              </div>
+
+              <div className="diag-snapshot-card">
+                <div className="diag-snapshot-title">Execution Pipeline</div>
+                <div className="diag-snapshot-row">
+                  <span>Planned / funded</span>
+                  <strong>{formatCount(diagExecution?.planned_items)} / {formatCount(diagExecution?.funded_items)}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Executable / active</span>
+                  <strong>{formatCount(diagExecution?.executable_items)} / {formatCount(diagExecution?.active_executions)}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Completed / failed</span>
+                  <strong>{formatCount(diagExecution?.completed_executions)} / {formatCount(diagExecution?.failed_executions)}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Unsupported task types 24h</span>
+                  <strong>{formatCount(diagTaskTypes?.unsupported_task_count_24h ?? diagExecution?.unsupported_task_count_24h)}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Unsupported types</span>
+                  <strong>{(diagTaskTypes?.unsupported_task_types ?? diagExecution?.unsupported_task_types ?? []).join(', ') || 'none'}</strong>
+                </div>
+              </div>
+
+              <div className="diag-snapshot-card">
+                <div className="diag-snapshot-title">Recent Exceptions</div>
+                <div className="diag-snapshot-row">
+                  <span>Capital inconsistency</span>
+                  <strong>{diagnosticInconsistent ? 'yes' : 'no'}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Planning says no open budget</span>
+                  <strong>{diagCapital?.planning_says_no_open_budget ? 'yes' : 'no'}</strong>
+                </div>
+                <div className="diag-snapshot-row">
+                  <span>Readiness says budget open</span>
+                  <strong>{diagCapital?.readiness_says_budget_open ? 'yes' : 'no'}</strong>
+                </div>
+                <div className="diag-snapshot-error">
+                  {diagLastError}
+                </div>
+              </div>
             </div>
           </section>
 
