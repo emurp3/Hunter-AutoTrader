@@ -25,6 +25,7 @@ from app.models.strategy import Strategy, StrategyStatus
 from app.services import budget as budget_svc
 from app.services import strategies as strategy_svc
 from app.services.autotrader import get_intake_state
+from app.services import reporting as reporting_svc
 from app.services.scheduler import build_weekly_report_now
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -169,7 +170,8 @@ def get_daily_report(session: Session = Depends(get_session)) -> dict:
     if not next_actions:
         next_actions.append("System is stable. Run POST /autotrader/run-intake to pull fresh opportunities.")
 
-    return {
+    timing_report = reporting_svc.build_daily_report(session)
+    report = {
         "report_date": today.isoformat(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "execution_mode": EXECUTION_MODE,
@@ -206,14 +208,19 @@ def get_daily_report(session: Session = Depends(get_session)) -> dict:
         "blockers": blockers,
         "next_actions": next_actions,
     }
+    report["position_timing"] = timing_report["timing"]
+    report["fast_recycle_performance"] = timing_report["fast_recycle"]
+    report["legacy_performance"] = timing_report["legacy"]
+    report["open_position_snapshot"] = timing_report["open_position_snapshot"]
+    return report
 
 
 @router.get("/weekly")
-def get_weekly_report() -> dict:
+def get_weekly_report(session: Session = Depends(get_session)) -> dict:
     """
     Full weekly MurphBoard review.
 
     Covers opportunities, strategies (≥10 check), capital performance,
     ROI, best/worst strategy, lessons learned placeholder, and next-week plan.
     """
-    return build_weekly_report_now()
+    return build_weekly_report_now(session=session)

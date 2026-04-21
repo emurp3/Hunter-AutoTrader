@@ -35,6 +35,7 @@ from app.services.trading_candidates import generate_trading_candidates
 from app.services.budget import get_budget_commander_summary
 from app.services import strategies as strategy_svc
 from app.services import alerts as alert_svc
+from app.services import reporting as reporting_svc
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,8 @@ def _build_weekly_report(session: Session) -> dict:
     discovery_quota = strategy_svc.check_source_discovery_quota(session, minimum=SOURCES_WEEKLY_MINIMUM)
     strategy_quota = strategy_svc.check_quota(session, minimum=STRATEGY_WEEKLY_MINIMUM)
 
-    return {
+    timing_report = reporting_svc.build_weekly_report(session)
+    report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_sources": len(sources),
         "total_estimated_monthly_profit": round(total_profit, 2),
@@ -137,6 +139,11 @@ def _build_weekly_report(session: Session) -> dict:
             "strategy_deployment": strategy_quota,
         },
     }
+    report["position_timing"] = timing_report["timing"]
+    report["fast_recycle_performance"] = timing_report["fast_recycle"]
+    report["legacy_performance"] = timing_report["legacy"]
+    report["open_position_snapshot"] = timing_report["open_position_snapshot"]
+    return report
 
 
 async def daily_scan_task() -> None:
@@ -287,13 +294,16 @@ async def recycle_cycle_task() -> None:
         logger.exception("recycle_cycle_task: unhandled exception — %s", exc)
 
 
-def build_weekly_report_now() -> dict:
+def build_weekly_report_now(*, session: Session | None = None) -> dict:
     """Synchronous helper — builds and persists the weekly report immediately.
 
     Called by the /reports/weekly endpoint for on-demand generation.
     Returns the report dict (same structure as weekly_report_task produces).
     """
-    with Session(engine) as session:
+    if session is None:
+        with Session(engine) as owned_session:
+            report = _build_weekly_report(owned_session)
+    else:
         report = _build_weekly_report(session)
 
     _REPORTS_PATH.mkdir(parents=True, exist_ok=True)

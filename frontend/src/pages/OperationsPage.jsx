@@ -136,6 +136,7 @@ const fallbackData = {
     weakest_lane: null,
     average_return_per_opportunity_type: [],
   },
+  weeklyReport: null,
   diagnostics: null,
 }
 
@@ -355,6 +356,16 @@ function formatDurationMinutes(value) {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
 }
 
+function formatMetricNumber(value, digits = 2) {
+  if (value == null || Number.isNaN(Number(value))) {
+    return '—'
+  }
+  return Number(value).toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
+}
+
 function extractTaskId(alert) {
   const body = alert?.body ?? ''
   const match = body.match(/task_id=([a-f0-9-]+)/i)
@@ -437,6 +448,7 @@ async function loadOperationalData() {
     performanceSummaryResult,
     readinessResult,
     dailyReportResult,
+    weeklyReportResult,
     liveOpportunitiesResult,
     transactionsResult,
     diagHealthResult,
@@ -461,6 +473,7 @@ async function loadOperationalData() {
     requestJson('/performance/summary'),
     requestJson('/system/readiness'),
     requestJson('/reports/daily'),
+    requestJson('/reports/weekly'),
     requestJson('/autotrader/opportunities?limit=20'),
     requestJson('/budget/transactions?limit=200'),
     requestJson('/diag/health-summary'),
@@ -501,6 +514,7 @@ async function loadOperationalData() {
       performanceSummaryResult.status === 'fulfilled' ? performanceSummaryResult.value : null,
     readiness: readinessResult.status === 'fulfilled' ? readinessResult.value : null,
     dailyReport: dailyReportResult.status === 'fulfilled' ? dailyReportResult.value : null,
+    weeklyReport: weeklyReportResult.status === 'fulfilled' ? weeklyReportResult.value : null,
     liveOpportunities: liveOpportunitiesResult.status === 'fulfilled' ? liveOpportunitiesResult.value : null,
     transactions: transactionsResult.status === 'fulfilled' ? transactionsResult.value : null,
     diagnostics: {
@@ -531,6 +545,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
   const [performanceSummary, setPerformanceSummary] = useState(fallbackData.performanceSummary)
   const [readiness, setReadiness] = useState(null)
   const [dailyReport, setDailyReport] = useState(null)
+  const [weeklyReport, setWeeklyReport] = useState(null)
   const [liveOpportunities, setLiveOpportunities] = useState(null)
   const [transactions, setTransactions] = useState(null)
   const [diagnostics, setDiagnostics] = useState(fallbackData.diagnostics)
@@ -569,6 +584,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
     setPerformanceSummary(data.performanceSummary ?? fallbackData.performanceSummary)
     setReadiness(data.readiness ?? null)
     setDailyReport(data.dailyReport ?? null)
+    setWeeklyReport(data.weeklyReport ?? null)
     setLiveOpportunities(data.liveOpportunities ?? null)
     setTransactions(data.transactions ?? null)
     setDiagnostics(data.diagnostics ?? fallbackData.diagnostics)
@@ -748,6 +764,12 @@ export default function OperationsPage({ onBack, onAuthFail }) {
       .filter((item) => item.hold_duration_minutes != null || item.time_to_realized_profit_minutes != null)
   const top10 = pipeline?.top_10 ?? []
   const recentEvents = events?.events ?? []
+  const dailyTiming = dailyReport?.position_timing ?? null
+  const dailyFast = dailyReport?.fast_recycle_performance ?? null
+  const dailyLegacy = dailyReport?.legacy_performance ?? null
+  const weeklyTiming = weeklyReport?.position_timing ?? null
+  const weeklyFast = weeklyReport?.fast_recycle_performance ?? null
+  const weeklyLegacy = weeklyReport?.legacy_performance ?? null
   const endpointStatus = usingFallback ? 'API Offline' : 'API Online'
   const readinessAutotrader = readiness?.modules?.autotrader ?? null
   const readinessLiveStatus = readinessAutotrader?.live_data_status ?? null
@@ -2153,6 +2175,72 @@ export default function OperationsPage({ onBack, onAuthFail }) {
               </div>
             </div>
           </section>
+
+          {(dailyTiming || weeklyTiming) && (
+            <section className="ops-section">
+              <div className="ops-section-header">
+                <h2>Daily & Weekly Reports</h2>
+                <span className="ops-count">Position lifecycle timing</span>
+              </div>
+
+              {dailyTiming && (
+                <div className="ops-panel" style={{ marginBottom: '1rem' }}>
+                  <div className="ops-kicker">Daily Report</div>
+                  <h3 style={{ marginTop: 0 }}>Today</h3>
+                  <div className="stat-grid">
+                    <StatCard label="Opened / Closed" value={`${formatCount(dailyTiming.trades_opened)} / ${formatCount(dailyTiming.trades_closed)}`} />
+                    <StatCard label="Profitable / Losing" value={`${formatCount(dailyTiming.profitable_closes)} / ${formatCount(dailyTiming.losing_closes)}`} />
+                    <StatCard label="Avg Hold" value={formatDurationMinutes(dailyTiming.average_hold_time_minutes)} />
+                    <StatCard label="Median Hold" value={formatDurationMinutes(dailyTiming.median_hold_time_minutes)} />
+                    <StatCard label="Avg Time to Profit" value={formatDurationMinutes(dailyTiming.average_time_to_realized_profit_minutes)} />
+                    <StatCard label="Fastest / Slowest Profit" value={`${formatDurationMinutes(dailyTiming.fastest_time_to_realized_profit_minutes)} / ${formatDurationMinutes(dailyTiming.slowest_time_to_realized_profit_minutes)}`} />
+                    <StatCard label="Realized P/L" value={formatCurrency(dailyTiming.realized_pl)} />
+                    <StatCard label="Unrealized Snapshot" value={formatCurrency(dailyTiming.unrealized_pl_snapshot)} />
+                    <StatCard label="Stale / Over Max" value={`${formatCount(dailyTiming.stale_positions)} / ${formatCount(dailyTiming.positions_over_max_hold)}`} />
+                    <StatCard label="Capital Reuse" value={formatCount(dailyTiming.capital_reuse_count)} />
+                  </div>
+                  <div className="execution-summary-meta">
+                    <span>Fast recycle closes {formatCount(dailyFast?.trades_closed)}</span>
+                    <span className="budget-sep">·</span>
+                    <span>Legacy closes {formatCount(dailyLegacy?.trades_closed)}</span>
+                    <span className="budget-sep">·</span>
+                    <span>Fast recycle avg hold {formatDurationMinutes(dailyFast?.average_hold_time_minutes)}</span>
+                    <span className="budget-sep">·</span>
+                    <span>Legacy avg hold {formatDurationMinutes(dailyLegacy?.average_hold_time_minutes)}</span>
+                  </div>
+                </div>
+              )}
+
+              {weeklyTiming && (
+                <div className="ops-panel">
+                  <div className="ops-kicker">Weekly Report</div>
+                  <h3 style={{ marginTop: 0 }}>This Week</h3>
+                  <div className="stat-grid">
+                    <StatCard label="Opened / Closed" value={`${formatCount(weeklyTiming.trades_opened)} / ${formatCount(weeklyTiming.trades_closed)}`} />
+                    <StatCard label="Profitable / Losing" value={`${formatCount(weeklyTiming.profitable_closes)} / ${formatCount(weeklyTiming.losing_closes)}`} />
+                    <StatCard label="Win Rate" value={weeklyTiming.win_rate != null ? `${formatMetricNumber(weeklyTiming.win_rate * 100, 1)}%` : '—'} />
+                    <StatCard label="Avg Hold" value={formatDurationMinutes(weeklyTiming.average_hold_time_minutes)} />
+                    <StatCard label="Median Hold" value={formatDurationMinutes(weeklyTiming.median_hold_time_minutes)} />
+                    <StatCard label="Avg Time to Profit" value={formatDurationMinutes(weeklyTiming.average_time_to_realized_profit_minutes)} />
+                    <StatCard label="Fastest / Slowest Profit" value={`${formatDurationMinutes(weeklyTiming.fastest_time_to_realized_profit_minutes)} / ${formatDurationMinutes(weeklyTiming.slowest_time_to_realized_profit_minutes)}`} />
+                    <StatCard label="Realized P/L" value={formatCurrency(weeklyTiming.realized_pl)} />
+                    <StatCard label="Stale / Over Max" value={`${formatCount(weeklyTiming.stale_positions)} / ${formatCount(weeklyTiming.positions_over_max_hold)}`} />
+                    <StatCard label="Capital Reuse" value={formatCount(weeklyTiming.capital_reuse_count)} />
+                    <StatCard label="Fast / Legacy Closes" value={`${formatCount(weeklyTiming.total_fast_recycle_closes)} / ${formatCount(weeklyTiming.total_legacy_closes)}`} />
+                  </div>
+                  <div className="execution-summary-meta">
+                    <span>Fast recycle realized {formatCurrency(weeklyFast?.realized_pl)}</span>
+                    <span className="budget-sep">·</span>
+                    <span>Fast recycle avg profit time {formatDurationMinutes(weeklyFast?.average_time_to_realized_profit_minutes)}</span>
+                    <span className="budget-sep">·</span>
+                    <span>Legacy realized {formatCurrency(weeklyLegacy?.realized_pl)}</span>
+                    <span className="budget-sep">·</span>
+                    <span>Legacy avg profit time {formatDurationMinutes(weeklyLegacy?.average_time_to_realized_profit_minutes)}</span>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           <section className="ops-section">
             <div className="ops-section-header">
