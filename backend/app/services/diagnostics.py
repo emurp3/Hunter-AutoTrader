@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import Counter, deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import threading
 from typing import Any
+from uuid import UUID
 
 from sqlmodel import Session, select
 
@@ -41,7 +42,7 @@ class _DiagnosticsStore:
                     "status": status,
                     "last_success_at": now,
                     "affected_component": component,
-                    "metadata": metadata or {},
+                    "metadata": _json_safe(metadata or {}),
                 }
             )
             self._components[component] = existing
@@ -64,7 +65,7 @@ class _DiagnosticsStore:
             "error_message": message,
             "error_type": error_type,
             "affected_component": affected_component or component,
-            "metadata": metadata or {},
+            "metadata": _json_safe(metadata or {}),
         }
         with self._lock:
             existing = dict(self._components.get(component, {}))
@@ -353,3 +354,33 @@ def _sanitize_message(message: str) -> str:
         text = text.replace(token, f"{token[0]}***")
         text = text.replace(token.upper(), f"{token[0].upper()}***")
     return text
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, deque)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _json_safe(value.model_dump())
+        except Exception:
+            return str(value)
+    if hasattr(value, "__dict__"):
+        try:
+            return _json_safe(
+                {
+                    key: item
+                    for key, item in vars(value).items()
+                    if not key.startswith("_")
+                }
+            )
+        except Exception:
+            return str(value)
+    return str(value)

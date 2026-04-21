@@ -32,6 +32,7 @@ from app.models.budget import AllocationStatus, BudgetAllocation, BudgetOutcome,
 from app.models.event import EventType
 from app.models.execution_outcome import ExecutionOutcome
 from app.models.income_source import IncomeSource, SourceStatus
+from app.models.position_lifecycle import PositionLifecycle
 from app.models.provider_execution import ProviderExecution
 from app.models.strategy import Strategy, StrategyStatus
 from app.services import alerts as alert_svc
@@ -394,6 +395,7 @@ def fail_packet_execution(
 
 
 def get_execution_status(session: Session) -> dict:
+    reconcile_completed_packet_outcomes(session)
     packets = session.exec(
         select(ActionPacket).where(ActionPacket.execution_state != ExecutionState.planned)
     ).all()
@@ -1200,6 +1202,127 @@ def _packet_payload(packet: ActionPacket, session: Session) -> dict:
         "lane": _infer_lane(source),
         "category": source.category if source else None,
     }
+
+
+def reconcile_completed_packet_outcomes(session: Session) -> dict:
+    reconciled_packets: list[int] = []
+    closed_lifecycles = session.exec(
+        select(PositionLifecycle)
+        .where(
+            PositionLifecycle.status == "closed",
+            PositionLifecycle.packet_id.is_not(None),
+        )
+        .order_by(PositionLifecycle.updated_at.desc(), PositionLifecycle.created_at.desc())
+    ).all()
+
+    for lifecycle in closed_lifecycles:
+        if lifecycle.packet_id is None:
+            continue
+        packet = session.get(ActionPacket, lifecycle.packet_id)
+        if not packet:
+            continue
+        if packet.execution_state in (ExecutionState.failed, ExecutionState.canceled):
+            continue
+
+        existing_outcome = session.exec(
+            select(ExecutionOutcome)
+            .where(ExecutionOutcome.action_packet_id == packet.id)
+            .order_by(ExecutionOutcome.recorded_at.desc())
+        ).first()
+        if existing_outcome:
+            if packet.execution_state != ExecutionState.completed:
+                _mark_packet_completed_from_lifecycle(packet, lifecycle, session)
+                reconciled_packets.append(packet.id)
+            continue
+
+        _mark_packet_completed_from_lifecycle(packet, lifecycle, session)
+
+        allocation = _get_allocation(packet.source_id, session)
+        source = _get_source(packet.source_id, session)
+        strategy = _get_strategy(packet.source_id, session)
+        completed_at = lifecycle.exited_at or packet.execution_completed_at or datetime.now(timezone.utc)
+        started_at = (
+            packet.execution_started_at
+            or lifecycle.entry_filled_at
+            or lifecycle.entered_at
+            or packet.created_at
+        )
+        completion_hours = max(0.0, round((completed_at - started_at).total_seconds() / 3600, 2))
+        notes = "Auto-recorded from broker lifecycle reconciliation"
+        if lifecycle.hold_duration_minutes is not None:
+            notes = _merge_notes(notes, f"hold={lifecycle.hold_duration_minutes:.2f}m")
+        if lifecycle.time_to_realized_profit_minutes is not None:
+            notes = _merge_notes(
+                notes,
+                f"realized_profit_after={lifecycle.time_to_realized_profit_minutes:.2f}m",
+            )
+
+        session.add(
+            ExecutionOutcome(
+                action_packet_id=packet.id,
+                allocation_id=allocation.id if allocation else lifecycle.allocation_id,
+                source_id=packet.source_id,
+                strategy_id=strategy.strategy_id if strategy else None,
+                lane=_infer_lane(source),
+                category=source.category if source else None,
+                execution_state=ExecutionState.completed,
+                allocated_amount=allocation.amount_allocated if allocation else None,
+                actual_return=lifecycle.realized_pl,
+                time_to_completion_hours=completion_hours,
+                success_reason="Broker close reconciled",
+                notes=notes,
+            )
+        )
+        reconciled_packets.append(packet.id)
+
+    if reconciled_packets:
+        session.commit()
+
+    return {
+        "reconciled_packets": len(reconciled_packets),
+        "packet_ids": reconciled_packets,
+    }
+
+
+def _mark_packet_completed_from_lifecycle(
+    packet: ActionPacket,
+    lifecycle: PositionLifecycle,
+    session: Session,
+) -> None:
+    completed_at = lifecycle.exited_at or datetime.now(timezone.utc)
+    started_at = lifecycle.entry_filled_at or lifecycle.entered_at or packet.execution_started_at or packet.created_at
+    packet.execution_state = ExecutionState.completed
+    packet.execution_started_at = packet.execution_started_at or started_at
+    packet.execution_completed_at = packet.execution_completed_at or completed_at
+    packet.execution_updated_at = completed_at
+    packet.status = PacketStatus.executed
+    packet.execution_notes = _merge_notes(
+        packet.execution_notes,
+        "Auto-completed from broker lifecycle reconciliation",
+    )
+    session.add(packet)
+
+    allocation = _get_allocation(packet.source_id, session)
+    if allocation:
+        allocation.status = AllocationStatus.spent
+        allocation.started_at = allocation.started_at or started_at
+        allocation.completed_at = allocation.completed_at or completed_at
+        allocation.updated_at = completed_at
+        session.add(allocation)
+
+    source = _get_source(packet.source_id, session)
+    if source:
+        source.status = SourceStatus.outcome_logged
+        session.add(source)
+
+    strategy = _get_strategy(packet.source_id, session)
+    if strategy:
+        strategy.status = StrategyStatus.completed
+        strategy.updated_at = completed_at
+        if lifecycle.realized_pl is not None:
+            strategy.actual_return = lifecycle.realized_pl
+        strategy.reason_for_continuation_or_termination = "Broker close reconciled"
+        session.add(strategy)
 
 
 def _latest_provider_symbol(packet_id: int, session: Session) -> Optional[str]:

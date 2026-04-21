@@ -33,6 +33,11 @@ def _build_report(
     end: datetime,
     now: datetime,
 ) -> dict:
+    from app.services import execution as execution_svc
+    from app.services import position_lifecycle as lifecycle_svc
+
+    lifecycle_svc.reconcile_order_fills_with_broker(session, commit=True)
+    execution_svc.reconcile_completed_packet_outcomes(session)
     lifecycles = list(session.exec(select(PositionLifecycle)).all())
     open_lifecycles = [row for row in lifecycles if row.status == "open"]
     closed_in_period = [row for row in lifecycles if _in_window(row.exited_at, start, end)]

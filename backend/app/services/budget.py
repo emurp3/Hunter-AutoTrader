@@ -955,6 +955,10 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
     from app.services import position_lifecycle as lifecycle_svc
 
     lifecycle_svc.sync_lifecycles_with_broker_state(session, broker_state)
+    lifecycle_svc.reconcile_order_fills_with_broker(session, broker_state=broker_state)
+    from app.services import execution as execution_svc
+
+    execution_svc.reconcile_completed_packet_outcomes(session)
     broker_dict = broker_capital_state_to_dict(broker_state)
     broker_dict["positions"] = lifecycle_svc.enrich_broker_positions_with_lifecycle(
         session,

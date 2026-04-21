@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Optional
 
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
-from app.config import FAST_RECYCLE_MAX_HOLD_MINUTES, MAX_HOLD_MINUTES
+from app.config import ALPACA_ENABLED, FAST_RECYCLE_MAX_HOLD_MINUTES, MAX_HOLD_MINUTES
+from app.integration.brokerage.alpaca import get_alpaca_adapter
 from app.models.position_lifecycle import PositionLifecycle
+
+logger = logging.getLogger(__name__)
 
 
 def record_entry_submission(
@@ -189,6 +193,91 @@ def sync_lifecycles_with_broker_state(session: Session, broker_state) -> None:
     session.commit()
 
 
+def reconcile_order_fills_with_broker(
+    session: Session,
+    *,
+    broker_state=None,
+    commit: bool = True,
+) -> list[dict]:
+    if not ALPACA_ENABLED:
+        return []
+
+    try:
+        adapter = get_alpaca_adapter()
+    except Exception as exc:
+        logger.debug("reconcile_order_fills_with_broker: adapter unavailable: %s", exc)
+        return []
+
+    open_symbols = {
+        (position.symbol or "").upper()
+        for position in getattr(broker_state, "positions", []) or []
+        if getattr(position, "symbol", None)
+    } if broker_state is not None else None
+    now = datetime.now(timezone.utc)
+    reconciled: list[dict] = []
+    open_lifecycles = list(
+        session.exec(
+            select(PositionLifecycle).where(PositionLifecycle.status == "open")
+        ).all()
+    )
+
+    for lifecycle in open_lifecycles:
+        entry_order = _safe_get_order(adapter, lifecycle.entry_order_id)
+        exit_order = _safe_get_order(adapter, lifecycle.exit_order_id)
+
+        if entry_order and lifecycle.entry_filled_at is None and _order_is_filled(entry_order):
+            lifecycle.entry_filled_at = (
+                _extract_order_time(entry_order, "filled_at")
+                or _extract_order_time(entry_order, "submitted_at")
+                or lifecycle.entered_at
+                or now
+            )
+            lifecycle.updated_at = now
+            session.add(lifecycle)
+
+        should_close = False
+        close_time = None
+        realized_pl = lifecycle.realized_pl
+
+        if exit_order and _order_is_filled(exit_order):
+            should_close = True
+            close_time = (
+                _extract_order_time(exit_order, "filled_at")
+                or _extract_order_time(exit_order, "submitted_at")
+                or now
+            )
+            realized_pl = _compute_realized_pl(lifecycle, entry_order, exit_order)
+        elif lifecycle.exit_order_id and open_symbols is not None and lifecycle.symbol.upper() not in open_symbols:
+            should_close = True
+            close_time = now
+
+        if not should_close:
+            continue
+
+        lifecycle.exited_at = lifecycle.exited_at or close_time or now
+        lifecycle.status = "closed"
+        lifecycle.realized_pl = realized_pl
+        _compute_closed_metrics(lifecycle)
+        lifecycle.updated_at = now
+        session.add(lifecycle)
+        reconciled.append(
+            {
+                "symbol": lifecycle.symbol,
+                "packet_id": lifecycle.packet_id,
+                "source_id": lifecycle.source_id,
+                "realized_pl": lifecycle.realized_pl,
+                "exited_at": _iso(lifecycle.exited_at),
+            }
+        )
+
+    if commit:
+        session.commit()
+    else:
+        session.flush()
+
+    return reconciled
+
+
 def serialize_lifecycle(lifecycle: Optional[PositionLifecycle]) -> Optional[dict]:
     if lifecycle is None:
         return None
@@ -336,6 +425,74 @@ def _compute_closed_metrics(lifecycle: PositionLifecycle) -> None:
         lifecycle.hold_duration_minutes = round(max(0.0, (exit_time - entry_time).total_seconds() / 60.0), 2)
         if lifecycle.realized_pl is not None and lifecycle.realized_pl > 0:
             lifecycle.time_to_realized_profit_minutes = lifecycle.hold_duration_minutes
+
+
+def _safe_get_order(adapter, order_id: Optional[str]):
+    if not order_id:
+        return None
+    try:
+        return adapter.get_order(order_id)
+    except Exception as exc:
+        logger.debug("position_lifecycle: failed to fetch order %s: %s", order_id, exc)
+        return None
+
+
+def _order_is_filled(order) -> bool:
+    status = str(getattr(order, "status", "") or "").lower()
+    return status in {"filled", "partially_filled"}
+
+
+def _extract_order_time(order, field_name: str) -> Optional[datetime]:
+    raw = getattr(order, "raw", None) or {}
+    if isinstance(raw, dict):
+        raw_value = raw.get(field_name)
+        parsed = _parse_datetime(raw_value)
+        if parsed is not None:
+            return parsed
+    if field_name == "submitted_at":
+        return _parse_datetime(getattr(order, "submitted_at", None))
+    return None
+
+
+def _parse_datetime(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _coerce_dt(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return _coerce_dt(datetime.fromisoformat(text))
+        except ValueError:
+            return None
+    return None
+
+
+def _compute_realized_pl(
+    lifecycle: PositionLifecycle,
+    entry_order,
+    exit_order,
+) -> Optional[float]:
+    entry_price = float(getattr(entry_order, "filled_avg_price", 0.0) or 0.0) if entry_order else 0.0
+    exit_price = float(getattr(exit_order, "filled_avg_price", 0.0) or 0.0) if exit_order else 0.0
+    qty = float(
+        getattr(exit_order, "filled_qty", 0.0)
+        or getattr(entry_order, "filled_qty", 0.0)
+        or 0.0
+    )
+    if entry_price <= 0 or exit_price <= 0 or qty <= 0:
+        return lifecycle.realized_pl
+
+    entry_side = str(getattr(entry_order, "side", "buy") or "buy").lower() if entry_order else "buy"
+    if entry_side == "sell":
+        gross_pl = (entry_price - exit_price) * qty
+    else:
+        gross_pl = (exit_price - entry_price) * qty
+    return round(gross_pl, 2)
 
 
 def _derive_entry_time(now: datetime, hold_minutes: Optional[float]) -> datetime:

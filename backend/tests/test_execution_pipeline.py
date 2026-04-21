@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from sqlalchemy.pool import StaticPool
@@ -13,6 +13,7 @@ from app.models.execution_outcome import ExecutionOutcome
 from app.models.income_source import IncomeSource, SourceStatus
 from app.models.provider_execution import ProviderExecution
 from app.models.task import Task
+from app.services import reporting as reporting_svc
 
 
 def _make_session() -> Session:
@@ -189,3 +190,90 @@ def test_auto_place_trade_cancels_dead_end_packet_with_reason(monkeypatch) -> No
         ).all()
         assert len(outcomes) == 1
         assert "No trade symbol found" in (outcomes[0].failure_reason or "")
+
+
+def test_closed_lifecycle_reconciles_packet_outcome_and_reporting(monkeypatch) -> None:
+    from app.services import execution as execution_svc
+    from app.services import position_lifecycle as lifecycle_svc
+
+    with _make_session() as session:
+        source, packet = _seed_trading_source(session)
+        packet.execution_state = ExecutionState.in_progress
+        packet.execution_started_at = datetime(2026, 4, 20, 13, 0, tzinfo=timezone.utc)
+        session.add(packet)
+        session.commit()
+
+        lifecycle = lifecycle_svc.record_entry_submission(
+            session,
+            symbol="NVDA",
+            source_id=source.source_id,
+            packet_id=packet.id,
+            allocation_id=1,
+            provider_order_id="buy-1",
+            entered_at=datetime(2026, 4, 20, 13, 0, tzinfo=timezone.utc),
+        )
+        lifecycle.entry_filled_at = datetime(2026, 4, 20, 13, 1, tzinfo=timezone.utc)
+        lifecycle.exit_order_id = "sell-1"
+        lifecycle.exit_submitted_at = datetime(2026, 4, 20, 13, 40, tzinfo=timezone.utc)
+        session.add(lifecycle)
+        session.commit()
+
+        def _get_order(order_id: str):
+            if order_id == "buy-1":
+                return SimpleNamespace(
+                    order_id="buy-1",
+                    side="buy",
+                    status="filled",
+                    filled_qty=1.0,
+                    filled_avg_price=100.0,
+                    submitted_at="2026-04-20T13:00:00+00:00",
+                    raw={"filled_at": "2026-04-20T13:01:00+00:00"},
+                )
+            if order_id == "sell-1":
+                return SimpleNamespace(
+                    order_id="sell-1",
+                    side="sell",
+                    status="filled",
+                    filled_qty=1.0,
+                    filled_avg_price=112.5,
+                    submitted_at="2026-04-20T13:40:00+00:00",
+                    raw={"filled_at": "2026-04-20T13:43:00+00:00"},
+                )
+            raise AssertionError(f"unexpected order id: {order_id}")
+
+        monkeypatch.setattr(
+            lifecycle_svc,
+            "get_alpaca_adapter",
+            lambda: SimpleNamespace(get_order=_get_order),
+        )
+        monkeypatch.setattr(lifecycle_svc, "ALPACA_ENABLED", True)
+        monkeypatch.setattr(
+            reporting_svc.budget_svc,
+            "get_broker_reconciled_capital_state",
+            lambda session: {"unrealized_pl": 0.0},
+        )
+
+        lifecycle_svc.reconcile_order_fills_with_broker(session, broker_state=SimpleNamespace(positions=[]))
+        execution_svc.reconcile_completed_packet_outcomes(session)
+        report = reporting_svc.build_daily_report(
+            session,
+            now=datetime(2026, 4, 20, 18, 0, tzinfo=timezone.utc),
+        )
+
+        packet = session.get(ActionPacket, packet.id)
+        assert packet.execution_state == ExecutionState.completed
+
+        outcome = session.exec(
+            select(ExecutionOutcome).where(ExecutionOutcome.action_packet_id == packet.id)
+        ).first()
+        assert outcome is not None
+        assert outcome.actual_return == 12.5
+
+        latest_lifecycle = lifecycle_svc.get_latest_lifecycle(session, packet_id=packet.id, source_id=source.source_id)
+        assert latest_lifecycle is not None
+        assert latest_lifecycle.status == "closed"
+        assert latest_lifecycle.hold_duration_minutes == 42.0
+        assert latest_lifecycle.time_to_realized_profit_minutes == 42.0
+        assert report["timing"]["average_hold_time_minutes"] == 42.0
+        assert report["timing"]["average_time_to_realized_profit_minutes"] == 42.0
+        assert report["timing"]["capital_reuse_count"] == 1
