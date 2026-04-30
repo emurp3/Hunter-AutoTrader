@@ -18,7 +18,7 @@ function AppInner() {
   if (page === 'hero') {
     return (
       <HeroPage
-        onEnter={() => setPage('operations')}
+        onEnter={() => setPage(user ? 'operations' : 'login')}
         onLogin={() => setPage('login')}
         onStatus={() => setPage('status')}
       />
