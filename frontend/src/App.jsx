@@ -14,7 +14,6 @@ function AppInner() {
   const { user, loading } = useAuth()
   const [page, setPage]   = useState('hero')
 
-  // ── Public pages ──────────────────────────────────────────────────────────
   if (page === 'hero') {
     return (
       <HeroPage
@@ -29,13 +28,11 @@ function AppInner() {
     return <StatusPage onBack={() => setPage('hero')} />
   }
 
-  // Direct login (from "Login" button on hero)
   if (page === 'login') {
     if (user) return <OperationsPage onBack={() => setPage('hero')} onAuthFail={() => setPage('login')} />
     return <Login onSuccess={() => setPage('operations')} onBack={() => setPage('hero')} />
   }
 
-  // ── Protected: operations ─────────────────────────────────────────────────
   if (loading) return <div style={loadStyle}>loading...</div>
   if (!user)   return <Login onSuccess={() => setPage('operations')} />
   return <OperationsPage onBack={() => setPage('hero')} onAuthFail={() => setPage('login')} />
