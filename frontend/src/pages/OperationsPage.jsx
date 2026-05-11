@@ -451,34 +451,39 @@ function BreakdownList({ data, emptyText }) {
 
 function OpportunitiesSection({ onAuthFail }) {
   const { endpoints, refresh } = useSectionData(OPPORTUNITY_LOADERS, onAuthFail)
-  const [opportunityView, setOpportunityView] = useState({ type: 'opportunities', label: 'Live Opportunity Total' })
+  const [opportunityView, setOpportunityView] = useState({ id: 'opportunities', type: 'opportunities', label: 'Live Opportunity Total' })
   const summary = endpointData(endpoints.summary, {})
   const intake = endpointData(endpoints.intake, {})
   const opportunities = asArray(endpointData(endpoints.opportunities, {}))
   const packets = asArray(endpointData(endpoints.packets, {}))
   const execution = endpointData(endpoints.execution, {})
 
+  // Real PacketStatus enum: draft, ready, acknowledged, executed
+  // Real ExecutionState enum: planned, active, in_progress, completed, failed, canceled
+  const buildingStatuses = ['draft', 'ready', 'acknowledged']
+  const executedStatuses = ['executed']
+  const killedStatuses = ['failed', 'canceled']  // ExecutionState values, not PacketStatus
+
   const created = valueFrom(summary.total_opportunities, intake.total_from_autotrader, opportunities.length)
-  const building = packets.filter((packet) => ['building', 'draft', 'ready', 'queued'].includes(String(packet?.status || '').toLowerCase())).length
+  const building = packets.filter((p) => buildingStatuses.includes(String(p?.status || '').toLowerCase())).length
   const executed = valueFrom(
-    packets.filter((packet) => ['executed', 'completed'].includes(String(packet?.status || '').toLowerCase())).length || null,
-    execution.completed_executions?.length,
+    packets.filter((p) => executedStatuses.includes(String(p?.status || '').toLowerCase())).length || null,
+    summary.execution?.completed,
   )
   const killed = valueFrom(
-    packets.filter((packet) => ['killed', 'failed', 'rejected', 'retired'].includes(String(packet?.status || '').toLowerCase())).length || null,
-    execution.failed_executions?.length,
+    packets.filter((p) => killedStatuses.includes(String(p?.execution_state || '').toLowerCase())).length || null,
+    summary.execution?.failed,
   )
 
   const byAgent = countBy(opportunities, ['agent', 'assigned_agent', 'created_by', 'owner'])
   const byChannel = intake.by_origin || countBy(opportunities, ['origin', 'origin_module', 'channel', 'source'])
   const byType = intake.by_category || countBy(opportunities, ['category', 'type', 'opportunity_type'])
-  const buildingStatuses = ['building', 'draft', 'ready', 'queued']
-  const executedStatuses = ['executed', 'completed']
-  const killedStatuses = ['killed', 'failed', 'rejected', 'retired']
+
   const filteredPackets = packets.filter((packet) => {
     if (opportunityView.type !== 'packets') return false
-    const status = String(packet?.status || '').toLowerCase()
-    return opportunityView.statuses.includes(status)
+    const field = opportunityView.field || 'status'
+    const value = String(packet?.[field] || '').toLowerCase()
+    return opportunityView.statuses.includes(value)
   })
   const opportunityListTitle = opportunityView.type === 'packets'
     ? `${opportunityView.label} Packets`
@@ -491,29 +496,29 @@ function OpportunitiesSection({ onAuthFail }) {
           label="Created"
           value={formatNumber(created)}
           detail="Live opportunity total"
-          active={opportunityView.type === 'opportunities'}
-          onClick={() => setOpportunityView({ type: 'opportunities', label: 'Live Opportunity Total' })}
+          active={opportunityView.id === 'opportunities'}
+          onClick={() => setOpportunityView({ id: 'opportunities', type: 'opportunities', label: 'Live Opportunity Total' })}
         />
         <MetricCard
           label="Building"
           value={formatNumber(building)}
-          detail="Packet statuses: building/draft/ready/queued"
-          active={opportunityView.type === 'packets' && opportunityView.label === 'Building'}
-          onClick={() => setOpportunityView({ type: 'packets', label: 'Building', statuses: buildingStatuses })}
+          detail="Packet status: draft / ready / acknowledged"
+          active={opportunityView.id === 'building'}
+          onClick={() => setOpportunityView({ id: 'building', type: 'packets', label: 'Building', statuses: buildingStatuses, field: 'status' })}
         />
         <MetricCard
           label="Executed"
           value={formatNumber(executed)}
-          detail="Execution or packet completions"
-          active={opportunityView.type === 'packets' && opportunityView.label === 'Executed'}
-          onClick={() => setOpportunityView({ type: 'packets', label: 'Executed', statuses: executedStatuses })}
+          detail="Packet status: executed"
+          active={opportunityView.id === 'executed'}
+          onClick={() => setOpportunityView({ id: 'executed', type: 'packets', label: 'Executed', statuses: executedStatuses, field: 'status' })}
         />
         <MetricCard
           label="Killed"
           value={formatNumber(killed)}
-          detail="Failed, rejected, retired, or killed"
-          active={opportunityView.type === 'packets' && opportunityView.label === 'Killed'}
-          onClick={() => setOpportunityView({ type: 'packets', label: 'Killed', statuses: killedStatuses })}
+          detail="Execution state: failed / canceled"
+          active={opportunityView.id === 'killed'}
+          onClick={() => setOpportunityView({ id: 'killed', type: 'packets', label: 'Killed', statuses: killedStatuses, field: 'execution_state' })}
         />
       </div>
       <div className="hunter-subfilter-bar" aria-label="Opportunity packet status filters">
@@ -522,8 +527,8 @@ function OpportunitiesSection({ onAuthFail }) {
           <button
             key={status}
             type="button"
-            className={`hunter-subfilter-chip${opportunityView.type === 'packets' && opportunityView.label === formatText(status) ? ' hunter-subfilter-chip--active' : ''}`}
-            onClick={() => setOpportunityView({ type: 'packets', label: formatText(status), statuses: [status] })}
+            className={`hunter-subfilter-chip${opportunityView.id === `chip:${status}` ? ' hunter-subfilter-chip--active' : ''}`}
+            onClick={() => setOpportunityView({ id: `chip:${status}`, type: 'packets', label: formatText(status), statuses: [status], field: 'status' })}
           >
             {formatText(status)}
           </button>
@@ -584,7 +589,7 @@ function PacketRows({ rows, statuses }) {
       {rows.map((row, index) => (
         <div className="hunter-table-row" key={row.id || row.packet_id || row.symbol || index}>
           <span>{valueFrom(row.title, row.name, row.strategy_name, row.packet_name, `Packet ${index + 1}`)}</span>
-          <span>{formatText(row.status)}</span>
+          <span>{formatText(row.status)}{row.execution_state && row.execution_state !== row.status ? ` · ${formatText(row.execution_state)}` : ''}</span>
           <span>{formatText(valueFrom(row.symbol, row.ticker, row.asset))}</span>
           <span>{formatCurrency(valueFrom(row.expected_return, row.estimated_return, row.actual_return, row.net_result))}</span>
         </div>
