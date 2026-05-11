@@ -2677,8 +2677,30 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   z-index: 1;
 }
 
+/* ── Opportunities: native gradient backdrop — mockup image removed ─────────
+   The mockup PNG was competing with real data. Both ::before (panel wallpaper)
+   and .hunter-section (inner panel bg) used var(--hunter-panel-image).
+   Setting the variable to none + overriding both surfaces eliminates bleed.   */
 .hunter-shell-panel--opportunities {
-  --hunter-panel-image: url('./assets/hunter-shell/opportunities-command.png');
+  background: rgba(7, 10, 16, 0.99);
+  --hunter-panel-image: none;
+}
+
+.hunter-shell-panel--opportunities::before {
+  background-image:
+    radial-gradient(ellipse at 18% 22%, rgba(245, 177, 53, 0.10) 0%, transparent 48%),
+    radial-gradient(ellipse at 82% 76%, rgba(77, 151, 255, 0.08) 0%, transparent 44%),
+    linear-gradient(160deg, rgba(12, 17, 26, 0.98) 0%, rgba(6, 9, 14, 1.0) 100%);
+  background-size: auto;
+  filter: none;
+  opacity: 1;
+}
+
+.hunter-shell-panel--opportunities .hunter-section {
+  background:
+    linear-gradient(180deg, rgba(9, 14, 21, 0.96), rgba(6, 9, 14, 0.94)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 46px);
+  background-size: auto;
 }
 
 .hunter-shell-panel--trading {
