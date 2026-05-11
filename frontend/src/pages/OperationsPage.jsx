@@ -297,7 +297,7 @@ export default function OperationsPage({ onBack, onAuthFail }) {
               Public Site
             </button>
           )}
-          <button className="ops-action-button" type="button" onClick={handleLogout}>
+          <button className="hunter-signout-button" type="button" onClick={handleLogout}>
             Sign Out
           </button>
         </div>
@@ -317,16 +317,28 @@ export default function OperationsPage({ onBack, onAuthFail }) {
       </nav>
 
       <main className="hunter-shell-body">
-        <section hidden={activeSection !== 'opportunities'}>
+        <section
+          className="hunter-shell-panel hunter-shell-panel--opportunities"
+          hidden={activeSection !== 'opportunities'}
+        >
           <OpportunitiesSection onAuthFail={onAuthFail} />
         </section>
-        <section hidden={activeSection !== 'trading'}>
+        <section
+          className="hunter-shell-panel hunter-shell-panel--trading"
+          hidden={activeSection !== 'trading'}
+        >
           <TradingSection onAuthFail={onAuthFail} />
         </section>
-        <section hidden={activeSection !== 'results'}>
+        <section
+          className="hunter-shell-panel hunter-shell-panel--results"
+          hidden={activeSection !== 'results'}
+        >
           <ResultsSection onAuthFail={onAuthFail} />
         </section>
-        <section hidden={activeSection !== 'operations'}>
+        <section
+          className="hunter-shell-panel hunter-shell-panel--operations"
+          hidden={activeSection !== 'operations'}
+        >
           <OperationsSection onAuthFail={onAuthFail} />
         </section>
       </main>
@@ -375,13 +387,19 @@ function EndpointErrors({ endpoints }) {
   )
 }
 
-function MetricCard({ label, value, detail, status }) {
+function MetricCard({ label, value, detail, status, active = false, onClick }) {
+  const Element = onClick ? 'button' : 'article'
   return (
-    <article className="stat-card hunter-metric-card">
+    <Element
+      className={`stat-card hunter-metric-card${onClick ? ' hunter-metric-card--interactive' : ' hunter-metric-card--static'}${active ? ' hunter-metric-card--active' : ''}`}
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      aria-pressed={onClick ? active : undefined}
+    >
       <span className="stat-label">{label}</span>
       <strong className="stat-value">{value}</strong>
       {detail && <span className={`hunter-metric-detail hunter-metric-detail--${statusTone(status || detail)}`}>{detail}</span>}
-    </article>
+    </Element>
   )
 }
 
@@ -433,6 +451,7 @@ function BreakdownList({ data, emptyText }) {
 
 function OpportunitiesSection({ onAuthFail }) {
   const { endpoints, refresh } = useSectionData(OPPORTUNITY_LOADERS, onAuthFail)
+  const [opportunityView, setOpportunityView] = useState({ type: 'opportunities', label: 'Live Opportunity Total' })
   const summary = endpointData(endpoints.summary, {})
   const intake = endpointData(endpoints.intake, {})
   const opportunities = asArray(endpointData(endpoints.opportunities, {}))
@@ -453,14 +472,62 @@ function OpportunitiesSection({ onAuthFail }) {
   const byAgent = countBy(opportunities, ['agent', 'assigned_agent', 'created_by', 'owner'])
   const byChannel = intake.by_origin || countBy(opportunities, ['origin', 'origin_module', 'channel', 'source'])
   const byType = intake.by_category || countBy(opportunities, ['category', 'type', 'opportunity_type'])
+  const buildingStatuses = ['building', 'draft', 'ready', 'queued']
+  const executedStatuses = ['executed', 'completed']
+  const killedStatuses = ['killed', 'failed', 'rejected', 'retired']
+  const filteredPackets = packets.filter((packet) => {
+    if (opportunityView.type !== 'packets') return false
+    const status = String(packet?.status || '').toLowerCase()
+    return opportunityView.statuses.includes(status)
+  })
+  const opportunityListTitle = opportunityView.type === 'packets'
+    ? `${opportunityView.label} Packets`
+    : opportunityView.label
 
   return (
     <SectionFrame title="Opportunities" kicker="Command center" endpoints={endpoints} refresh={refresh}>
       <div className="hunter-metric-grid">
-        <MetricCard label="Created" value={formatNumber(created)} detail="Live opportunity total" />
-        <MetricCard label="Building" value={formatNumber(building)} detail="Packet statuses: building/draft/ready/queued" />
-        <MetricCard label="Executed" value={formatNumber(executed)} detail="Execution or packet completions" />
-        <MetricCard label="Killed" value={formatNumber(killed)} detail="Failed, rejected, retired, or killed" />
+        <MetricCard
+          label="Created"
+          value={formatNumber(created)}
+          detail="Live opportunity total"
+          active={opportunityView.type === 'opportunities'}
+          onClick={() => setOpportunityView({ type: 'opportunities', label: 'Live Opportunity Total' })}
+        />
+        <MetricCard
+          label="Building"
+          value={formatNumber(building)}
+          detail="Packet statuses: building/draft/ready/queued"
+          active={opportunityView.type === 'packets' && opportunityView.label === 'Building'}
+          onClick={() => setOpportunityView({ type: 'packets', label: 'Building', statuses: buildingStatuses })}
+        />
+        <MetricCard
+          label="Executed"
+          value={formatNumber(executed)}
+          detail="Execution or packet completions"
+          active={opportunityView.type === 'packets' && opportunityView.label === 'Executed'}
+          onClick={() => setOpportunityView({ type: 'packets', label: 'Executed', statuses: executedStatuses })}
+        />
+        <MetricCard
+          label="Killed"
+          value={formatNumber(killed)}
+          detail="Failed, rejected, retired, or killed"
+          active={opportunityView.type === 'packets' && opportunityView.label === 'Killed'}
+          onClick={() => setOpportunityView({ type: 'packets', label: 'Killed', statuses: killedStatuses })}
+        />
+      </div>
+      <div className="hunter-subfilter-bar" aria-label="Opportunity packet status filters">
+        <span>Packet status drill-down</span>
+        {buildingStatuses.map((status) => (
+          <button
+            key={status}
+            type="button"
+            className={`hunter-subfilter-chip${opportunityView.type === 'packets' && opportunityView.label === formatText(status) ? ' hunter-subfilter-chip--active' : ''}`}
+            onClick={() => setOpportunityView({ type: 'packets', label: formatText(status), statuses: [status] })}
+          >
+            {formatText(status)}
+          </button>
+        ))}
       </div>
       <div className="hunter-card-grid">
         <DataCard title="By Agent">
@@ -472,8 +539,10 @@ function OpportunitiesSection({ onAuthFail }) {
         <DataCard title="By Type">
           <BreakdownList data={byType} emptyText="No category/type breakdown returned by the backend." />
         </DataCard>
-        <DataCard title="Top Live Opportunities">
-          <OpportunityRows rows={opportunities.slice(0, 6)} />
+        <DataCard title={opportunityListTitle}>
+          {opportunityView.type === 'packets'
+            ? <PacketRows rows={filteredPackets.slice(0, 8)} statuses={opportunityView.statuses} />
+            : <OpportunityRows rows={opportunities.slice(0, 8)} />}
         </DataCard>
       </div>
     </SectionFrame>
@@ -494,6 +563,30 @@ function OpportunityRows({ rows }) {
           <span>{valueFrom(row.title, row.name, row.symbol, row.opportunity_name, `Opportunity ${index + 1}`)}</span>
           <span>{formatText(valueFrom(row.status, row.stage, row.state))}</span>
           <span>{formatPercent(valueFrom(row.confidence, row.weighted_confidence, row.score))}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PacketRows({ rows, statuses }) {
+  if (!rows.length) {
+    return <EmptyState>No packets returned with status: {statuses.map(formatText).join(', ')}.</EmptyState>
+  }
+  return (
+    <div className="hunter-table">
+      <div className="hunter-table-row hunter-table-head">
+        <span>Name</span>
+        <span>Status</span>
+        <span>Symbol</span>
+        <span>Return</span>
+      </div>
+      {rows.map((row, index) => (
+        <div className="hunter-table-row" key={row.id || row.packet_id || row.symbol || index}>
+          <span>{valueFrom(row.title, row.name, row.strategy_name, row.packet_name, `Packet ${index + 1}`)}</span>
+          <span>{formatText(row.status)}</span>
+          <span>{formatText(valueFrom(row.symbol, row.ticker, row.asset))}</span>
+          <span>{formatCurrency(valueFrom(row.expected_return, row.estimated_return, row.actual_return, row.net_result))}</span>
         </div>
       ))}
     </div>

@@ -2636,6 +2636,63 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   display: none !important;
 }
 
+.hunter-shell-panel {
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+}
+
+.hunter-shell-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(90deg, rgba(5, 8, 13, 0.86), rgba(5, 8, 13, 0.6) 46%, rgba(5, 8, 13, 0.9)),
+    linear-gradient(180deg, rgba(5, 8, 13, 0.56), rgba(5, 8, 13, 0.88)),
+    var(--hunter-panel-image);
+  background-position: center;
+  background-size: cover;
+  filter: saturate(1.08) contrast(1.05);
+  opacity: 0.52;
+}
+
+.hunter-shell-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 88% 18%, rgba(245, 177, 53, 0.2), transparent 22%),
+    radial-gradient(circle at 12% 78%, rgba(77, 151, 255, 0.16), transparent 26%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 64px);
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+
+.hunter-shell-panel > .hunter-section {
+  position: relative;
+  z-index: 1;
+}
+
+.hunter-shell-panel--opportunities {
+  --hunter-panel-image: url('./assets/hunter-shell/opportunities-command.png');
+}
+
+.hunter-shell-panel--trading {
+  --hunter-panel-image: url('./assets/hunter-shell/trading-operations.png');
+}
+
+.hunter-shell-panel--results {
+  --hunter-panel-image: url('./assets/hunter-shell/results-performance.png');
+}
+
+.hunter-shell-panel--operations {
+  --hunter-panel-image: url('./assets/hunter-shell/operations-command.png');
+}
+
 .hunter-section {
   display: grid;
   gap: 18px;
@@ -2701,7 +2758,47 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
 }
 
 .hunter-metric-card {
+  color: inherit;
   min-height: 128px;
+  text-align: left;
+}
+
+.hunter-metric-card--static {
+  cursor: default;
+}
+
+.hunter-metric-card--static:hover {
+  border-color: rgba(245, 177, 53, 0.16);
+  transform: none;
+}
+
+.hunter-metric-card--interactive {
+  cursor: pointer;
+  font: inherit;
+  width: 100%;
+}
+
+.hunter-metric-card--interactive:hover {
+  border-color: rgba(245, 177, 53, 0.44);
+}
+
+.hunter-metric-card--interactive:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 2px rgba(245, 177, 53, 0.28),
+    0 0 0 5px rgba(77, 151, 255, 0.16);
+}
+
+.hunter-metric-card--active {
+  border-color: rgba(245, 177, 53, 0.62);
+  background:
+    linear-gradient(180deg, rgba(44, 35, 17, 0.96), rgba(12, 15, 20, 0.94)),
+    linear-gradient(135deg, rgba(245, 177, 53, 0.18), transparent 42%, rgba(77, 151, 255, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 0 0 1px rgba(245, 177, 53, 0.12),
+    0 18px 38px rgba(0, 0, 0, 0.3);
 }
 
 .hunter-metric-detail {
@@ -2727,6 +2824,54 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hunter-subfilter-bar {
+  align-items: center;
+  border: 1px solid rgba(245, 177, 53, 0.14);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(12, 17, 24, 0.74), rgba(7, 10, 15, 0.68));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+}
+
+.hunter-subfilter-bar span {
+  color: rgba(239, 244, 255, 0.62);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-right: 4px;
+  text-transform: uppercase;
+}
+
+.hunter-subfilter-chip {
+  border: 1px solid rgba(245, 177, 53, 0.24);
+  border-radius: 999px;
+  background: rgba(13, 18, 27, 0.84);
+  color: rgba(239, 244, 255, 0.76);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 8px 12px;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.hunter-subfilter-chip:hover,
+.hunter-subfilter-chip--active {
+  border-color: rgba(245, 177, 53, 0.72);
+  background: rgba(245, 177, 53, 0.12);
+  color: #f8d98a;
+}
+
+.hunter-subfilter-chip:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(245, 177, 53, 0.26),
+    0 0 0 5px rgba(77, 151, 255, 0.16);
 }
 
 .hunter-card-grid--wide {
@@ -2819,4 +2964,196 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* Hunter logged-in premium shell */
+.ops-root {
+  isolation: isolate;
+  overflow-x: hidden;
+  position: relative;
+  background:
+    linear-gradient(115deg, rgba(7, 10, 15, 0.96) 0%, rgba(8, 13, 19, 0.98) 42%, rgba(12, 10, 6, 0.95) 100%),
+    repeating-linear-gradient(90deg, rgba(248, 217, 138, 0.045) 0 1px, transparent 1px 88px),
+    repeating-linear-gradient(0deg, rgba(77, 151, 255, 0.04) 0 1px, transparent 1px 78px);
+}
+
+.ops-root::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 80% 10%, rgba(39, 116, 191, 0.22), transparent 38%),
+    radial-gradient(ellipse at 15% 82%, rgba(245, 177, 53, 0.16), transparent 42%),
+    linear-gradient(180deg, rgba(4, 8, 13, 0.18), rgba(2, 3, 5, 0.72));
+}
+
+.ops-root::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    conic-gradient(from 225deg at 84% 18%, transparent 0deg, rgba(245, 177, 53, 0.18) 34deg, transparent 74deg);
+  background-size: 72px 72px, 72px 72px, auto;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0.18) 70%, transparent);
+}
+
+.ops-header {
+  border-bottom: 1px solid rgba(245, 177, 53, 0.2);
+  background:
+    linear-gradient(180deg, rgba(9, 13, 19, 0.94), rgba(5, 8, 12, 0.88)),
+    linear-gradient(90deg, rgba(245, 177, 53, 0.08), transparent 48%, rgba(77, 151, 255, 0.08));
+}
+
+.ops-header::after {
+  content: '';
+  position: absolute;
+  right: 24px;
+  bottom: -1px;
+  left: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(245, 177, 53, 0.68), rgba(77, 151, 255, 0.32), transparent);
+}
+
+.ops-subtitle {
+  color: rgba(239, 244, 255, 0.66);
+  margin-top: 6px;
+}
+
+.ops-header-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.hunter-signout-button {
+  align-items: center;
+  border: 1px solid rgba(245, 177, 53, 0.32);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(20, 24, 31, 0.95), rgba(8, 11, 16, 0.94)),
+    linear-gradient(90deg, rgba(245, 177, 53, 0.12), rgba(224, 82, 82, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 28px rgba(0, 0, 0, 0.26);
+  color: #f1d58a;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 800;
+  justify-content: center;
+  letter-spacing: 0.14em;
+  min-height: 42px;
+  padding: 0 18px;
+  text-transform: uppercase;
+  transition: border-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.hunter-signout-button:hover {
+  border-color: rgba(255, 118, 118, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 16px 34px rgba(0, 0, 0, 0.32),
+    0 0 24px rgba(245, 177, 53, 0.08);
+  color: #ffd9a3;
+  transform: translateY(-1px);
+}
+
+.hunter-signout-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(245, 177, 53, 0.28),
+    0 0 0 5px rgba(77, 151, 255, 0.18);
+}
+
+.hunter-shell-tabs {
+  border: 1px solid rgba(245, 177, 53, 0.18);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(12, 17, 24, 0.76), rgba(7, 10, 15, 0.72));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 22px 42px rgba(0, 0, 0, 0.22);
+  padding: 8px;
+}
+
+.hunter-shell-tab {
+  background:
+    linear-gradient(180deg, rgba(18, 24, 33, 0.92), rgba(10, 14, 20, 0.92));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  min-height: 58px;
+  text-transform: uppercase;
+}
+
+.hunter-shell-tab--active {
+  background:
+    linear-gradient(180deg, rgba(44, 35, 17, 0.96), rgba(20, 17, 12, 0.96)),
+    linear-gradient(90deg, rgba(245, 177, 53, 0.22), rgba(77, 151, 255, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 24px rgba(245, 177, 53, 0.12);
+}
+
+.hunter-section {
+  border: 1px solid rgba(245, 177, 53, 0.14);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(9, 14, 21, 0.84), rgba(6, 9, 14, 0.74)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 46px),
+    var(--hunter-panel-image);
+  background-position: center;
+  background-size: auto, auto, cover;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 22px 48px rgba(0, 0, 0, 0.24);
+  padding: 18px;
+}
+
+.hunter-section-heading {
+  border-bottom: 1px solid rgba(245, 177, 53, 0.14);
+  padding-bottom: 14px;
+}
+
+.hunter-section-heading h2 {
+  color: #f8d98a;
+  font-size: clamp(1.25rem, 1.8vw, 1.75rem);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hunter-data-card,
+.stat-card {
+  border-color: rgba(245, 177, 53, 0.16);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(17, 22, 30, 0.9), rgba(8, 12, 18, 0.92)),
+    linear-gradient(135deg, rgba(245, 177, 53, 0.08), transparent 38%, rgba(77, 151, 255, 0.06));
+}
+
+.hunter-metric-card--static:hover {
+  border-color: rgba(245, 177, 53, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 14px 30px rgba(0, 0, 0, 0.22);
+  transform: none;
+}
+
+.hunter-metric-card--active {
+  border-color: rgba(245, 177, 53, 0.62);
+  background:
+    linear-gradient(180deg, rgba(44, 35, 17, 0.96), rgba(12, 15, 20, 0.94)),
+    linear-gradient(135deg, rgba(245, 177, 53, 0.18), transparent 42%, rgba(77, 151, 255, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 0 0 1px rgba(245, 177, 53, 0.12),
+    0 18px 38px rgba(0, 0, 0, 0.3);
 }
