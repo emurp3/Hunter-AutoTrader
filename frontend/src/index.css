@@ -2605,3 +2605,218 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   margin-top: 0.4rem;
   word-break: break-word;
 }
+.hunter-shell-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.hunter-shell-tab {
+  border: 1px solid rgba(245, 177, 53, 0.24);
+  border-radius: 8px;
+  background: rgba(13, 18, 27, 0.86);
+  color: rgba(239, 244, 255, 0.78);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 14px 16px;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.hunter-shell-tab:hover,
+.hunter-shell-tab--active {
+  border-color: rgba(245, 177, 53, 0.78);
+  background: rgba(245, 177, 53, 0.1);
+  color: #f8d98a;
+}
+
+.hunter-shell-body [hidden] {
+  display: none !important;
+}
+
+.hunter-section {
+  display: grid;
+  gap: 18px;
+}
+
+.hunter-section-heading {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.hunter-section-heading h2 {
+  margin: 4px 0 0;
+}
+
+.hunter-section-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.hunter-section-pill {
+  border: 1px solid rgba(69, 201, 115, 0.28);
+  border-radius: 999px;
+  color: #7be28f;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.hunter-section-pill--warn {
+  border-color: rgba(245, 177, 53, 0.34);
+  color: #f4c45f;
+}
+
+.hunter-endpoint-errors {
+  display: grid;
+  gap: 8px;
+}
+
+.hunter-endpoint-errors div {
+  border: 1px solid rgba(245, 177, 53, 0.28);
+  border-radius: 8px;
+  background: rgba(245, 177, 53, 0.08);
+  color: rgba(239, 244, 255, 0.82);
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.hunter-endpoint-errors span {
+  color: rgba(239, 244, 255, 0.68);
+  font-size: 0.86rem;
+}
+
+.hunter-metric-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.hunter-metric-card {
+  min-height: 128px;
+}
+
+.hunter-metric-detail {
+  color: rgba(239, 244, 255, 0.62);
+  display: block;
+  font-size: 0.82rem;
+  margin-top: 10px;
+}
+
+.hunter-metric-detail--good {
+  color: #68dd78;
+}
+
+.hunter-metric-detail--warn {
+  color: #f4c45f;
+}
+
+.hunter-metric-detail--bad {
+  color: #ff7070;
+}
+
+.hunter-card-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hunter-card-grid--wide {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hunter-data-card {
+  min-height: 220px;
+}
+
+.hunter-data-card h3 {
+  color: #f8d98a;
+  font-size: 0.92rem;
+  letter-spacing: 0.08em;
+  margin: 0 0 14px;
+  text-transform: uppercase;
+}
+
+.hunter-kv-list,
+.hunter-breakdown-list {
+  display: grid;
+  gap: 10px;
+}
+
+.hunter-kv-list div,
+.hunter-breakdown-list div {
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+
+.hunter-kv-list span,
+.hunter-breakdown-list span {
+  color: rgba(239, 244, 255, 0.68);
+}
+
+.hunter-kv-list strong,
+.hunter-breakdown-list strong {
+  color: rgba(239, 244, 255, 0.95);
+  text-align: right;
+}
+
+.hunter-table {
+  display: grid;
+  gap: 2px;
+}
+
+.hunter-table-row {
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  min-height: 42px;
+}
+
+.hunter-table-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hunter-table-head {
+  color: rgba(239, 244, 255, 0.52);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hunter-card-footer {
+  color: rgba(239, 244, 255, 0.56);
+  font-size: 0.84rem;
+  margin: 12px 0 0;
+}
+
+@media (max-width: 980px) {
+  .hunter-shell-tabs,
+  .hunter-metric-grid,
+  .hunter-card-grid,
+  .hunter-card-grid--wide {
+    grid-template-columns: 1fr;
+  }
+
+  .hunter-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
