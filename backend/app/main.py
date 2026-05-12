@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -53,8 +54,12 @@ async def lifespan(app: FastAPI):
 
         with Session(engine) as session:
             bootstrap_intake(session)
-    except Exception:
-        pass
+    except Exception as _exc:  # noqa: BLE001
+        _startup_logger.warning(
+            "bootstrap_intake failed at startup — %s: %s",
+            type(_exc).__name__,
+            _exc,
+        )
     scheduler.add_job(
         daily_scan_task,
         "cron",
