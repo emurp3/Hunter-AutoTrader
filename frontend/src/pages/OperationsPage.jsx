@@ -1337,7 +1337,6 @@ function RunScansButton() {
     </div>
   )
 }
-END_
 
 // ── Executive Summary Section (replaces Pipeline as main nav) ────────────────
 
