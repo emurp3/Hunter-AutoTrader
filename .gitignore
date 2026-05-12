@@ -30,3 +30,6 @@ backend/frontend_dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Vite dev-server timestamp artifacts
+frontend/vite.config.js.timestamp-*.mjs
