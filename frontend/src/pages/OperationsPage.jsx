@@ -915,6 +915,7 @@ function HunterOperatorCard({ compact = false }) {
   return (
     <div className={`hunter-op-card${compact ? ' hunter-op-card--compact' : ''}`}>
       <div className="hunter-op-portrait">
+        <img src="/media/hunter-operator-portrait.png" alt="Hunter operator portrait" className="hunter-op-portrait-img" />
         <div className="hunter-op-portrait-glow" />
         <div className="hunter-op-portrait-overlay">
           <div className="hunter-op-portrait-name">HUNTER</div>
@@ -1370,6 +1371,9 @@ function ExecutiveSummarySection({ onAuthFail }) {
           <HunterOperatorCard compact={false} />
         </div>
         <div className="hunter-exec-hero-center">
+          <div className="hunter-exec-brand-strip">
+            <img src="/media/hunter-operator-strip.png" alt="Operator Hunter status strip" />
+          </div>
           <div className="hunter-exec-quote">
             <p>&ldquo;Fortune favors precision.<br />We hunt. Others follow.&rdquo;</p>
             <span className="hunter-exec-quote-attr">&mdash; Hunter</span>
