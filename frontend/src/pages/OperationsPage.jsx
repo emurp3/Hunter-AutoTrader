@@ -574,10 +574,16 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
       </div>
 
       {/* Title */}
-      <div className="occ-title-zone">
-        <p className="occ-kicker">COMMAND CENTER</p>
-        <h1 className="occ-main-title">OPPORTUNITIES COMMAND CENTER</h1>
-        <p className="occ-tagline">Identify. Evaluate. Execute. Repeat.</p>
+      <div className="occ-title-zone occ-title-zone--with-hunter">
+        <div className="occ-title-copy">
+          <p className="occ-kicker">COMMAND CENTER</p>
+          <h1 className="occ-main-title">OPPORTUNITIES COMMAND CENTER</h1>
+          <p className="occ-tagline">Identify. Evaluate. Execute. Repeat.</p>
+        </div>
+        <div className="occ-hunter-visual-card" aria-label="Hunter operator visual">
+          <img src="/media/hunter-operator-card.png" alt="Hunter Chief Operations Officer" />
+          <div className="occ-hunter-visual-glow" />
+        </div>
       </div>
 
       {/* Inline errors */}
