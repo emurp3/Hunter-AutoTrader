@@ -18,7 +18,7 @@ services:
 
       # Execution mode (sandbox = paper trading, never live without explicit change)
       - key: EXECUTION_MODE
-        value: sandbox
+        value: live
       - key: HUNTER_JWT_SECRET
         sync: false
       - key: HUNTER_ADMIN_PASSWORD
