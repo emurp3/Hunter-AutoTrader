@@ -67,11 +67,15 @@ def _masked_file_diagnostics(path: Path) -> dict:
         "exists": exists,
         "loaded": load_dotenv(path) if exists else False,
         "alpaca_enabled_in_file": str(values.get("ALPACA_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"},
-        "alpaca_paper_in_file": str(values.get("ALPACA_PAPER", "")).strip().lower() in {"1", "true", "yes", "on"},
+        "alpaca_paper_in_file": False,  # paper mode removed
         "execution_provider_in_file": (values.get("EXECUTION_PROVIDER") or "").strip().lower() or None,
         "alpaca_base_url_in_file": values.get("ALPACA_BASE_URL") or None,
-        "api_key_present_in_file": bool((values.get("ALPACA_API_KEY") or "").strip()),
-        "secret_key_present_in_file": bool((values.get("ALPACA_SECRET_KEY") or "").strip()),
+        "api_key_present_in_file": bool(
+            (values.get("LIVE_API_KEY") or values.get("SANDBOX_API_KEY") or values.get("ALPACA_API_KEY") or "").strip()
+        ),
+        "secret_key_present_in_file": bool(
+            (values.get("LIVE_SECRET_KEY") or values.get("SANDBOX_SECRET_KEY") or values.get("ALPACA_SECRET_KEY") or "").strip()
+        ),
     }
 
 
@@ -86,7 +90,7 @@ def _get_csv(name: str, default: str) -> list[str]:
     raw = os.getenv(name, default)
     return [item.strip() for item in raw.split(",") if item.strip()]
 
-# ── Capital / bankroll ────────────────────────────────────────────────────────
+# ── Capital / bankroll ─────────────────────────────────────────────
 WEEKLY_BUDGET: float = float(os.getenv("HUNTER_INITIAL_BANKROLL", os.getenv("HUNTER_WEEKLY_BUDGET", "100")))
 
 # When True, POST /budget/allocate will be rejected if the amount would exceed
@@ -103,68 +107,87 @@ MAX_ALLOCATION_PER_OPPORTUNITY: float = float(
 # Hunter's month-end stretch target is to double the bankroll.
 FLIP_TARGET_MULTIPLIER: float = float(os.getenv("HUNTER_FLIP_TARGET_MULTIPLIER", "2.0"))
 
-# ── AutoTrader integration ────────────────────────────────────────────────────
-# Required. Must be "file" or "http". No mock or fallback is permitted.
+# ── AutoTrader integration ─────────────────────────────────────────────
+# Required. Must be "file", "http", or "live".
 # If not set, daily intake is aborted and logged as source_missing.
 AUTOTRADER_SOURCE_TYPE: str = os.getenv("AUTOTRADER_SOURCE_TYPE", "")
 
 # Required when AUTOTRADER_SOURCE_TYPE=file.
-# Must point to a JSON export produced by the real AutoTrader module.
 AUTOTRADER_FILE_PATH: str | None = os.getenv("AUTOTRADER_FILE_PATH")
 
 # Required when AUTOTRADER_SOURCE_TYPE=http.
-# Base URL of the live AutoTrader service (e.g. http://localhost:9000).
 AUTOTRADER_HTTP_URL: str | None = os.getenv("AUTOTRADER_HTTP_URL")
 
 # Optional: Bearer token for the http adapter.
 AUTOTRADER_HTTP_API_KEY: str | None = os.getenv("AUTOTRADER_HTTP_API_KEY")
 
-# ── Execution mode ────────────────────────────────────────────────────────────
-# ONE OPERATOR ACTION to go live: set EXECUTION_MODE=live in .env
-# sandbox = paper trading (default)
-# live    = real capital (requires LIVE_* credentials)
-EXECUTION_MODE: str = _resolve_env_value("EXECUTION_MODE", "sandbox").lower()
+# ── Execution mode ─────────────────────────────────────────────
+# Hunter is always in live mode. Real capital. Real trades.
+# Paper/sandbox mode is not supported and has been removed.
+EXECUTION_MODE: str = _resolve_env_value("EXECUTION_MODE", "live").lower()
 
-# ── Sandbox credentials (Alpaca Paper) ───────────────────────────────────────
-SANDBOX_API_KEY: str = _resolve_env_value("SANDBOX_API_KEY", "", prefer_non_empty=True)
-SANDBOX_SECRET_KEY: str = _resolve_env_value("SANDBOX_SECRET_KEY", "", prefer_non_empty=True)
-SANDBOX_BASE_URL: str = _resolve_env_value("SANDBOX_BASE_URL", "https://paper-api.alpaca.markets")
-SANDBOX_ACCOUNT_ID: str = _resolve_env_value("SANDBOX_ACCOUNT_ID", "")
-
-# ── Live credentials (Alpaca Live) — prewired, not activated ─────────────────
+# ── Alpaca credentials ─────────────────────────────────────────────
+# Canonical names: LIVE_API_KEY / LIVE_SECRET_KEY
+# Legacy fallback: SANDBOX_API_KEY / SANDBOX_SECRET_KEY (these env var names
+#   now hold live credentials; kept for backward compatibility with existing
+#   Render secrets that pre-date this rename)
 LIVE_API_KEY: str = _resolve_env_value("LIVE_API_KEY", "", prefer_non_empty=True)
 LIVE_SECRET_KEY: str = _resolve_env_value("LIVE_SECRET_KEY", "", prefer_non_empty=True)
 LIVE_BASE_URL: str = _resolve_env_value("LIVE_BASE_URL", "https://api.alpaca.markets")
 LIVE_ACCOUNT_ID: str = _resolve_env_value("LIVE_ACCOUNT_ID", "")
 
-# ── Brokerage execution (Alpaca Markets) — legacy + derived ──────────────────
+# Legacy names retained so existing Render secrets continue to work without
+# requiring a dashboard rename. Resolution order: LIVE_* → SANDBOX_* → ALPACA_*
+SANDBOX_API_KEY: str = _resolve_env_value("SANDBOX_API_KEY", "", prefer_non_empty=True)
+SANDBOX_SECRET_KEY: str = _resolve_env_value("SANDBOX_SECRET_KEY", "", prefer_non_empty=True)
+SANDBOX_BASE_URL: str = "https://api.alpaca.markets"  # always live endpoint
+SANDBOX_ACCOUNT_ID: str = _resolve_env_value("SANDBOX_ACCOUNT_ID", "")
+
+# ── Active brokerage credentials (resolved, live-only) ───────────────────
 EXECUTION_PROVIDER: str = _resolve_env_value("EXECUTION_PROVIDER", "alpaca").lower()
 ALPACA_ENABLED: bool = _resolve_env_value("ALPACA_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
-# Resolve active credentials from mode
-_is_sandbox = EXECUTION_MODE == "sandbox"
-ALPACA_API_KEY: str = (SANDBOX_API_KEY or _resolve_env_value("ALPACA_API_KEY", "", prefer_non_empty=True)) if _is_sandbox else LIVE_API_KEY
-ALPACA_SECRET_KEY: str = (SANDBOX_SECRET_KEY or _resolve_env_value("ALPACA_SECRET_KEY", "", prefer_non_empty=True)) if _is_sandbox else LIVE_SECRET_KEY
-ALPACA_PAPER: bool = _is_sandbox  # paper=True enforced in sandbox; paper=False in live
-ALPACA_BASE_URL: str = SANDBOX_BASE_URL if _is_sandbox else LIVE_BASE_URL
+# Resolution order: LIVE_API_KEY → SANDBOX_API_KEY (legacy) → ALPACA_API_KEY
+ALPACA_API_KEY: str = (
+    LIVE_API_KEY
+    or SANDBOX_API_KEY
+    or _resolve_env_value("ALPACA_API_KEY", "", prefer_non_empty=True)
+)
+ALPACA_SECRET_KEY: str = (
+    LIVE_SECRET_KEY
+    or SANDBOX_SECRET_KEY
+    or _resolve_env_value("ALPACA_SECRET_KEY", "", prefer_non_empty=True)
+)
+
+# Paper mode is permanently disabled. Hunter trades with real capital only.
+ALPACA_PAPER: bool = False
+ALPACA_BASE_URL: str = _resolve_env_value("ALPACA_BASE_URL", "https://api.alpaca.markets")
 
 ALPACA_EFFECTIVE_SOURCES = {
     "execution_mode": EXECUTION_MODE,
     "execution_provider": _effective_env_source("EXECUTION_PROVIDER"),
     "alpaca_enabled": _effective_env_source("ALPACA_ENABLED"),
-    "alpaca_paper": "derived_from_execution_mode",
-    "alpaca_base_url": "derived_from_execution_mode",
-    "alpaca_api_key": _effective_env_source("SANDBOX_API_KEY" if _is_sandbox else "LIVE_API_KEY", prefer_non_empty=True),
-    "alpaca_secret_key": _effective_env_source("SANDBOX_SECRET_KEY" if _is_sandbox else "LIVE_SECRET_KEY", prefer_non_empty=True),
+    "alpaca_paper": "always_false",
+    "alpaca_base_url": "live_endpoint",
+    "alpaca_api_key": (
+        _effective_env_source("LIVE_API_KEY", prefer_non_empty=True)
+        or _effective_env_source("SANDBOX_API_KEY", prefer_non_empty=True)
+        or _effective_env_source("ALPACA_API_KEY", prefer_non_empty=True)
+    ),
+    "alpaca_secret_key": (
+        _effective_env_source("LIVE_SECRET_KEY", prefer_non_empty=True)
+        or _effective_env_source("SANDBOX_SECRET_KEY", prefer_non_empty=True)
+        or _effective_env_source("ALPACA_SECRET_KEY", prefer_non_empty=True)
+    ),
 }
 
-# ── Lead intelligence ─────────────────────────────────────────────────────────
+# ── Lead intelligence ─────────────────────────────────────────────
 APOLLO_API_KEY: str = os.getenv("APOLLO_API_KEY", "")
 APOLLO_BASE_URL: str = os.getenv("APOLLO_BASE_URL", "https://api.apollo.io/v1")
 COMMONROOM_API_KEY: str = os.getenv("COMMONROOM_API_KEY", "")
 COMMONROOM_BASE_URL: str = os.getenv("COMMONROOM_BASE_URL", "https://api.commonroom.io/community/v1")
 
-# ── Advisor API keys ──────────────────────────────────────────────────────────
+# ── Advisor API keys ─────────────────────────────────────────────
 VENICE_API_KEY: str = os.getenv("VENICE_API_KEY", "")
 VENICE_API_URL: str = os.getenv("VENICE_API_URL", "https://api.venice.ai/api/v1")
 VENICE_MODEL: str = os.getenv("VENICE_MODEL", "llama-3.3-70b")
@@ -177,16 +200,12 @@ GROK_API_KEY: str = os.getenv("GROK_API_KEY", "")
 GROK_API_URL: str = os.getenv("GROK_API_URL", "https://api.x.ai/v1")
 GROK_MODEL: str = os.getenv("GROK_MODEL", "grok-3")
 
-# ── Weekly quotas — non-negotiable ───────────────────────────────────────────
-# Minimum new income sources Hunter must identify each week.
+# ── Weekly quotas — non-negotiable ─────────────────────────────────
 SOURCES_WEEKLY_MINIMUM: int = int(os.getenv("HUNTER_SOURCES_WEEKLY_MINIMUM", "10"))
-# Minimum active (employed) strategies Hunter must maintain each week.
 STRATEGY_WEEKLY_MINIMUM: int = int(os.getenv("HUNTER_STRATEGY_WEEKLY_MINIMUM", "10"))
-# Days an active strategy may have no evidence_of_activity before it is flagged stale.
 STRATEGY_STALE_DAYS: int = int(os.getenv("HUNTER_STRATEGY_STALE_DAYS", "2"))
 
 # -- Source acquisition ------------------------------------------------------
-# Public-source hunting lanes used to find live opportunities outside AutoTrader.
 SOURCES_MAX_RESULTS_PER_RUN: int = int(os.getenv("HUNTER_SOURCES_MAX_RESULTS_PER_RUN", "30"))
 SOURCE_REQUEST_TIMEOUT_SECONDS: int = int(
     os.getenv("HUNTER_SOURCE_REQUEST_TIMEOUT_SECONDS", "12")
@@ -222,7 +241,7 @@ SOURCES_GITHUB_REPO_QUERIES: list[str] = _get_csv(
 )
 SOURCES_GITHUB_ISSUE_QUERIES: list[str] = _get_csv(
     "HUNTER_SOURCES_GITHUB_ISSUE_QUERIES",
-    "\"need help\" automation state:open,\"setup help\" integration state:open,\"feature request\" agent state:open,\"how do i\" workflow state:open",
+    '"need help" automation state:open,"setup help" integration state:open,"feature request" agent state:open,"how do i" workflow state:open',
 )
 
 SOURCES_MARKETPLACE_ENABLED: bool = _get_bool("HUNTER_SOURCES_MARKETPLACE_ENABLED", True)
@@ -255,38 +274,22 @@ SOURCES_DIGITAL_QUERIES: list[str] = _get_csv(
 SOURCES_RFP_ENABLED: bool = _get_bool("HUNTER_SOURCES_RFP_ENABLED", True)
 SOURCES_AFFILIATE_ENABLED: bool = _get_bool("HUNTER_SOURCES_AFFILIATE_ENABLED", True)
 
-# ── Facebook Marketplace compliant execution lane ─────────────────────────────
-# MARKETPLACE_FB_LANE_ENABLED — set to true to activate the lane; false disables
-#   all marketplace routing and execution.
+# ── Facebook Marketplace compliant execution lane ─────────────────────────
 MARKETPLACE_FB_LANE_ENABLED: bool = _get_bool("MARKETPLACE_FB_LANE_ENABLED", False)
-
-# MARKETPLACE_FB_PROVIDER — which provider adapter to use for listing/fulfillment.
-#   Values: api2cart_facebook_marketplace | autods_facebook_marketplace | manual
-#   manual = Hunter prepares the listing packet but does not call any provider API.
 MARKETPLACE_FB_PROVIDER: str = os.getenv("MARKETPLACE_FB_PROVIDER", "manual").lower()
-
-# API2Cart adapter — Facebook Marketplace channel via API2Cart
-# API2CART_API_KEY — your API2Cart key (set in Render dashboard, never hardcode)
 API2CART_API_KEY: str = os.getenv("API2CART_API_KEY", "")
 API2CART_BASE_URL: str = os.getenv("API2CART_BASE_URL", "https://app.api2cart.com/v1.1")
-
-# AutoDS adapter — Facebook Marketplace dropshipping via AutoDS
-# AUTODS_API_KEY — your AutoDS API key (set in Render dashboard, never hardcode)
 AUTODS_API_KEY: str = os.getenv("AUTODS_API_KEY", "")
 AUTODS_PARTNER_TOKEN: str = os.getenv("AUTODS_PARTNER_TOKEN", "")
 AUTODS_BASE_URL: str = os.getenv("AUTODS_BASE_URL", "https://api.autods.com/v2")
-
-# MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED — enable the optional customer-message module.
-#   When true, Hunter can draft approved responses to Marketplace buyer messages.
 MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED: bool = _get_bool(
     "MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED", False
 )
-# MARKETPLACE_FB_RATE_LIMIT_PER_HOUR — max outbound messages per hour (compliance cap).
 MARKETPLACE_FB_RATE_LIMIT_PER_HOUR: int = int(
     os.getenv("MARKETPLACE_FB_RATE_LIMIT_PER_HOUR", "5")
 )
 
-# ── Email notifications (SMTP) ───────────────────────────────────────────────
+# ── Email notifications (SMTP) ───────────────────────────────────────────
 SMTP_HOST: str = os.getenv("SMTP_HOST", "")
 SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
@@ -294,30 +297,19 @@ SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "Hunter")
 COMMANDER_EMAIL: str = os.getenv("COMMANDER_EMAIL", "beautillion1@aol.com")
 
-# ── SMS notifications (Twilio) ───────────────────────────────────────────────
-# Set these in Render dashboard. SMS fires on high/critical alerts only.
+# ── SMS notifications (Twilio) ───────────────────────────────────────────
 TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER: str = os.getenv("TWILIO_FROM_NUMBER", "+13502250005")
 COMMANDER_PHONE: str = os.getenv("COMMANDER_PHONE", "+14782319790")
 
-# ── Operating account (Robins Financial checking) ─────────────────────────────
-# HUNTER_OPERATING_ACCOUNT_PROVIDER — label for the real-money operating account.
-#   Used in reconciliation records. Not a credentials field.
+# ── Operating account (Robins Financial checking) ─────────────────────────
 HUNTER_OPERATING_ACCOUNT_PROVIDER: str = os.getenv(
     "HUNTER_OPERATING_ACCOUNT_PROVIDER", "robins_financial"
 )
-# HUNTER_INITIAL_BANKROLL is already defined above as WEEKLY_BUDGET.
-# Set it to your actual Robins checking starting balance before Monday launch.
 
-# ── Live Execution Strategy — INTRADAY_RECYCLE ───────────────────────────────
-# STRATEGY_MODE: RECYCLE | ACCUMULATE | SWING
-#   RECYCLE  — short-cycle intraday: sell → refresh → buy every N seconds
-#   ACCUMULATE — passive long-term hold (legacy default)
-#   SWING    — multi-day swing trades
+# ── Live Execution Strategy — INTRADAY_RECYCLE ───────────────────────────
 STRATEGY_MODE: str = os.getenv("STRATEGY_MODE", "RECYCLE").upper()
-
-# LIVE_EXECUTION_STRATEGY — human-readable label shown in dashboard chips
 LIVE_EXECUTION_STRATEGY: str = os.getenv(
     "LIVE_EXECUTION_STRATEGY", "INTRADAY_RECYCLE"
 ).upper()
@@ -336,54 +328,33 @@ FAST_RECYCLE_MAX_OPEN_POSITIONS: int = int(
     os.getenv("FAST_RECYCLE_MAX_OPEN_POSITIONS", "3")
 )
 
-# ── Position sizing ───────────────────────────────────────────────────────────
-# MAX_OPEN_POSITIONS — maximum simultaneous live positions
+# ── Position sizing ────────────────────────────────────────────────
 MAX_OPEN_POSITIONS: int = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
-
-# MAX_POSITION_DOLLARS — hard cap per individual position (notional)
 MAX_POSITION_DOLLARS: float = float(os.getenv("MAX_POSITION_DOLLARS", "30.0"))
-
-# MAX_POSITION_PCT_OF_BANKROLL — position cap as fraction of current bankroll
 MAX_POSITION_PCT_OF_BANKROLL: float = float(
     os.getenv("MAX_POSITION_PCT_OF_BANKROLL", "0.30")
 )
 
-# ── Capital safety thresholds ─────────────────────────────────────────────────
-# MIN_REQUIRED_BUYING_POWER — minimum available BP before any new buy is attempted
+# ── Capital safety thresholds ─────────────────────────────────────────────
 MIN_REQUIRED_BUYING_POWER: float = float(os.getenv("MIN_REQUIRED_BUYING_POWER", "5.0"))
-
-# CAPITAL_RESERVE_BUFFER — dollars always withheld from buying_power calculation.
-#   available_capital = buying_power - CAPITAL_RESERVE_BUFFER
 CAPITAL_RESERVE_BUFFER: float = float(os.getenv("CAPITAL_RESERVE_BUFFER", "2.0"))
 
-# ── Exit rules ────────────────────────────────────────────────────────────────
-# TARGET_PROFIT_PCT — unrealized gain fraction triggering a profit-target exit
+# ── Exit rules ─────────────────────────────────────────────────────────────
 TARGET_PROFIT_PCT: float = float(os.getenv("TARGET_PROFIT_PCT", "0.02"))   # 2 %
-
-# STOP_LOSS_PCT — unrealized loss fraction triggering a stop-loss exit (negative)
 STOP_LOSS_PCT: float = float(os.getenv("STOP_LOSS_PCT", "-0.015"))         # -1.5 %
-
-# MAX_HOLD_MINUTES — intraday max hold before forced liquidation
 MAX_HOLD_MINUTES: int = int(os.getenv("MAX_HOLD_MINUTES", "240"))          # 4 h
-
-# FORCE_SELL_END_OF_DAY — flatten all positions before market close
 FORCE_SELL_END_OF_DAY: bool = _get_bool("FORCE_SELL_END_OF_DAY", True)
-
-# ALLOW_OVERNIGHT_HOLD — override: permit overnight positions when True
 ALLOW_OVERNIGHT_HOLD: bool = _get_bool("ALLOW_OVERNIGHT_HOLD", False)
-
-# RECYCLE_EOD_FLATTEN_MINUTES_BEFORE — minutes before 16:00 ET to begin EOD exits
 RECYCLE_EOD_FLATTEN_MINUTES_BEFORE: int = int(
     os.getenv("RECYCLE_EOD_FLATTEN_MINUTES_BEFORE", "15")
 )
 
-
-# ── Replacement / ranking ─────────────────────────────────────────────────────
+# ── Replacement / ranking ─────────────────────────────────────────────────
 REPLACEMENT_RANK_THRESHOLD: float = float(os.getenv("REPLACEMENT_RANK_THRESHOLD", "0.15"))
 PYRAMIDING_ENABLED: bool = _get_bool("PYRAMIDING_ENABLED", False)
 
-# ── Recycle cycle interval ────────────────────────────────────────────────────
+# ── Recycle cycle interval ────────────────────────────────────────────────
 RECYCLE_CYCLE_INTERVAL_SECONDS: int = int(os.getenv("RECYCLE_CYCLE_INTERVAL_SECONDS", "60"))
 
-# ── Stale order management ────────────────────────────────────────────────────
+# ── Stale order management ────────────────────────────────────────────────
 STALE_ORDER_TIMEOUT_SECONDS: int = int(os.getenv("STALE_ORDER_TIMEOUT_SECONDS", "120"))
