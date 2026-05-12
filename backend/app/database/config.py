@@ -46,6 +46,8 @@ def create_db_and_tables() -> None:
     import app.models.marketplace        # noqa: F401
     import app.models.task               # noqa: F401
     import app.models.daily_opportunity  # noqa: F401
+    import app.models.copy_signal         # noqa: F401  — Signal Copy Engine
+    import app.models.forge               # noqa: F401  — Opportunity Forge Engine
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_tables()
 
