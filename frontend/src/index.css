@@ -5143,3 +5143,64 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   width: 100%;
   height: auto;
 }
+
+
+/* Opportunities page Hunter visual */
+.occ-title-zone--with-hunter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.occ-title-copy {
+  position: relative;
+  z-index: 2;
+}
+.occ-hunter-visual-card {
+  position: relative;
+  width: 170px;
+  height: 220px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(245, 177, 53, 0.22);
+  box-shadow: 0 0 26px rgba(245, 177, 53, 0.10), inset 0 1px 0 rgba(255,255,255,0.04);
+  background: rgba(0,0,0,0.28);
+  z-index: 2;
+}
+.occ-hunter-visual-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  display: block;
+  filter: saturate(1.08) contrast(1.08) brightness(0.96);
+}
+.occ-hunter-visual-glow {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 50%;
+  background: linear-gradient(to top, rgba(245,177,53,0.16), transparent);
+  pointer-events: none;
+}
+.occ-title-zone--with-hunter::after {
+  content: '';
+  position: absolute;
+  right: 42px;
+  top: 50%;
+  width: 280px;
+  height: 280px;
+  transform: translateY(-50%);
+  background: radial-gradient(circle, rgba(245,177,53,0.10), transparent 64%);
+  pointer-events: none;
+}
+@media (max-width: 720px) {
+  .occ-title-zone--with-hunter {
+    grid-template-columns: 1fr;
+  }
+  .occ-hunter-visual-card {
+    width: 100%;
+    height: 180px;
+  }
+}
