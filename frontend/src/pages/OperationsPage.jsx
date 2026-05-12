@@ -581,7 +581,7 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
           <p className="occ-tagline">Identify. Evaluate. Execute. Repeat.</p>
         </div>
         <div className="occ-hunter-visual-card" aria-label="Hunter operator visual">
-          <img src="/media/hunter-operator-card.png" alt="Hunter Chief Operations Officer" />
+          <img src="/media/hunter-operator-strip.png" alt="Hunter operator status strip" />
           <div className="occ-hunter-visual-glow" />
         </div>
       </div>
