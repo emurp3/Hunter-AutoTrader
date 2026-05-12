@@ -48,7 +48,7 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   object-fit: cover;
   object-position: center 32%;
   transform: scale(1.015);
-  filter: saturate(0.95) contrast(1.02) brightness(0.68);
+  filter: saturate(1.08) contrast(1.08) brightness(0.9);
 }
 
 /* Fallback gradient if video fails */
@@ -60,19 +60,43 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
               linear-gradient(135deg, #0d0d0d 0%, #1a1500 50%, #0a0a0a 100%);
 }
 
+.hero-hunter-backdrop {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 48%;
+  width: min(560px, 72vw);
+  max-height: 86vh;
+  transform: translate(-50%, -50%);
+  object-fit: contain;
+  opacity: 0.46;
+  filter: saturate(1.14) contrast(1.08) brightness(0.86);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.hero-root::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: radial-gradient(circle at center 44%, rgba(201,168,76,0.10), transparent 32%);
+  pointer-events: none;
+}
+
 .hero-overlay {
   position: absolute;
   inset: 0;
   z-index: 1;
   background:
-    radial-gradient(circle at center 42%, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.24) 56%, rgba(0,0,0,0.68) 100%),
-    linear-gradient(90deg, rgba(4,5,7,0.5) 0%, rgba(4,5,7,0.14) 30%, rgba(4,5,7,0.14) 70%, rgba(4,5,7,0.52) 100%),
-    linear-gradient(180deg, rgba(3,4,6,0.16) 0%, rgba(3,4,6,0.48) 72%, rgba(3,4,6,0.68) 100%);
+    radial-gradient(circle at center 42%, rgba(0,0,0,0.00) 0%, rgba(0,0,0,0.16) 58%, rgba(0,0,0,0.54) 100%),
+    linear-gradient(90deg, rgba(4,5,7,0.34) 0%, rgba(4,5,7,0.08) 30%, rgba(4,5,7,0.08) 70%, rgba(4,5,7,0.36) 100%),
+    linear-gradient(180deg, rgba(3,4,6,0.06) 0%, rgba(3,4,6,0.34) 74%, rgba(3,4,6,0.56) 100%);
 }
 
 .hero-content {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   text-align: center;
   display: flex;
   flex-direction: column;
