@@ -1011,17 +1011,17 @@ function EquityCurve({ transactions = [] }) {
   const maxV = hasData ? Math.max(1, ...points) : 1;
   const range = maxV - minV || 1;
 
-  const toX = (i: number) => pad.l + (i / (hasData ? points!.length - 1 : 1)) * innerW;
-  const toY = (v: number) => pad.t + innerH - ((v - minV) / range) * innerH;
+  const toX = (i) => pad.l + (i / (hasData ? points.length - 1 : 1)) * innerW;
+  const toY = (v) => pad.t + innerH - ((v - minV) / range) * innerH;
 
   const pathD = hasData
-    ? points!.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
+    ? points.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
     : null;
 
-  const fillD = pathD ? `${pathD} L${toX(points!.length - 1)},${toY(minV)} L${toX(0)},${toY(minV)} Z` : null;
+  const fillD = pathD ? `${pathD} L${toX(points.length - 1)},${toY(minV)} L${toX(0)},${toY(minV)} Z` : null;
 
   const yTicks = [minV, (minV + maxV) / 2, maxV];
-  const formatK = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${Math.round(v)}`;
+  const formatK = (v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${Math.round(v)}`;
 
   return (
     <div className="hunter-equity-panel">
@@ -1055,7 +1055,7 @@ function EquityCurve({ transactions = [] }) {
           </>
         )}
         {hasData && (
-          <circle cx={toX(points!.length - 1)} cy={toY(points![points!.length - 1])} r="3" fill="#00D4FF" />
+          <circle cx={toX(points.length - 1)} cy={toY(points[points.length - 1])} r="3" fill="#00D4FF" />
         )}
       </svg>
     </div>
@@ -1070,7 +1070,7 @@ function StrategyDonut({ performance = {} }) {
   const strategies = asArray(performance.strategy_breakdown || []);
 
   const segments = strategies.length
-    ? strategies.slice(0, 5).map((s: any, i: number) => ({
+    ? strategies.slice(0, 5).map((s, i) => ({
         label: s.strategy_type || s.name || STRATEGY_LABELS[i] || 'Other',
         value: Number(s.actual_return || s.amount || 0),
         pct: total > 0 ? Math.abs(Number(s.actual_return || s.amount || 0)) / Math.abs(total) : 0,
@@ -1472,7 +1472,7 @@ function ExecutiveSummarySection({ onAuthFail }) {
               </DataCard>
               <DataCard title="Events">
                 {events.length
-                  ? events.slice(0, 6).map((e: any, i: number) => (
+                  ? events.slice(0, 6).map((e, i) => (
                       <div key={i} className="hunter-kv-list" style={{ marginBottom: '4px' }}>
                         <div><span>{e.event_type || e.type}</span><strong>{e.created_at ? new Date(e.created_at).toLocaleTimeString() : ''}</strong></div>
                       </div>
