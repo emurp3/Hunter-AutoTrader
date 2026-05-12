@@ -5114,4 +5114,3 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   border-radius: 50%; animation: hunter-spin 0.7s linear infinite;
 }
 .hunter-run-scans-result { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 10px; color: rgba(255,255,255,0.5); }
-END_
