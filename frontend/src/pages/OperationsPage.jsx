@@ -9,6 +9,9 @@ const SECTIONS = [
   { id: 'opportunities', label: 'Opportunities' },
   { id: 'trading', label: 'Trading' },
   { id: 'results', label: 'Performance' },
+  { id: 'signals', label: 'Signal Copy' },
+  { id: 'forge', label: 'Forge' },
+  { id: 'quickcash', label: 'Quick-Cash Board' },
   { id: 'executive', label: 'Executive Summary' },
 ]
 
@@ -61,6 +64,20 @@ const EXECUTIVE_LOADERS = {
   transactions: { path: '/budget/transactions?limit=200' },
 }
 
+
+const SIGNALS_LOADERS = {
+  summary: { path: '/signals/summary' },
+  feed: { path: '/signals/feed?limit=50' },
+}
+
+const FORGE_LOADERS = {
+  summary: { path: '/forge/summary' },
+  opportunities: { path: '/forge/opportunities?limit=30' },
+}
+
+const QUICKCASH_LOADERS = {
+  board: { path: '/quickcash/board?limit=50' },
+}
 class AuthError extends Error {}
 
 function buildUrl(path) {
@@ -293,6 +310,21 @@ export default function OperationsPage({ onBack, onAuthFail }) {
         {activeSection === 'results' && (
           <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--results">
             <ResultsSection onAuthFail={onAuthFail} />
+          </div>
+        )}
+        {activeSection === 'signals' && (
+          <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--signals">
+            <SignalCopySection onAuthFail={onAuthFail} />
+          </div>
+        )}
+        {activeSection === 'forge' && (
+          <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--forge">
+            <ForgeSection onAuthFail={onAuthFail} />
+          </div>
+        )}
+        {activeSection === 'quickcash' && (
+          <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--quickcash">
+            <QuickCashSection onAuthFail={onAuthFail} />
           </div>
         )}
         {activeSection === 'executive' && (
@@ -1396,6 +1428,266 @@ function ExecutiveSummarySection({ onAuthFail }) {
           </div>
         )}
       </div>
+    </SectionFrame>
+  )
+}
+
+// ── Signal Copy Section ─────────────────────────────────────────────────────
+
+const DECISION_COLORS = { mirror: '#22d65a', partial_mirror: '#00D4FF', watchlist: '#FFB300', reject: '#ff4444', pending: '#888' }
+const DECISION_LABELS = { mirror: 'MIRROR', partial_mirror: 'PARTIAL', watchlist: 'WATCH', reject: 'REJECT', pending: 'PENDING' }
+
+function SignalCopySection({ onAuthFail }) {
+  const { endpoints, refresh } = useSectionData(SIGNALS_LOADERS, onAuthFail)
+  const summary = endpointData(endpoints.summary, {})
+  const feedData = endpointData(endpoints.feed, {})
+  const signals = asArray(feedData.signals)
+  const byDecision = summary.by_decision || {}
+  const [filter, setFilter] = useState('all')
+
+  const filtered = filter === 'all' ? signals : signals.filter(s => s.decision === filter)
+
+  return (
+    <SectionFrame title="Signal Copy" kicker="Public disclosure monitoring and trade signal routing" endpoints={endpoints} refresh={refresh}>
+      <div className="hunter-metric-grid">
+        <MetricCard label="Total Ingested" value={formatNumber(summary.total_ingested)} />
+        <MetricCard label="Mirror Candidates" value={formatNumber(byDecision.mirror)} detail="Auto-routed to execute" />
+        <MetricCard label="Partial Mirror" value={formatNumber(byDecision.partial_mirror)} detail="Scaled-down position" />
+        <MetricCard label="Watchlist" value={formatNumber(byDecision.watchlist)} detail="Monitor for confirmation" />
+      </div>
+
+      {/* Top mirrors */}
+      {asArray(summary.top_mirrors).length > 0 && (
+        <div className="hunter-signal-highlights">
+          <div className="hunter-signal-hl-title">TOP MIRROR CANDIDATES</div>
+          <div className="hunter-signal-hl-row">
+            {asArray(summary.top_mirrors).map((m, i) => (
+              <div key={i} className="hunter-signal-hl-card">
+                <div className="hunter-signal-hl-ticker">{m.ticker}</div>
+                <div className="hunter-signal-hl-filer">{m.filer}</div>
+                <div className="hunter-signal-hl-conf">{(m.confidence * 100).toFixed(0)}% conf</div>
+                <div className="hunter-signal-hl-action" style={{ color: m.action === 'buy' ? '#22d65a' : '#ff6b6b' }}>
+                  {(m.action || '').toUpperCase()}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Decision filter */}
+      <div className="hunter-subfilter-bar">
+        {['all','mirror','partial_mirror','watchlist','reject'].map(d => (
+          <button key={d} type="button"
+            className={`hunter-subfilter-chip${filter === d ? ' hunter-subfilter-chip--active' : ''}`}
+            onClick={() => setFilter(d)}
+          >
+            {d === 'all' ? 'All' : (DECISION_LABELS[d] || d)}
+          </button>
+        ))}
+      </div>
+
+      {/* Signal feed */}
+      <DataCard title={`Signal Feed (${filtered.length})`}>
+        {filtered.length === 0
+          ? <EmptyState>No signals yet. Use Refresh to trigger a scan.</EmptyState>
+          : (
+            <div className="hunter-table">
+              <div className="hunter-table-row hunter-table-head">
+                <span>Ticker</span><span>Filer</span><span>Action</span>
+                <span>Amount</span><span>Latency</span><span>Decision</span><span>Confidence</span>
+              </div>
+              {filtered.map((s) => (
+                <div className="hunter-table-row" key={s.id}>
+                  <span><strong style={{ color: 'var(--hv-gold)' }}>{s.ticker || '—'}</strong></span>
+                  <span style={{ fontSize: '10px' }}>{(s.filer || '').slice(0, 22)}</span>
+                  <span style={{ color: s.action === 'buy' ? '#22d65a' : '#ff6b6b', fontSize: '10px', fontWeight: 700 }}>
+                    {(s.action || '').toUpperCase()}
+                  </span>
+                  <span style={{ fontSize: '10px' }}>{s.amount ? `$${(s.amount/1000).toFixed(0)}k` : '—'}</span>
+                  <span style={{ fontSize: '10px' }}>{s.latency_hours ? `${Math.round(s.latency_hours)}h` : '—'}</span>
+                  <span>
+                    <span className="hunter-decision-chip" style={{ background: `${DECISION_COLORS[s.decision] || '#888'}18`, color: DECISION_COLORS[s.decision] || '#888', borderColor: `${DECISION_COLORS[s.decision] || '#888'}44` }}>
+                      {DECISION_LABELS[s.decision] || s.decision}
+                    </span>
+                  </span>
+                  <span style={{ fontSize: '10px', color: 'var(--hv-blue)' }}>{s.confidence ? `${(s.confidence*100).toFixed(0)}%` : '—'}</span>
+                </div>
+              ))}
+            </div>
+          )
+        }
+      </DataCard>
+
+      <DataCard title="Source Compliance">
+        <KeyValueList rows={[
+          { label: 'Sources', value: 'Congressional STOCK Act, SEC Form 4 (public)' },
+          { label: 'Method', value: 'Public disclosure feed — no private/insider data' },
+          { label: 'Mirror = Blind Copy?', value: 'No — confidence-scored, risk-gated, Commander-executable' },
+        ]} />
+      </DataCard>
+    </SectionFrame>
+  )
+}
+
+// ── Forge Section ────────────────────────────────────────────────────────
+
+function ForgeSection({ onAuthFail }) {
+  const { endpoints, refresh } = useSectionData(FORGE_LOADERS, onAuthFail)
+  const summary = endpointData(endpoints.summary, {})
+  const oppsData = endpointData(endpoints.opportunities, {})
+  const opps = asArray(oppsData.opportunities)
+  const [statusFilter, setStatusFilter] = useState('all')
+
+  const filtered = statusFilter === 'all' ? opps : opps.filter(o => o.status === statusFilter)
+
+  return (
+    <SectionFrame title="Opportunity Forge" kicker="Calendar, cultural, and trend-based revenue windows" endpoints={endpoints} refresh={refresh}>
+      <div className="hunter-metric-grid">
+        <MetricCard label="Active Windows" value={formatNumber(summary.active_count)} />
+        <MetricCard label="Est. Total Revenue" value={formatCurrency(summary.total_estimated_revenue)} />
+        <MetricCard label="Approved" value={formatNumber((summary.by_status || {}).approved)} detail="Ready to launch" />
+        <MetricCard label="Live" value={formatNumber((summary.by_status || {}).live)} detail="Currently selling" />
+      </div>
+
+      <div className="hunter-subfilter-bar">
+        {['all','detected','approved','live','closed'].map(s => (
+          <button key={s} type="button"
+            className={`hunter-subfilter-chip${statusFilter === s ? ' hunter-subfilter-chip--active' : ''}`}
+            onClick={() => setStatusFilter(s)}>
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      <div className="hunter-forge-grid">
+        {filtered.length === 0
+          ? <EmptyState>No forge opportunities. Click Refresh to scan upcoming calendar windows.</EmptyState>
+          : filtered.map((o) => (
+            <div key={o.id} className="hunter-forge-card">
+              <div className="hunter-forge-card-header">
+                <div className="hunter-forge-card-trigger">{o.trigger_name}</div>
+                <span className={`hunter-forge-status hunter-forge-status--${o.status}`}>{o.status.toUpperCase()}</span>
+              </div>
+              <div className="hunter-forge-card-title">{o.title}</div>
+              <div className="hunter-forge-card-meta">
+                <span>⏱ Launch in {o.days_to_launch ?? '—'}d</span>
+                <span>Ὃ5 Cash in {o.days_to_cash ?? '—'}d</span>
+                <span>✔ {o.confidence_score ? `${(o.confidence_score*100).toFixed(0)}%` : '—'} conf</span>
+              </div>
+              <div className="hunter-forge-card-financials">
+                <span>Est. {formatCurrency(o.estimated_revenue)}</span>
+                <span>{o.estimated_margin_pct ? `${(o.estimated_margin_pct*100).toFixed(0)}% margin` : ''}</span>
+                <span style={{ color: 'var(--hv-sub)', fontSize: '9px' }}>
+                  via {o.vendor_name || o.fulfillment_model}
+                </span>
+              </div>
+              {asArray(o.product_ideas).slice(0,2).map((idea, i) => (
+                <div key={i} className="hunter-forge-idea">
+                  → {idea.product || idea} — {idea.price ? `$${idea.price}` : ''}
+                </div>
+              ))}
+            </div>
+          ))
+        }
+      </div>
+
+      <DataCard title="Fulfillment Partners">
+        <KeyValueList rows={[
+          { label: 'Printful', value: 'Print-on-demand shirts, mugs, hoodies — printful.com' },
+          { label: 'Printify', value: 'Print-on-demand, higher margin — printify.com' },
+          { label: 'Gelato', value: 'Global print-on-demand — gelato.com' },
+          { label: 'Gumroad', value: 'Digital products, no COGS — gumroad.com' },
+          { label: 'AutoDS', value: 'Dropship fulfillment — autods.com' },
+        ]} />
+      </DataCard>
+    </SectionFrame>
+  )
+}
+
+// ── Quick-Cash Board ──────────────────────────────────────────────────────────
+
+const LANE_COLORS = { trading: '#00D4FF', signal_copy: '#22d65a', forge: '#FFB300' }
+const LANE_LABELS = { trading: 'TRADING', signal_copy: 'SIGNAL', forge: 'FORGE' }
+const EFFORT_ICONS = { low: '⚡', medium: '◾', high: '▪' }
+
+function QuickCashSection({ onAuthFail }) {
+  const { endpoints, refresh } = useSectionData(QUICKCASH_LOADERS, onAuthFail)
+  const boardData = endpointData(endpoints.board, {})
+  const board = asArray(boardData.board)
+  const lanes = boardData.lanes || {}
+  const top = boardData.top_opportunity
+  const [laneFilter, setLaneFilter] = useState('all')
+
+  const filtered = laneFilter === 'all' ? board : board.filter(x => x.lane === laneFilter)
+
+  return (
+    <SectionFrame title="Quick-Cash Board" kicker="Ranked cross-lane opportunities by speed, margin, and confidence" endpoints={endpoints} refresh={refresh}>
+
+      {/* Lane summary */}
+      <div className="hunter-metric-grid">
+        <MetricCard label="Total Ranked" value={formatNumber(boardData.total)} detail="Across all lanes" />
+        <MetricCard label="Trading" value={formatNumber(lanes.trading)} detail="Core trade opps" />
+        <MetricCard label="Signal Copy" value={formatNumber(lanes.signal_copy)} detail="Mirror candidates" />
+        <MetricCard label="Forge" value={formatNumber(lanes.forge)} detail="Calendar windows" />
+      </div>
+
+      {/* Top opportunity callout */}
+      {top && (
+        <div className="hunter-qc-top">
+          <div className="hunter-qc-top-label">⚡ TOP OPPORTUNITY RIGHT NOW</div>
+          <div className="hunter-qc-top-title">{top.title}</div>
+          <div className="hunter-qc-top-meta">
+            <span style={{ color: LANE_COLORS[top.lane] }}>{LANE_LABELS[top.lane] || top.lane}</span>
+            <span>{formatCurrency(top.expected_revenue)} est.</span>
+            <span>Cash in {top.days_to_cash ?? '—'}d</span>
+            <span>{(top.confidence_score * 100).toFixed(0)}% conf</span>
+            <span>{EFFORT_ICONS[top.effort_level]} {top.effort_level} effort</span>
+          </div>
+        </div>
+      )}
+
+      {/* Lane filter */}
+      <div className="hunter-subfilter-bar">
+        {['all','trading','signal_copy','forge'].map(l => (
+          <button key={l} type="button"
+            className={`hunter-subfilter-chip${laneFilter === l ? ' hunter-subfilter-chip--active' : ''}`}
+            onClick={() => setLaneFilter(l)}>
+            {l === 'all' ? 'All Lanes' : (LANE_LABELS[l] || l)}
+          </button>
+        ))}
+      </div>
+
+      {/* Board table */}
+      <DataCard title={`Board (${filtered.length} opportunities)`}>
+        {filtered.length === 0
+          ? <EmptyState>No ranked opportunities yet. Trigger a scan from Signal Copy or Forge, then refresh.</EmptyState>
+          : (
+            <div className="hunter-table">
+              <div className="hunter-table-row hunter-table-head">
+                <span>#</span><span>Lane</span><span>Opportunity</span>
+                <span>Revenue</span><span>Days→Cash</span><span>Conf.</span><span>Effort</span><span>Score</span>
+              </div>
+              {filtered.map((item, idx) => (
+                <div className="hunter-table-row" key={item.id + item.lane}>
+                  <span style={{ color: 'var(--hv-sub)', fontSize: '9px' }}>{idx + 1}</span>
+                  <span>
+                    <span style={{ background: `${LANE_COLORS[item.lane] || '#888'}18`, color: LANE_COLORS[item.lane] || '#888', borderRadius: '3px', padding: '1px 5px', fontSize: '8px', fontWeight: 700 }}>
+                      {LANE_LABELS[item.lane] || item.lane}
+                    </span>
+                  </span>
+                  <span style={{ fontSize: '10px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
+                  <span style={{ fontSize: '10px', color: 'var(--hv-gold)' }}>{formatCurrency(item.expected_revenue)}</span>
+                  <span style={{ fontSize: '10px' }}>{item.days_to_cash ?? '—'}d</span>
+                  <span style={{ fontSize: '10px', color: 'var(--hv-blue)' }}>{item.confidence_score ? `${(item.confidence_score*100).toFixed(0)}%` : '—'}</span>
+                  <span style={{ fontSize: '11px' }}>{EFFORT_ICONS[item.effort_level] || ''}</span>
+                  <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.35)' }}>{item.rank_score?.toFixed(3)}</span>
+                </div>
+              ))}
+            </div>
+          )
+        }
+      </DataCard>
     </SectionFrame>
   )
 }
