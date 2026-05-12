@@ -5093,3 +5093,25 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   color: var(--hv-sub);
   font-weight: 600;
 }
+
+.hunter-run-scans { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.hunter-run-scans-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 9px 22px;
+  border-radius: 8px; font-size: 10px; font-weight: 800; letter-spacing: 1.5px;
+  cursor: pointer; border: 1px solid; transition: all 0.15s; text-transform: uppercase;
+  font-family: inherit;
+}
+.hunter-run-scans-btn--idle { background: rgba(255,179,0,0.12); border-color: rgba(255,179,0,0.3); color: var(--hv-gold); }
+.hunter-run-scans-btn--idle:hover { background: rgba(255,179,0,0.22); box-shadow: 0 0 16px rgba(255,179,0,0.2); }
+.hunter-run-scans-btn--running { background: rgba(0,212,255,0.08); border-color: rgba(0,212,255,0.3); color: var(--hv-blue); cursor: not-allowed; }
+.hunter-run-scans-btn--done { background: rgba(34,214,90,0.1); border-color: rgba(34,214,90,0.3); color: #22d65a; }
+.hunter-run-scans-btn--error { background: rgba(255,60,60,0.1); border-color: rgba(255,60,60,0.3); color: #ff4444; }
+.hunter-run-scans-icon { font-size: 13px; }
+@keyframes hunter-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.hunter-run-scans-spinner {
+  display: inline-block; width: 10px; height: 10px;
+  border: 2px solid rgba(0,212,255,0.25); border-top-color: var(--hv-blue);
+  border-radius: 50%; animation: hunter-spin 0.7s linear infinite;
+}
+.hunter-run-scans-result { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 10px; color: rgba(255,255,255,0.5); }
+END_
