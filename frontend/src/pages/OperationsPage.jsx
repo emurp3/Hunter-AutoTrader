@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 
 const API = '/api'
@@ -1278,6 +1278,67 @@ function ResultsSection({ onAuthFail }) {
 }
 
 
+function RunScansButton() {
+  const [state, setState] = useState('idle')
+  const [results, setResults] = useState(null)
+  const timerRef = useRef(null)
+
+  async function runScans() {
+    setState('running')
+    setResults(null)
+    const opts = { method: 'POST', credentials: 'include', headers: { 'Accept': 'application/json' } }
+    try {
+      const [forgeRes, signalRes] = await Promise.all([
+        fetch('/api/forge/scan', opts),
+        fetch('/api/signals/scan', opts),
+      ])
+      const [forgeData, signalData] = await Promise.all([
+        forgeRes.ok ? forgeRes.json() : { error: forgeRes.status },
+        signalRes.ok ? signalRes.json() : { error: signalRes.status },
+      ])
+      setResults({ forge: forgeData, signals: signalData })
+      setState('done')
+      timerRef.current = window.setTimeout(() => setState('idle'), 6000)
+    } catch (err) {
+      setResults({ error: String(err) })
+      setState('error')
+      timerRef.current = window.setTimeout(() => setState('idle'), 5000)
+    }
+  }
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  const isRunning = state === 'running'
+
+  return (
+    <div className="hunter-run-scans">
+      <button
+        type="button"
+        className={`hunter-run-scans-btn hunter-run-scans-btn--${state}`}
+        onClick={runScans}
+        disabled={isRunning}
+      >
+        {isRunning
+          ? <><span className="hunter-run-scans-spinner" /> SCANNING ALL LANES</>
+          : state === 'done'
+            ? <>&#x2705; SCANS QUEUED &mdash; Check Signal Copy + Forge in 30s</>
+            : state === 'error'
+              ? <>&#x274c; SCAN FAILED &mdash; RETRY</>
+              : <><span className="hunter-run-scans-icon">&#x26A1;</span> RUN ALL LANE SCANS</>
+        }
+      </button>
+      {state === 'done' && results && (
+        <div className="hunter-run-scans-result">
+          <span>&#x2714; Forge scan queued</span>
+          <span>&#x2714; Signal scan queued</span>
+          <span style={{ color: 'var(--hv-sub)' }}>Refresh Signal Copy + Forge tabs in ~30s</span>
+        </div>
+      )}
+    </div>
+  )
+}
+END_
+
 // ── Executive Summary Section (replaces Pipeline as main nav) ────────────────
 
 function ExecutiveSummarySection({ onAuthFail }) {
@@ -1314,6 +1375,7 @@ function ExecutiveSummarySection({ onAuthFail }) {
             <p>&ldquo;Fortune favors precision.<br />We hunt. Others follow.&rdquo;</p>
             <span className="hunter-exec-quote-attr">&mdash; Hunter</span>
           </div>
+          <RunScansButton />
           <div className="hunter-exec-status-badges">
             <span className={`hunter-badge ${isLive ? 'hunter-badge--live' : 'hunter-badge--offline'}`}>
               <span className="hunter-badge-dot" />{isLive ? 'LIVE' : 'OFFLINE'}
