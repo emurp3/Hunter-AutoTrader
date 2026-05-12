@@ -29,13 +29,6 @@ export default function HeroPage({ onEnter, onLogin, onStatus }) {
         <div className="hero-video-fallback" />
       )}
 
-      <img
-        className="hero-hunter-backdrop"
-        src="/media/hunter-operator-portrait.png"
-        alt="Hunter operator"
-        aria-hidden="true"
-      />
-
       <div className="hero-overlay" />
 
       <div className="hero-content">
