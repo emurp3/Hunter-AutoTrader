@@ -4916,3 +4916,180 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   padding: 16px;
   border-top: 1px solid var(--hv-panel-border);
 }
+
+/* ─ Revenue Lane Panel Backgrounds ──────────────────────────────────────────── */
+.hunter-shell-panel--signals {
+  --hunter-panel-image: url('./assets/hunter-shell/trading-operations.png');
+}
+.hunter-shell-panel--forge {
+  --hunter-panel-image: url('./assets/hunter-shell/results-performance.png');
+}
+.hunter-shell-panel--quickcash {
+  --hunter-panel-image: url('./assets/hunter-shell/operations-command.png');
+}
+
+/* ─ Signal Copy ────────────────────────────────────────────────────────── */
+.hunter-signal-highlights {
+  margin-bottom: 16px;
+}
+.hunter-signal-hl-title {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--hv-sub);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.hunter-signal-hl-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hunter-signal-hl-card {
+  background: rgba(34,214,90,0.06);
+  border: 1px solid rgba(34,214,90,0.2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 100px;
+}
+.hunter-signal-hl-ticker {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--hv-gold);
+  letter-spacing: 1px;
+}
+.hunter-signal-hl-filer {
+  font-size: 8.5px;
+  color: var(--hv-sub);
+}
+.hunter-signal-hl-conf {
+  font-size: 9px;
+  color: var(--hv-blue);
+  font-weight: 700;
+}
+.hunter-signal-hl-action {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+.hunter-decision-chip {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 7.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  border: 1px solid;
+}
+
+/* ─ Opportunity Forge ─────────────────────────────────────────────────────── */
+.hunter-forge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.hunter-forge-card {
+  background: rgba(255,179,0,0.04);
+  border: 1px solid var(--hv-gold-border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s;
+}
+.hunter-forge-card:hover {
+  border-color: rgba(255,179,0,0.4);
+}
+.hunter-forge-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.hunter-forge-card-trigger {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--hv-gold);
+  text-transform: uppercase;
+}
+.hunter-forge-status {
+  font-size: 7.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.hunter-forge-status--detected  { background: rgba(136,136,136,0.1); color: #888; border: 1px solid #44444488; }
+.hunter-forge-status--scored     { background: rgba(0,212,255,0.1);  color: var(--hv-blue); border: 1px solid rgba(0,212,255,0.25); }
+.hunter-forge-status--approved   { background: rgba(255,179,0,0.1);  color: var(--hv-gold); border: 1px solid var(--hv-gold-border); }
+.hunter-forge-status--live       { background: rgba(34,214,90,0.1);  color: #22d65a; border: 1px solid rgba(34,214,90,0.3); }
+.hunter-forge-status--closed     { background: rgba(255,60,60,0.1);  color: #ff4444; border: 1px solid rgba(255,60,60,0.25); }
+.hunter-forge-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hv-text);
+  line-height: 1.3;
+}
+.hunter-forge-card-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hunter-forge-card-meta span {
+  font-size: 8.5px;
+  color: var(--hv-sub);
+}
+.hunter-forge-card-financials {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.hunter-forge-card-financials span {
+  font-size: 10px;
+  color: var(--hv-text);
+  font-weight: 600;
+}
+.hunter-forge-idea {
+  font-size: 9px;
+  color: rgba(255,179,0,0.6);
+  padding-left: 4px;
+}
+
+/* ─ Quick-Cash Board ───────────────────────────────────────────────────────── */
+.hunter-qc-top {
+  background: linear-gradient(135deg, rgba(255,179,0,0.08) 0%, rgba(0,212,255,0.05) 100%);
+  border: 1px solid var(--hv-gold-border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 0 20px rgba(255,179,0,0.05);
+}
+.hunter-qc-top-label {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--hv-gold);
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.hunter-qc-top-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--hv-text);
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+.hunter-qc-top-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.hunter-qc-top-meta span {
+  font-size: 10px;
+  color: var(--hv-sub);
+  font-weight: 600;
+}
