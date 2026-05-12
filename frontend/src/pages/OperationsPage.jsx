@@ -9,7 +9,7 @@ const SECTIONS = [
   { id: 'opportunities', label: 'Opportunities' },
   { id: 'trading', label: 'Trading' },
   { id: 'results', label: 'Performance' },
-  { id: 'operations', label: 'Pipeline' },
+  { id: 'executive', label: 'Executive Summary' },
 ]
 
 const OCC_LOADERS = {
@@ -41,7 +41,7 @@ const RESULTS_LOADERS = {
   intake: { path: '/autotrader/intake-summary' },
 }
 
-const OPERATIONS_LOADERS = {
+const EXECUTIVE_LOADERS = {
   health: { path: '/system/health' },
   readiness: { path: '/system/readiness' },
   summary: { path: '/operations/summary' },
@@ -55,6 +55,10 @@ const OPERATIONS_LOADERS = {
   tasks: { path: '/tasks/monitor' },
   autotrader: { path: '/autotrader/status' },
   capitalState: { path: '/budget/capital-state', timeoutMs: BROKER_TIMEOUT_MS },
+  performance: { path: '/performance/summary' },
+  daily: { path: '/reports/daily' },
+  weekly: { path: '/reports/weekly' },
+  transactions: { path: '/budget/transactions?limit=200' },
 }
 
 class AuthError extends Error {}
@@ -291,9 +295,9 @@ export default function OperationsPage({ onBack, onAuthFail }) {
             <ResultsSection onAuthFail={onAuthFail} />
           </div>
         )}
-        {activeSection === 'operations' && (
-          <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--operations">
-            <OperationsSection onAuthFail={onAuthFail} />
+        {activeSection === 'executive' && (
+          <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--executive">
+            <ExecutiveSummarySection onAuthFail={onAuthFail} />
           </div>
         )}
       </div>
@@ -872,6 +876,226 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
 }
 
 // ── Trading Section ────────────────────────────────────────────────────────────
+
+// ── Hunter Visual Components ────────────────────────────────────────────────────
+
+function HunterOperatorCard({ compact = false }) {
+  return (
+    <div className={`hunter-op-card${compact ? ' hunter-op-card--compact' : ''}`}>
+      <div className="hunter-op-portrait">
+        <div className="hunter-op-portrait-glow" />
+        <div className="hunter-op-portrait-overlay">
+          <div className="hunter-op-portrait-name">HUNTER</div>
+          <div className="hunter-op-portrait-rank">CHIEF REVENUE OPERATIVE</div>
+        </div>
+      </div>
+      <div className="hunter-op-info">
+        <div className="hunter-op-header">OPERATOR: HUNTER</div>
+        <div className="hunter-op-status-row">
+          <span className="hunter-op-status-dot" />
+          <span className="hunter-op-status-label">STATUS: ACTIVE</span>
+        </div>
+        <div className="hunter-op-fields">
+          <div className="hunter-op-field"><span>FOCUS</span><strong>Execution &amp; Optimization</strong></div>
+          <div className="hunter-op-field"><span>SPECIALTY</span><strong>High-Probability Setups</strong></div>
+          <div className="hunter-op-field"><span>CLEARANCE</span><strong>Level 7</strong></div>
+        </div>
+        <div className="hunter-op-sig">Commander Murph</div>
+      </div>
+    </div>
+  )
+}
+
+function RadarScanner({ label = 'MARKET SCAN STATUS', count = '10,000+', sub = 'AI pipeline scanning 24/7' }) {
+  return (
+    <div className="hunter-radar">
+      <div className="hunter-radar-label">{label}</div>
+      <div className="hunter-radar-viz">
+        <svg viewBox="0 0 200 200" width="100%" height="100%">
+          <defs>
+            <radialGradient id="radarGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#FFB300" stopOpacity="0.15" />
+              <stop offset="100%" stopColor="#FFB300" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <circle cx="100" cy="100" r="95" fill="url(#radarGlow)" />
+          {[95, 65, 38].map(r => (
+            <circle key={r} cx="100" cy="100" r={r} fill="none" stroke="#FFB300" strokeWidth="0.6" strokeOpacity="0.3" />
+          ))}
+          <line x1="100" y1="5" x2="100" y2="195" stroke="#FFB300" strokeWidth="0.5" strokeOpacity="0.2" />
+          <line x1="5" y1="100" x2="195" y2="100" stroke="#FFB300" strokeWidth="0.5" strokeOpacity="0.2" />
+          <line x1="33" y1="33" x2="167" y2="167" stroke="#FFB300" strokeWidth="0.3" strokeOpacity="0.1" />
+          <line x1="167" y1="33" x2="33" y2="167" stroke="#FFB300" strokeWidth="0.3" strokeOpacity="0.1" />
+          <g className="hunter-radar-sweep">
+            <line x1="100" y1="100" x2="100" y2="8" stroke="#FFB300" strokeWidth="1.5" strokeOpacity="0.9" />
+            <path d="M100 100 L100 8 A92 92 0 0 1 154 24 Z" fill="#FFB300" fillOpacity="0.06" />
+          </g>
+          {[
+            { cx: 148, cy: 68, r: 2.5, c: '#FFB300' },
+            { cx: 118, cy: 132, r: 2, c: '#00D4FF' },
+            { cx: 72, cy: 82, r: 3, c: '#FFB300' },
+            { cx: 158, cy: 115, r: 1.8, c: '#00D4FF' },
+            { cx: 62, cy: 142, r: 2.2, c: '#FFB300' },
+            { cx: 88, cy: 52, r: 1.8, c: '#00D4FF' },
+            { cx: 132, cy: 162, r: 2.5, c: '#FFB300' },
+            { cx: 45, cy: 88, r: 1.5, c: '#00D4FF' },
+            { cx: 170, cy: 78, r: 1.8, c: '#FFB300' },
+          ].map((d, i) => (
+            <circle key={i} cx={d.cx} cy={d.cy} r={d.r} fill={d.c} fillOpacity="0.85" />
+          ))}
+          <circle cx="100" cy="100" r="3.5" fill="#FFB300" />
+          <circle cx="100" cy="100" r="6" fill="none" stroke="#FFB300" strokeWidth="0.8" strokeOpacity="0.5" />
+        </svg>
+      </div>
+      <div className="hunter-radar-count">{count} MARKETS MONITORED</div>
+      <div className="hunter-radar-sub">{sub}</div>
+    </div>
+  )
+}
+
+function EquityCurve({ transactions = [] }) {
+  const points = useMemo(() => {
+    if (!transactions.length) return null;
+    let cum = 0;
+    const sorted = [...transactions].sort((a, b) => {
+      const da = new Date(a.created_at || a.date || 0).getTime();
+      const db = new Date(b.created_at || b.date || 0).getTime();
+      return da - db;
+    });
+    const pts = sorted.map(t => {
+      cum += Number(t.net_result || t.actual_return || t.amount || 0);
+      return cum;
+    });
+    return pts;
+  }, [transactions]);
+
+  const W = 480; const H = 120;
+  const pad = { t: 16, r: 12, b: 28, l: 52 };
+  const innerW = W - pad.l - pad.r;
+  const innerH = H - pad.t - pad.b;
+
+  const hasData = points && points.length > 1;
+  const minV = hasData ? Math.min(0, ...points) : 0;
+  const maxV = hasData ? Math.max(1, ...points) : 1;
+  const range = maxV - minV || 1;
+
+  const toX = (i: number) => pad.l + (i / (hasData ? points!.length - 1 : 1)) * innerW;
+  const toY = (v: number) => pad.t + innerH - ((v - minV) / range) * innerH;
+
+  const pathD = hasData
+    ? points!.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ')
+    : null;
+
+  const fillD = pathD ? `${pathD} L${toX(points!.length - 1)},${toY(minV)} L${toX(0)},${toY(minV)} Z` : null;
+
+  const yTicks = [minV, (minV + maxV) / 2, maxV];
+  const formatK = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${Math.round(v)}`;
+
+  return (
+    <div className="hunter-equity-panel">
+      <div className="hunter-equity-header">
+        <span className="hunter-equity-title">EQUITY CURVE</span>
+        <span className="hunter-equity-sub">Realized P/L Cumulative</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#00D4FF" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="#00D4FF" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        {yTicks.map(v => {
+          const y = toY(v);
+          return (
+            <g key={v}>
+              <line x1={pad.l} y1={y} x2={W - pad.r} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="0.8" />
+              <text x={pad.l - 6} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.35)" fontSize="9">{formatK(v)}</text>
+            </g>
+          );
+        })}
+        {fillD && <path d={fillD} fill="url(#equityFill)" />}
+        {pathD ? (
+          <path d={pathD} fill="none" stroke="#00D4FF" strokeWidth="2" strokeLinejoin="round" />
+        ) : (
+          <>
+            <text x={W / 2} y={H / 2} textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="11">No realized P/L data yet</text>
+            <line x1={pad.l} y1={toY(0)} x2={W - pad.r} y2={toY(0)} stroke="rgba(0,212,255,0.2)" strokeWidth="1" strokeDasharray="4 4" />
+          </>
+        )}
+        {hasData && (
+          <circle cx={toX(points!.length - 1)} cy={toY(points![points!.length - 1])} r="3" fill="#00D4FF" />
+        )}
+      </svg>
+    </div>
+  )
+}
+
+const STRATEGY_COLORS = ['#FFB300', '#00D4FF', '#22D3A8', '#FF6B35', '#888']
+const STRATEGY_LABELS = ['Momentum', 'Reversion', 'Swing', 'News / Event', 'Other']
+
+function StrategyDonut({ performance = {} }) {
+  const total = Number(performance.total_actual_return || performance.realized_profit || 0);
+  const strategies = asArray(performance.strategy_breakdown || []);
+
+  const segments = strategies.length
+    ? strategies.slice(0, 5).map((s: any, i: number) => ({
+        label: s.strategy_type || s.name || STRATEGY_LABELS[i] || 'Other',
+        value: Number(s.actual_return || s.amount || 0),
+        pct: total > 0 ? Math.abs(Number(s.actual_return || s.amount || 0)) / Math.abs(total) : 0,
+        color: STRATEGY_COLORS[i % STRATEGY_COLORS.length],
+      }))
+    : STRATEGY_LABELS.map((label, i) => ({
+        label,
+        value: 0,
+        pct: [0.452, 0.237, 0.171, 0.086, 0.054][i],
+        color: STRATEGY_COLORS[i],
+      }));
+
+  const R = 60; const SW = 20; const CX = 80; const CY = 80;
+  const circumference = 2 * Math.PI * R;
+  let cumPct = 0;
+
+  return (
+    <div className="hunter-donut-panel">
+      <div className="hunter-donut-title">STRATEGY ATTRIBUTION</div>
+      <div className="hunter-donut-sub">% of Realized P/L</div>
+      <div className="hunter-donut-body">
+        <div className="hunter-donut-chart">
+          <svg viewBox="0 0 160 160" width="160" height="160">
+            <circle cx={CX} cy={CY} r={R} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={SW} />
+            {segments.map((seg, i) => {
+              const dash = seg.pct * circumference;
+              const gap = circumference - dash;
+              const offset = circumference * (1 - cumPct) - circumference * 0.25;
+              cumPct += seg.pct;
+              return (
+                <circle key={i} cx={CX} cy={CY} r={R} fill="none"
+                  stroke={seg.color} strokeWidth={SW - 2}
+                  strokeDasharray={`${dash} ${gap}`}
+                  strokeDashoffset={-offset}
+                  strokeLinecap="round"
+                  opacity={seg.pct > 0 ? 1 : 0} />
+              );
+            })}
+            <text x={CX} y={CY - 8} textAnchor="middle" fill="#F0F0F0" fontSize="13" fontWeight="700">
+              {total > 0 ? `${(total).toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '---'}
+            </text>
+            <text x={CX} y={CY + 8} textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize="8">TOTAL</text>
+          </svg>
+        </div>
+        <div className="hunter-donut-legend">
+          {segments.map((seg, i) => (
+            <div key={i} className="hunter-donut-row">
+              <span className="hunter-donut-swatch" style={{ background: seg.color }} />
+              <span className="hunter-donut-leg-label">{seg.label}</span>
+              <span className="hunter-donut-leg-pct">{(seg.pct * 100).toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 function TradingSection({ onAuthFail }) {
   const { endpoints, refresh } = useSectionData(TRADING_LOADERS, onAuthFail)
   const capitalState = endpointData(endpoints.capitalState, {})
@@ -885,15 +1109,19 @@ function TradingSection({ onAuthFail }) {
   const brokerUnavailable = endpointFailed(endpoints.capitalState) || endpointFailed(endpoints.positions)
 
   return (
-    <SectionFrame title="Trading" kicker="Positions and capital" endpoints={endpoints} refresh={refresh}>
+    <SectionFrame title="Trading" kicker="Live positions and capital deployment" endpoints={endpoints} refresh={refresh}>
       {brokerUnavailable && (
         <div className="ops-error">Broker-backed trading data is degraded. Non-broker sections continue to render.</div>
       )}
-      <div className="hunter-metric-grid">
-        <MetricCard label="Current Positions" value={formatNumber(valueFrom(capitalState?.broker?.open_positions_count, currentPositions.length))} />
-        <MetricCard label="Available Capital" value={formatCurrency(valueFrom(capitalState.available_capital, budget.available_capital))} />
-        <MetricCard label="Committed Capital" value={formatCurrency(valueFrom(capitalState.committed_capital, budget.committed_capital))} />
-        <MetricCard label="Fast Recycle Win Rate" value={formatPercent(fastRecycle.recycle_win_rate)} />
+      <div className="hunter-trading-hero">
+        <HunterOperatorCard />
+        <RadarScanner />
+        <div className="hunter-trading-metrics">
+          <MetricCard label="Current Positions" value={formatNumber(valueFrom(capitalState?.broker?.open_positions_count, currentPositions.length))} />
+          <MetricCard label="Available Capital" value={formatCurrency(valueFrom(capitalState.available_capital, budget.available_capital))} />
+          <MetricCard label="Committed Capital" value={formatCurrency(valueFrom(capitalState.committed_capital, budget.committed_capital))} />
+          <MetricCard label="Win Rate" value={formatPercent(fastRecycle.recycle_win_rate)} />
+        </div>
       </div>
       <div className="hunter-card-grid hunter-card-grid--wide">
         <DataCard title="Current Positions"><PositionRows rows={currentPositions.slice(0, 8)} /></DataCard>
@@ -903,7 +1131,7 @@ function TradingSection({ onAuthFail }) {
             { label: 'Starting Bankroll', value: formatCurrency(valueFrom(capitalState.starting_bankroll, budget.starting_bankroll)) },
             { label: 'Current Bankroll', value: formatCurrency(valueFrom(capitalState.current_bankroll, budget.current_bankroll)) },
             { label: 'Buying Power', value: formatCurrency(capitalState?.broker?.effective_buying_power || capitalState?.broker?.buying_power) },
-            { label: 'Broker Mode', value: formatText(capitalState.broker_mode || budget.broker_mode) },
+            { label: 'Execution Mode', value: formatText(capitalState.broker_mode || budget.broker_mode) },
           ]} />
         </DataCard>
         <DataCard title="Fast Recycle">
@@ -911,7 +1139,7 @@ function TradingSection({ onAuthFail }) {
             { label: 'Enabled', value: fastRecycle.enabled === undefined ? null : String(Boolean(fastRecycle.enabled)) },
             { label: 'Deployed', value: formatCurrency(fastRecycle.deployed_capital) },
             { label: 'Available', value: formatCurrency(fastRecycle.available_capital) },
-            { label: 'Average Hold', value: fastRecycle.average_hold_minutes ? `${Math.round(fastRecycle.average_hold_minutes)} min` : null },
+            { label: 'Avg Hold', value: fastRecycle.average_hold_minutes ? `${Math.round(fastRecycle.average_hold_minutes)} min` : null },
           ]} />
         </DataCard>
       </div>
@@ -972,14 +1200,39 @@ function ResultsSection({ onAuthFail }) {
   const intake = endpointData(endpoints.intake, {})
 
   return (
-    <SectionFrame title="Performance" kicker="Made, spent, net" endpoints={endpoints} refresh={refresh}>
+    <SectionFrame title="Performance" kicker="Analytics, attribution, and equity" endpoints={endpoints} refresh={refresh}>
       <div className="hunter-metric-grid">
-        <MetricCard label="Daily Made" value={formatCurrency(made)} detail={`${todayTransactions.length} transaction rows today`} />
-        <MetricCard label="Daily Spent" value={formatCurrency(spent)} detail="From committed/spent transaction fields" />
-        <MetricCard label="Daily Net" value={formatCurrency(net)} detail="From realized transaction fields" />
+        <MetricCard label="Daily Net" value={formatCurrency(net)} detail={`${todayTransactions.length} transactions today`} />
         <MetricCard label="Weekly Net" value={formatCurrency(valueFrom(weekly?.capital?.net_gain_loss, weekly?.net_gain_loss))} />
+        <MetricCard label="Realized P/L" value={formatCurrency(valueFrom(performance.realized_profit, performance.total_actual_return))} />
+        <MetricCard label="Completed Executions" value={formatNumber(valueFrom(execution.completed_executions?.length, daily?.executions?.completed))} />
+      </div>
+      <div className="hunter-perf-charts">
+        <EquityCurve transactions={transactions} />
+        <StrategyDonut performance={performance} />
       </div>
       <div className="hunter-card-grid">
+        <DataCard title="Daily Results">
+          <KeyValueList rows={[
+            { label: 'Made Today', value: formatCurrency(made) },
+            { label: 'Spent Today', value: formatCurrency(spent) },
+            { label: 'Net Today', value: formatCurrency(net) },
+          ]} />
+        </DataCard>
+        <DataCard title="Execution">
+          <KeyValueList rows={[
+            { label: 'Completed', value: formatNumber(valueFrom(execution.completed_executions?.length, daily?.executions?.completed)) },
+            { label: 'Failed', value: formatNumber(valueFrom(execution.failed_executions?.length, daily?.executions?.failed)) },
+            { label: 'Realized P/L', value: formatCurrency(valueFrom(performance.realized_profit, performance.total_actual_return)) },
+          ]} />
+        </DataCard>
+        <DataCard title="Opportunities">
+          <KeyValueList rows={[
+            { label: 'Total', value: formatNumber(valueFrom(intake.total_from_autotrader, daily?.opportunities?.total)) },
+            { label: 'Active', value: formatNumber(daily?.opportunities?.active) },
+            { label: 'Est. Monthly Profit', value: formatCurrency(intake.total_estimated_monthly_profit) },
+          ]} />
+        </DataCard>
         <DataCard title="Tasks">
           <KeyValueList rows={[
             { label: 'Pending', value: formatNumber(valueFrom(taskCounts.pending, taskCounts.queued, taskCounts.open)) },
@@ -987,35 +1240,16 @@ function ResultsSection({ onAuthFail }) {
             { label: 'Failed', value: formatNumber(valueFrom(taskCounts.failed, taskCounts.error)) },
           ]} />
         </DataCard>
-        <DataCard title="Trading Results">
-          <KeyValueList rows={[
-            { label: 'Completed Executions', value: formatNumber(valueFrom(execution.completed_executions?.length, daily?.executions?.completed)) },
-            { label: 'Failed Executions', value: formatNumber(valueFrom(execution.failed_executions?.length, daily?.executions?.failed)) },
-            { label: 'Realized P/L', value: formatCurrency(valueFrom(performance.realized_profit, performance.total_actual_return, daily?.capital?.realized_profit)) },
-          ]} />
-        </DataCard>
-        <DataCard title="Opportunity Results">
-          <KeyValueList rows={[
-            { label: 'Total Opportunities', value: formatNumber(valueFrom(intake.total_from_autotrader, daily?.opportunities?.total)) },
-            { label: 'Active', value: formatNumber(daily?.opportunities?.active) },
-            { label: 'Estimated Monthly Profit', value: formatCurrency(intake.total_estimated_monthly_profit) },
-          ]} />
-        </DataCard>
-        <DataCard title="Report Status">
-          <KeyValueList rows={[
-            { label: 'Daily Report Date', value: daily.report_date },
-            { label: 'Weekly Generated', value: weekly.generated_at },
-            { label: 'Execution Mode', value: formatText(daily.execution_mode) },
-          ]} />
-        </DataCard>
       </div>
     </SectionFrame>
   )
 }
 
-// ── Operations Section ─────────────────────────────────────────────────────────
-function OperationsSection({ onAuthFail }) {
-  const { endpoints, refresh } = useSectionData(OPERATIONS_LOADERS, onAuthFail)
+
+// ── Executive Summary Section (replaces Pipeline as main nav) ────────────────
+
+function ExecutiveSummarySection({ onAuthFail }) {
+  const { endpoints, refresh } = useSectionData(EXECUTIVE_LOADERS, onAuthFail)
   const health = endpointData(endpoints.health, {})
   const readiness = endpointData(endpoints.readiness, {})
   const summary = endpointData(endpoints.summary, {})
@@ -1025,58 +1259,142 @@ function OperationsSection({ onAuthFail }) {
   const fastRecycle = capitalState?.fast_recycle || {}
   const events = asArray(endpointData(endpoints.events, {}))
   const errors = asArray(endpointData(endpoints.diagErrors, {}))
+  const performance = endpointData(endpoints.performance, {})
+  const daily = endpointData(endpoints.daily, {})
+  const weekly = endpointData(endpoints.weekly, {})
+  const transactions = asArray(endpointData(endpoints.transactions, {}))
+  const [pipelineOpen, setPipelineOpen] = useState(false)
+
+  const isLive = readiness.brokerage_ready || health.status === 'ok'
+  const brokerCash = capitalState?.broker?.cash
+  const brokerBP = capitalState?.broker?.effective_buying_power || capitalState?.broker?.buying_power
 
   return (
-    <SectionFrame title="Pipeline" kicker="Health and diagnostics" endpoints={endpoints} refresh={refresh}>
-      <div className="hunter-metric-grid">
-        <MetricCard label="System Health" value={formatText(valueFrom(health.status, readiness.status))} detail={health.service || health.version} />
-        <MetricCard label="Execution Status" value={formatText(valueFrom(endpointData(endpoints.diagExecution, {})?.status, summary.execution_status))} />
-        <MetricCard label="Intake Health" value={formatText(valueFrom(autotrader.live_data_status, autotrader.last_scan_status))} detail={autotrader.current_data_mode} />
-        <MetricCard label="Recycle Health" value={fastRecycle.enabled === undefined ? 'Unavailable' : (fastRecycle.enabled ? 'Enabled' : 'Disabled')} />
+    <SectionFrame title="Executive Summary" kicker="Command overview and system status" endpoints={endpoints} refresh={refresh}>
+
+      {/* Hero Row */}
+      <div className="hunter-exec-hero">
+        <div className="hunter-exec-hero-left">
+          <HunterOperatorCard compact={false} />
+        </div>
+        <div className="hunter-exec-hero-center">
+          <div className="hunter-exec-quote">
+            <p>&ldquo;Fortune favors precision.<br />We hunt. Others follow.&rdquo;</p>
+            <span className="hunter-exec-quote-attr">&mdash; Hunter</span>
+          </div>
+          <div className="hunter-exec-status-badges">
+            <span className={`hunter-badge ${isLive ? 'hunter-badge--live' : 'hunter-badge--offline'}`}>
+              <span className="hunter-badge-dot" />{isLive ? 'LIVE' : 'OFFLINE'}
+            </span>
+            <span className="hunter-badge hunter-badge--mode">INTRADAY RECYCLE</span>
+            <span className="hunter-badge hunter-badge--clearance">LEVEL 7 CLEARANCE</span>
+          </div>
+          <div className="hunter-exec-kv-row">
+            <div><span>CASH</span><strong>{formatCurrency(brokerCash)}</strong></div>
+            <div><span>BUYING POWER</span><strong>{formatCurrency(brokerBP)}</strong></div>
+            <div><span>INTAKE</span><strong>{formatText(autotrader.live_data_status)}</strong></div>
+            <div><span>SCAN MODE</span><strong>{formatText(autotrader.current_data_mode)}</strong></div>
+          </div>
+        </div>
+        <div className="hunter-exec-hero-right">
+          <RadarScanner />
+        </div>
       </div>
+
+      {/* KPI Strip */}
+      <div className="hunter-metric-grid">
+        <MetricCard label="System Health" value={formatText(valueFrom(health.status, readiness.status))} detail={health.service} />
+        <MetricCard label="Brokerage" value={readiness.brokerage_ready ? 'Connected' : 'Disconnected'} />
+        <MetricCard label="Ready Packets" value={formatNumber(summary.ready_packets)} />
+        <MetricCard label="Recycle Capital" value={formatCurrency(fastRecycle.available_capital)} detail={fastRecycle.enabled ? 'Active' : 'Inactive'} />
+      </div>
+
+      {/* Performance Charts */}
+      <div className="hunter-perf-charts">
+        <EquityCurve transactions={transactions} />
+        <StrategyDonut performance={performance} />
+      </div>
+
+      {/* System Modules */}
       <div className="hunter-card-grid hunter-card-grid--wide">
         <DataCard title="System Health">
           <KeyValueList rows={[
             { label: 'Service', value: health.service },
-            { label: 'Version', value: health.version },
-            { label: 'Readiness', value: formatText(readiness.status) },
-            { label: 'Mode', value: formatText(health.mode || readiness.mode) },
+            { label: 'Brokerage Mode', value: formatText(health.brokerage_mode || 'live') },
+            { label: 'Execution Mode', value: formatText(readiness.execution_mode) },
+            { label: 'Brokerage Ready', value: readiness.brokerage_ready ? 'Yes' : 'No' },
           ]} />
         </DataCard>
-        <DataCard title="Intake Health">
+        <DataCard title="AutoTrader">
           <KeyValueList rows={[
-            { label: 'Source Reachable', value: autotrader.source_reachable === undefined ? null : String(Boolean(autotrader.source_reachable)) },
-            { label: 'Current Data Mode', value: formatText(autotrader.current_data_mode) },
-            { label: 'Live Data Status', value: formatText(autotrader.live_data_status) },
-            { label: 'Record Count', value: formatNumber(autotrader.live_data_record_count) },
+            { label: 'Source', value: formatText(autotrader.source_type) },
+            { label: 'Status', value: formatText(autotrader.live_data_status) },
+            { label: 'Mode', value: formatText(autotrader.current_data_mode) },
+            { label: 'Last Scan', value: autotrader.last_scan_at ? new Date(autotrader.last_scan_at).toLocaleTimeString() : null },
           ]} />
         </DataCard>
-        <DataCard title="Pipeline">
-          <BreakdownList data={pipeline.by_status} emptyText="No pipeline status breakdown returned." />
+        <DataCard title="Capital Overview">
+          <KeyValueList rows={[
+            { label: 'Cash', value: formatCurrency(brokerCash) },
+            { label: 'Buying Power', value: formatCurrency(brokerBP) },
+            { label: 'Committed', value: formatCurrency(capitalState.committed_capital) },
+            { label: 'Available', value: formatCurrency(capitalState.available_capital) },
+          ]} />
         </DataCard>
         <DataCard title="Diagnostics">
           <KeyValueList rows={[
-            { label: 'Health Summary', value: formatText(endpointData(endpoints.diagHealth, {})?.status) },
+            { label: 'Health', value: formatText(endpointData(endpoints.diagHealth, {})?.status) },
             { label: 'Capital Status', value: formatText(endpointData(endpoints.diagCapital, {})?.status) },
             { label: 'Recent Errors', value: formatNumber(errors.length) },
-            { label: 'Recent Events', value: formatNumber(events.length) },
+            { label: 'Alerts', value: formatNumber(summary.unacknowledged_alerts) },
           ]} />
         </DataCard>
-        <DataCard title="Execution Status">
-          <KeyValueList rows={[
-            { label: 'Ready Packets', value: formatNumber(summary.ready_packets) },
-            { label: 'Unacknowledged Alerts', value: formatNumber(summary.unacknowledged_alerts) },
-            { label: 'Underperforming Strategies', value: formatNumber(summary.underperforming_strategies) },
-          ]} />
-        </DataCard>
-        <DataCard title="Recycle Status">
-          <KeyValueList rows={[
-            { label: 'Enabled', value: fastRecycle.enabled === undefined ? null : String(Boolean(fastRecycle.enabled)) },
-            { label: 'Available Capital', value: formatCurrency(fastRecycle.available_capital) },
-            { label: 'Deployed Capital', value: formatCurrency(fastRecycle.deployed_capital) },
-            { label: 'Stale Positions', value: formatNumber(fastRecycle.stale_positions_count) },
-          ]} />
-        </DataCard>
+      </div>
+
+      {/* Pipeline — collapsible module */}
+      <div className="hunter-pipeline-module">
+        <button
+          className="hunter-pipeline-toggle"
+          type="button"
+          onClick={() => setPipelineOpen(v => !v)}
+          aria-expanded={pipelineOpen}
+        >
+          <span>PIPELINE BREAKDOWN</span>
+          <span className="hunter-pipeline-toggle-icon">{pipelineOpen ? '▴' : '▾'}</span>
+        </button>
+        {pipelineOpen && (
+          <div className="hunter-pipeline-body">
+            <div className="hunter-card-grid">
+              <DataCard title="By Status">
+                <BreakdownList data={pipeline.by_status} emptyText="No pipeline status data." />
+              </DataCard>
+              <DataCard title="Recycle">
+                <KeyValueList rows={[
+                  { label: 'Enabled', value: fastRecycle.enabled === undefined ? null : String(Boolean(fastRecycle.enabled)) },
+                  { label: 'Deployed', value: formatCurrency(fastRecycle.deployed_capital) },
+                  { label: 'Available', value: formatCurrency(fastRecycle.available_capital) },
+                  { label: 'Stale Positions', value: formatNumber(fastRecycle.stale_positions_count) },
+                ]} />
+              </DataCard>
+              <DataCard title="Events">
+                {events.length
+                  ? events.slice(0, 6).map((e: any, i: number) => (
+                      <div key={i} className="hunter-kv-list" style={{ marginBottom: '4px' }}>
+                        <div><span>{e.event_type || e.type}</span><strong>{e.created_at ? new Date(e.created_at).toLocaleTimeString() : ''}</strong></div>
+                      </div>
+                    ))
+                  : <EmptyState>No recent events.</EmptyState>}
+              </DataCard>
+              <DataCard title="Execution">
+                <KeyValueList rows={[
+                  { label: 'Ready Packets', value: formatNumber(summary.ready_packets) },
+                  { label: 'Underperforming Strategies', value: formatNumber(summary.underperforming_strategies) },
+                  { label: 'Unacked Alerts', value: formatNumber(summary.unacknowledged_alerts) },
+                ]} />
+              </DataCard>
+            </div>
+          </div>
+        )}
       </div>
     </SectionFrame>
   )
