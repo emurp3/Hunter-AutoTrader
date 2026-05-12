@@ -1,6 +1,6 @@
 """
-Alpaca brokerage adapter — supports both paper (sandbox) and live mode.
-Active mode is controlled by EXECUTION_MODE in the environment.
+Alpaca brokerage adapter — live mode only.
+Hunter trades with real capital. Paper/sandbox mode is not supported.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from app.config import (
 
 
 class AlpacaAdapter:
-    def __init__(self, api_key: str, secret_key: str, *, paper: bool = True, base_url: Optional[str] = None):
+    def __init__(self, api_key: str, secret_key: str, *, paper: bool = False, base_url: Optional[str] = None):
         from alpaca.trading.client import TradingClient
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
@@ -109,7 +109,7 @@ class AlpacaAdapter:
         return {
             'provider': 'alpaca',
             'enabled': True,
-            'mode': 'paper' if self._paper else 'live',
+            'mode': 'live',
             'connected': True,
             'status': account.status,
             'account_id': account.account_id,
@@ -154,10 +154,12 @@ def get_alpaca_adapter() -> AlpacaAdapter:
     if not ALPACA_ENABLED:
         raise EnvironmentError('Alpaca execution is disabled. Set ALPACA_ENABLED=true to activate.')
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        raise EnvironmentError('Missing Alpaca credentials. Set the appropriate API key and secret for the current EXECUTION_MODE.')
+        raise EnvironmentError(
+            'Missing Alpaca credentials. Set LIVE_API_KEY and LIVE_SECRET_KEY in the Render dashboard.'
+        )
     return AlpacaAdapter(
         ALPACA_API_KEY,
         ALPACA_SECRET_KEY,
-        paper=ALPACA_PAPER,
+        paper=ALPACA_PAPER,   # always False
         base_url=ALPACA_BASE_URL,
     )
