@@ -2,8 +2,8 @@
 System readiness and health endpoints.
 
 GET /system/health      — lightweight liveness ping
-GET /system/readiness   — full dual-mode sandbox + live readiness report
-POST /system/activate-live  — (guarded) single-action live activation trigger
+GET /system/readiness   — full live brokerage readiness report
+POST /system/activate-live  — status endpoint (Hunter is already live)
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from app.config import (
     LIVE_BASE_URL,
     LIVE_SECRET_KEY,
     SANDBOX_API_KEY,
-    SANDBOX_BASE_URL,
     SANDBOX_SECRET_KEY,
     SOURCES_WEEKLY_MINIMUM,
     STRATEGY_WEEKLY_MINIMUM,
@@ -52,34 +51,37 @@ from app.services.autotrader import refresh_intake_state
 router = APIRouter(prefix="/system", tags=["system"])
 
 
-# ── Connectivity checks ───────────────────────────────────────────────────────
+# ── Connectivity checks ────────────────────────────────────────────────
 
-def _check_sandbox_brokerage() -> dict:
-    """Attempt live connection to Alpaca paper API using sandbox credentials."""
-    api_key = SANDBOX_API_KEY or ALPACA_API_KEY
-    secret_key = SANDBOX_SECRET_KEY or ALPACA_SECRET_KEY
+def _check_live_brokerage() -> dict:
+    """Attempt connection to Alpaca live API."""
+    api_key = ALPACA_API_KEY
+    secret_key = ALPACA_SECRET_KEY
 
     if not ALPACA_ENABLED:
         return {"connected": False, "reason": "ALPACA_ENABLED=false"}
     if not api_key or not secret_key:
         return {
             "connected": False,
-            "reason": "SANDBOX_API_KEY / SANDBOX_SECRET_KEY not set. Add paper trading credentials to .env.",
-            "required_vars": ["SANDBOX_API_KEY", "SANDBOX_SECRET_KEY"],
+            "reason": (
+                "Alpaca credentials not set. Add LIVE_API_KEY and LIVE_SECRET_KEY "
+                "(or SANDBOX_API_KEY / SANDBOX_SECRET_KEY as legacy names) to the Render dashboard."
+            ),
+            "required_vars": ["LIVE_API_KEY", "LIVE_SECRET_KEY"],
         }
     try:
         from alpaca.trading.client import TradingClient
-        client = TradingClient(api_key, secret_key, paper=True, url_override=SANDBOX_BASE_URL)
+        client = TradingClient(api_key, secret_key, paper=False, url_override=ALPACA_BASE_URL)
         acct = client.get_account()
         return {
             "connected": True,
-            "mode": "paper",
+            "mode": "live",
             "account_id": str(acct.id),
             "cash": float(acct.cash),
             "buying_power": float(acct.buying_power),
             "currency": acct.currency or "USD",
             "status": str(acct.status),
-            "base_url": SANDBOX_BASE_URL,
+            "base_url": ALPACA_BASE_URL,
         }
     except EnvironmentError as exc:
         return {"connected": False, "reason": str(exc)}
@@ -88,31 +90,6 @@ def _check_sandbox_brokerage() -> dict:
             "connected": False,
             "reason": f"{exc.__class__.__name__}: {exc}",
         }
-
-
-def _check_live_config_structure() -> dict:
-    """Check whether live config structure is prewired (credentials may be empty)."""
-    vars_present = {
-        "LIVE_API_KEY": bool(LIVE_API_KEY),
-        "LIVE_SECRET_KEY": bool(LIVE_SECRET_KEY),
-        "LIVE_BASE_URL": bool(LIVE_BASE_URL),
-    }
-    structure_present = True  # env vars exist in .env even if empty
-    credentials_present = bool(LIVE_API_KEY and LIVE_SECRET_KEY)
-
-    return {
-        "live_config_structure_present": structure_present,
-        "live_credentials_present": credentials_present,
-        "live_activation_control_present": True,  # EXECUTION_MODE var exists
-        "live_mode_structurally_ready": structure_present,
-        "vars": vars_present,
-        "base_url": LIVE_BASE_URL,
-        "note": (
-            "Live credentials not set — populate LIVE_API_KEY and LIVE_SECRET_KEY, then set EXECUTION_MODE=live."
-            if not credentials_present
-            else "Live credentials present. Set EXECUTION_MODE=live to activate."
-        ),
-    }
 
 
 def _check_autotrader() -> dict:
@@ -164,19 +141,19 @@ def _check_leads() -> dict:
 
 
 def _check_env_vars() -> dict:
-    # Use _resolve_env_value (prefer_non_empty=True) so that empty stubs in
-    # backend.env don't shadow real values populated in backend/.env
     from app.config import _resolve_env_value as _rev
-    required_sandbox = {
+    live_creds = {
+        "LIVE_API_KEY": bool(_rev("LIVE_API_KEY", prefer_non_empty=True)),
+        "LIVE_SECRET_KEY": bool(_rev("LIVE_SECRET_KEY", prefer_non_empty=True)),
+        # Legacy names that may hold live credentials
         "SANDBOX_API_KEY": bool(_rev("SANDBOX_API_KEY", prefer_non_empty=True)),
         "SANDBOX_SECRET_KEY": bool(_rev("SANDBOX_SECRET_KEY", prefer_non_empty=True)),
     }
-    live_structure = {
-        "LIVE_API_KEY": bool(_rev("LIVE_API_KEY", prefer_non_empty=True)),
-        "LIVE_SECRET_KEY": bool(_rev("LIVE_SECRET_KEY", prefer_non_empty=True)),
-        "LIVE_BASE_URL": bool(_rev("LIVE_BASE_URL", prefer_non_empty=True)),
-        "EXECUTION_MODE": bool(_rev("EXECUTION_MODE", prefer_non_empty=True)),
-    }
+    # Credentials are present if either canonical or legacy names are set
+    creds_present = (
+        (live_creds["LIVE_API_KEY"] and live_creds["LIVE_SECRET_KEY"])
+        or (live_creds["SANDBOX_API_KEY"] and live_creds["SANDBOX_SECRET_KEY"])
+    )
     optional = {
         "AUTOTRADER_SOURCE_TYPE": bool(_rev("AUTOTRADER_SOURCE_TYPE", prefer_non_empty=True)),
         "APOLLO_API_KEY": bool(APOLLO_API_KEY),
@@ -186,15 +163,15 @@ def _check_env_vars() -> dict:
         "GROK_API_KEY": bool(GROK_API_KEY),
     }
     return {
-        "required_for_sandbox": required_sandbox,
-        "live_structure": live_structure,
+        "live_credentials": live_creds,
+        "live_credentials_present": creds_present,
         "optional": optional,
-        "all_sandbox_required_present": all(required_sandbox.values()),
-        "live_structure_present": True,  # vars exist in .env file
+        "alpaca_base_url": ALPACA_BASE_URL,
+        "execution_mode": EXECUTION_MODE,
     }
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+# ── Endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/health")
 def health_check():
@@ -204,27 +181,24 @@ def health_check():
         "service": "Hunter v0.2.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "execution_mode": EXECUTION_MODE,
-        "paper_mode": ALPACA_PAPER,
+        "brokerage_mode": "live",
     }
 
 
 @router.get("/readiness")
-def sandbox_readiness(session: Session = Depends(get_session)):
+def readiness(session: Session = Depends(get_session)):
     """
-    Full dual-mode readiness report.
+    Full live brokerage readiness report.
 
     Reports:
-    - sandbox_ready (paper trading connected and operational)
-    - live_mode_structurally_ready (live config prewired, credentials may still be empty)
+    - brokerage_ready (live Alpaca connected and operational)
     - tool readiness (AutoTrader, advisors, leads)
-    - account status
-    - capital status
+    - account status and capital
     - quota status
     - required env vars
     """
     env_check = _check_env_vars()
-    sandbox_brokerage = _check_sandbox_brokerage()
-    live_config = _check_live_config_structure()
+    live_brokerage = _check_live_brokerage()
     autotrader = _check_autotrader()
     advisors = _check_advisors()
     leads = _check_leads()
@@ -252,22 +226,18 @@ def sandbox_readiness(session: Session = Depends(get_session)):
     source_quota = strategy_svc.check_source_discovery_quota(session)
 
     # Readiness conditions
-    sandbox_creds_present = env_check["all_sandbox_required_present"]
-    sandbox_connected = sandbox_brokerage.get("connected", False)
-    paper_enforced = True  # always enforced in sandbox mode
-    sandbox_ready = sandbox_creds_present and sandbox_connected and paper_enforced
-
-    live_structurally_ready = live_config["live_mode_structurally_ready"]
-    broker_account_mode = "paper" if ALPACA_PAPER else "live"
-    execution_policy_mode = EXECUTION_MODE
+    brokerage_connected = live_brokerage.get("connected", False)
+    brokerage_ready = brokerage_connected and env_check["live_credentials_present"]
 
     # Blockers
     blockers = []
-    if not sandbox_creds_present:
-        missing = [k for k, v in env_check["required_for_sandbox"].items() if not v]
-        blockers.append(f"Missing sandbox credentials: {', '.join(missing)}")
-    if sandbox_creds_present and not sandbox_connected:
-        blockers.append(f"Sandbox brokerage not connected: {sandbox_brokerage.get('reason', 'unknown')}")
+    if not env_check["live_credentials_present"]:
+        blockers.append(
+            "Missing Alpaca credentials: set LIVE_API_KEY + LIVE_SECRET_KEY "
+            "(or SANDBOX_API_KEY + SANDBOX_SECRET_KEY) in Render dashboard"
+        )
+    if env_check["live_credentials_present"] and not brokerage_connected:
+        blockers.append(f"Brokerage not connected: {live_brokerage.get('reason', 'unknown')}")
     if not open_budget:
         blockers.append("No open capital cycle — POST /budget/open-week")
 
@@ -285,29 +255,26 @@ def sandbox_readiness(session: Session = Depends(get_session)):
         warnings.append(f"Source discovery shortfall: {source_quota.get('sources_found_this_week', 0)}/{SOURCES_WEEKLY_MINIMUM}")
 
     # Next steps
-    if not sandbox_ready:
+    if not brokerage_ready:
         next_steps = [
-            "1. Open a paper trading account at alpaca.markets",
-            "2. Add SANDBOX_API_KEY and SANDBOX_SECRET_KEY to agents/hunter/backend/.env",
-            "3. Restart the backend: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
-            "4. GET /system/readiness — sandbox_ready should be true",
-            "5. POST /autotrader/run-intake to pull seed opportunities",
+            "1. Add LIVE_API_KEY and LIVE_SECRET_KEY to Render dashboard (main hunter service)",
+            "2. Trigger a Manual Deploy on the hunter service",
+            "3. GET /system/readiness — brokerage_ready should be true",
+            "4. POST /autotrader/run-intake to pull opportunities",
         ]
     else:
         next_steps = [
-            "Hunter is sandbox-ready.",
+            "Hunter is live and operational.",
             "- POST /autotrader/run-intake to ingest opportunities",
             "- POST /operations/run-quotas to enforce weekly requirements",
-            "- POST /execution/trade to place a test paper trade",
             "- GET /reports/daily for today's operational report",
         ]
 
     return {
-        "sandbox_ready": sandbox_ready,
-        "broker_connection_ready": sandbox_connected,
-        "broker_account_mode": broker_account_mode,
-        "execution_policy_mode": execution_policy_mode,
-        "live_mode_structurally_ready": live_structurally_ready,
+        "brokerage_ready": brokerage_ready,
+        "broker_connection_ready": brokerage_connected,
+        "broker_account_mode": "live",
+        "execution_policy_mode": EXECUTION_MODE,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "execution_mode": EXECUTION_MODE,
         "blockers": blockers,
@@ -317,22 +284,13 @@ def sandbox_readiness(session: Session = Depends(get_session)):
                 "status": "ok",
                 "version": "0.2.0",
             },
-            "sandbox_brokerage": {
-                "status": "connected" if sandbox_connected else "disconnected",
-                "mode": "paper",
-                "account_mode": broker_account_mode,
-                **sandbox_brokerage,
-            },
             "brokerage": {
-                "status": "connected" if sandbox_connected else "disconnected",
+                "status": "connected" if brokerage_connected else "disconnected",
+                "mode": "live",
                 "provider": EXECUTION_PROVIDER,
-                "account_mode": broker_account_mode,
-                "execution_policy_mode": execution_policy_mode,
-                **sandbox_brokerage,
-            },
-            "live_brokerage": {
-                "status": "prewired" if live_structurally_ready else "not_configured",
-                **live_config,
+                "account_mode": "live",
+                "execution_policy_mode": EXECUTION_MODE,
+                **live_brokerage,
             },
             "autotrader": {
                 "status": "ready" if autotrader.get("live_data_status") == "ready" else "offline",
@@ -352,12 +310,10 @@ def sandbox_readiness(session: Session = Depends(get_session)):
             },
         },
         "accounts": {
-            "sandbox_account_connected": sandbox_connected,
-            "broker_account_connected": sandbox_connected,
-            "broker_account_mode": broker_account_mode,
-            "sandbox_account_id": sandbox_brokerage.get("account_id"),
-            "live_account_config_present": bool(LIVE_API_KEY and LIVE_SECRET_KEY),
-            "live_account_connected": EXECUTION_MODE == "live" and bool(LIVE_API_KEY and LIVE_SECRET_KEY),
+            "broker_account_connected": brokerage_connected,
+            "broker_account_mode": "live",
+            "broker_account_id": live_brokerage.get("account_id"),
+            "live_credentials_present": env_check["live_credentials_present"],
         },
         "quotas": {
             "strategy_deployment": strategy_quota,
@@ -373,12 +329,6 @@ def sandbox_readiness(session: Session = Depends(get_session)):
             "use_only_fast_recycle_bucket": USE_ONLY_FAST_RECYCLE_BUCKET,
         },
         "env_vars": env_check,
-        "live_activation": {
-            "control_present": True,
-            "current_mode": EXECUTION_MODE,
-            "how_to_activate_live": "Set EXECUTION_MODE=live in .env, populate LIVE_API_KEY and LIVE_SECRET_KEY, restart backend.",
-            "warning": "Do NOT activate live mode until Commander Murph explicitly authorizes it.",
-        },
         "next_steps": next_steps,
     }
 
@@ -386,39 +336,24 @@ def sandbox_readiness(session: Session = Depends(get_session)):
 @router.post("/activate-live")
 def activate_live_mode():
     """
-    Guard rail for live mode activation awareness.
-
-    This endpoint does NOT switch to live mode automatically.
-    It confirms the structural readiness and tells the operator exactly
-    what single action is required.
+    Live mode status endpoint.
+    Hunter is always in live mode. Real capital. Real trades.
     """
-    live_creds_present = bool(LIVE_API_KEY and LIVE_SECRET_KEY)
-    if EXECUTION_MODE == "live":
-        return {
-            "current_mode": "live",
-            "status": "already_active",
-            "warning": "Hunter is already running in live mode. Real capital is at risk.",
-        }
     return {
-        "current_mode": EXECUTION_MODE,
-        "live_credentials_present": live_creds_present,
-        "live_config_structure_present": True,
-        "action_required": (
-            "Set EXECUTION_MODE=live in agents/hunter/backend/.env and restart the backend."
-            if live_creds_present
-            else "First populate LIVE_API_KEY and LIVE_SECRET_KEY, then set EXECUTION_MODE=live and restart."
-        ),
-        "warning": "Live mode uses real capital. Confirm with Commander Murph before proceeding.",
-        "status": "not_activated",
+        "current_mode": "live",
+        "status": "active",
+        "brokerage_mode": "live",
+        "paper_mode": False,
+        "message": "Hunter is running in live mode. Real capital is deployed.",
     }
 
 
-# ── Worker notifications ───────────────────────────────────────────────────────
+# ── Worker notifications ────────────────────────────────────────────────
 
 class NotifyRequest(BaseModel):
     title: str
     body: str
-    priority: str = "medium"      # low | medium | high | critical
+    priority: str = "medium"
     alert_type: str = "review_required"
     source_id: str | None = None
     worker_id: str | None = None
@@ -428,15 +363,11 @@ class NotifyRequest(BaseModel):
 def worker_notify(body: NotifyRequest, session: Session = Depends(get_session)):
     """
     Receive a Commander notification from the assistant worker.
-
-    Used for login attempts, checkpoint detections, platform events, and
-    any condition the worker needs to surface to Commander Murph immediately.
     Credentials are NEVER included in notification payloads.
     """
     from app.services import alerts as alert_svc
     from app.models.alert import AlertType, AlertPriority
 
-    # Map priority string to AlertPriority (default medium)
     priority_map = {
         "low": AlertPriority.low,
         "medium": AlertPriority.medium,
