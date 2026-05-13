@@ -117,3 +117,33 @@ def get_deadlines(
          "list_by": dl["list_by"].isoformat()}
         for dl in DEADLINES
     ]}
+
+
+@router.post("/auto-generate")
+def auto_generate_product(
+    theme: Optional[str] = Query(default=None, description="Theme hint for the product"),
+    branded: bool = Query(default=False, description="Include Hunter Leon / Royal Legacy branding"),
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Leon autonomously generates a new product using AI. Saves to DB and returns full pack."""
+    return svc.auto_generate_product(session, theme=theme, branded=branded)
+
+
+@router.get("/agent")
+def get_agent_identity(
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Leon's agent identity card."""
+    return {
+        "name": "LEON",
+        "full_title": "Leon — Commerce Division Commander",
+        "role": "Commerce Division Commander",
+        "department": "Commerce Division",
+        "status": "OPERATIONAL",
+        "focus": "Heritage & America 250 Collection",
+        "clearance": "STORE OPS",
+        "specialties": ["AOP Polo Collection", "Heritage Brand Strategy", "POD Pipeline Management"],
+        "signature": "Leon. Est. Always.",
+        "current_mission": "Launch 14 products before July 4, 2026. Juneteenth in 37 days.",
+    }
