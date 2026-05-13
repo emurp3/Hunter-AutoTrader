@@ -115,7 +115,101 @@ HUNTER_LEON_PRODUCTS = [
         "source_opportunity": "Hunter Leon Brand — Luxury Footwear",
         "status": "draft",
         "next_action": "Export HL monogram SVG and upload to JetPrint configurator",
+    },,
+    {
+        "name": "Hunter Leon Sneaker — Lion Insignia (White/Black)",
+        "design_variant": "lion_insignia_white",
+        "platform": "etsy",
+        "manufacturer": "Popcustoms",
+        "price": 149.00,
+        "estimated_margin": 0.56,
+        "title": "Hunter Leon Sneaker | Lion Insignia | White Black Leather Luxury Shoe",
+        "description": (
+            "Crisp white leather low-top with black trim accents and the Hunter Leon Lion Insignia "
+            "embossed in black. Clean, sharp, unmistakable. The dress-down piece that still commands "
+            "a room. Available US sizes 6–14."
+        ),
+        "price_display": "$149.00",
+        "tags": ["white leather shoes", "lion logo sneaker", "luxury white shoes", "hunter leon",
+                 "black trim shoes", "custom logo sneaker", "premium white leather", "mens white dress shoe"],
+        "image_prompt": (
+            "Product photography of a white leather low-top shoe with black trim detailing. "
+            "Matte black lion with crown logo on the side vamp panel. Clean white studio background. "
+            "Dramatic side lighting. Premium fashion editorial."
+        ),
+        "mockup_prompt": (
+            "3D mockup of white leather sneaker with black sole trim and tongue edge. "
+            "Black lion crest logo on the lateral panel. Pair at 3/4 angle on white marble "
+            "with dark shadow. Luxury streetwear aesthetic."
+        ),
+        "sales_copy": "White leather. Black lion. Hunter Leon knows exactly what it is.",
+        "checkout_recommendation": "Etsy (popcustoms.com for POD manufacturing)",
+        "manufacturer_url": "https://www.popcustoms.com",
+        "manufacturer_notes": (
+            "Popcustoms: select Men's Upgraded White Low Top Leather Sneakers. "
+            "Upload black lion insignia PNG. Configure lateral panel placement. "
+            "Enable branded shoebox. Base cost ~$30-35."
+        ),
+        "launch_checklist": [
+            "Create Popcustoms account",
+            "Export lion insignia as black PNG (2000px, transparent bg)",
+            "Configure product at popcustoms.com",
+            "Generate 3D mockups (8 photos minimum)",
+            "List on Etsy at $149 with free shipping",
+            "Enable Etsy Ads at $1/day",
+        ],
+        "source_opportunity": "Hunter Leon Brand — Luxury Footwear",
+        "status": "draft",
+        "next_action": "Create Popcustoms account and upload black lion insignia PNG",
     },
+    {
+        "name": "Hunter Leon Sneaker — HL Monogram (White-on-White)",
+        "design_variant": "hl_monogram_white",
+        "platform": "etsy",
+        "manufacturer": "Popcustoms",
+        "price": 139.00,
+        "estimated_margin": 0.57,
+        "title": "Hunter Leon Sneaker | HL Monogram | White on White Leather Luxury Shoe",
+        "description": (
+            "The most understated piece in the Hunter Leon line. All-white leather low-top with "
+            "black trim, white HL monogram tonal-printed on the vamp. "
+            "You either see it or you don't. US sizes 6–14."
+        ),
+        "price_display": "$139.00",
+        "tags": ["white on white shoes", "tonal logo sneaker", "HL monogram shoe",
+                 "luxury minimalist shoe", "hunter leon", "white leather sneaker",
+                 "black trim white shoe", "mens premium sneaker"],
+        "image_prompt": (
+            "White leather low-top sneaker with black trim accent on sole and tongue. "
+            "Tonal white HL monogram embossed on the lateral vamp panel — barely visible, intentionally subtle. "
+            "Shot on pure white background with soft diffused lighting. Minimal luxury editorial."
+        ),
+        "mockup_prompt": (
+            "3D mockup of all-white leather sneaker, black trim on edges, "
+            "white-on-white HL monogram on the side panel (tone-on-tone). "
+            "Both shoes at slight angle on white surface. Ultra clean, luxury minimal."
+        ),
+        "sales_copy": "White on white. Either you know or you don't. Hunter Leon HL.",
+        "checkout_recommendation": "Etsy (popcustoms.com for POD manufacturing)",
+        "manufacturer_url": "https://www.popcustoms.com",
+        "manufacturer_notes": (
+            "Popcustoms: select Men's Upgraded White Low Top Leather Sneakers. "
+            "Upload white HL monogram PNG. Configure lateral panel for tonal placement. "
+            "Base cost ~$30-35."
+        ),
+        "launch_checklist": [
+            "Create Popcustoms account",
+            "Export HL monogram as white PNG (2000px, transparent bg)",
+            "Configure product at popcustoms.com",
+            "Generate 3D mockups",
+            "List on Etsy at $139",
+            "Cross-link with Variant 3 in listing",
+        ],
+        "source_opportunity": "Hunter Leon Brand — Luxury Footwear",
+        "status": "draft",
+        "next_action": "Export HL monogram as white PNG and set up on Popcustoms",
+    }
+
 ]
 
 
