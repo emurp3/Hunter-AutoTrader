@@ -727,6 +727,92 @@ def seed_royal_legacy_colorways(session: Session) -> int:
     return seeded
 
 
+MARQUEE_PRODUCTS = [
+    {
+        "name": "250 Power Stripe Polo — Black Gold Red (MARQUEE)",
+        "design_variant": "power_stripe_black_250",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 89.00,
+        "estimated_margin": 0.63,
+        "title": "250 Anniversary Polo | Black Gold Red Stripe | 1776 2026 Premium Heritage Polo Shirt",
+        "description": (
+            "The anchor of the collection. All-black premium polo with a bold diagonal "
+            "gold-and-red power stripe across the body, ‘250 / 1776–2026’ gold royal crest badge "
+            "(crown, wings, shield, laurel), Pan-African cuff stripe, eagle sleeve badge. "
+            "No text needed. The design speaks for itself. AOP sublimation polo. "
+            "Luxury streetwear meets Black American history."
+        ),
+        "tags": ["black gold polo", "250 anniversary shirt black", "1776 2026 premium polo",
+                 "black heritage polo shirt", "gold stripe polo", "july 4 2026 polo black",
+                 "black american history shirt", "luxury black polo", "pan african polo",
+                 "power stripe polo", "black excellence polo gold"],
+        "sales_copy": "No text. No explanation. 250 years. The stripe says everything.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo ALL BLACK base. Flagship piece. Hero image for the entire collection. Highest fashion-forward appeal.",
+        "launch_checklist": [
+            "🔥 MARQUEE PIECE — This is the hero listing for the entire collection",
+            "⚨️ URGENT: Upload to Printful first. List by May 21.",
+            "Use as the primary/first listing on the Etsy shop",
+            "Run Etsy Ads $5/day — higher budget for the flagship",
+            "Social media post this one first — highest share potential",
+            "Cross-link all other designs from this listing",
+        ],
+        "source_opportunity": "Marquee Collection — 250th Anniversary Flagship",
+        "status": "draft",
+        "next_action": "🔥 MARQUEE — This is Design #1 to upload to Printful. Hero of the entire store.",
+        "notes": "FLAGSHIP. Fashion-forward luxury design with broadest social sharing potential. No heritage text — universal appeal.",
+    },
+    {
+        "name": "250 Flag Polo — White/Black Premium (MARQUEE)",
+        "design_variant": "flag_polo_white_black_marquee",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 85.00,
+        "estimated_margin": 0.62,
+        "title": "250 Anniversary Polo | White Black Flag | 1776 2026 Premium Patriotic Polo Shirt",
+        "description": (
+            "White body, black sleeves. Distressed vertical American flag centerpiece. "
+            "Gold stars across the shoulders. Eagle crest ‘250 / 1776–2026’ badge on the black sleeve. "
+            "‘250 / 1776–2026’ gold text at hem. "
+            "The cleanest patriotic piece of the season. AOP sublimation polo. "
+            "Widest demographic reach — men and women, every background."
+        ),
+        "tags": ["white black polo", "american flag polo shirt", "250 anniversary polo white",
+                 "1776 2026 white polo", "patriotic polo shirt", "july 4 2026 polo",
+                 "distressed flag shirt", "white black flag polo", "independence day polo",
+                 "250 years america shirt", "gift for dad july 4th"],
+        "sales_copy": "White. Black. Stars and stripes. 250 years. The flag goes with you.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo WHITE body BLACK sleeves. Configure as color block — white body + black sleeves separately in the AOP template.",
+        "launch_checklist": [
+            "🔥 MARQUEE PIECE — Second hero listing for the shop",
+            "⚨️ URGENT: Upload to Printful. List by May 21.",
+            "Broadest demographic — run to all patriotic audiences, not just heritage",
+            "Target: men 30–60, gift buyers, July 4th shoppers, veterans",
+            "Etsy Ads $5/day on this one",
+        ],
+        "source_opportunity": "Marquee Collection — 250th Anniversary Flagship",
+        "status": "draft",
+        "next_action": "🔥 MARQUEE — Design #2 to upload. Broadest audience in the collection.",
+        "notes": "FLAGSHIP. Widest appeal of all designs. Men, women, all backgrounds, patriotic + heritage buyers.",
+    },
+]
+
+
+def seed_marquee_products(session: Session) -> int:
+    """Seed the two marquee flagship polo designs."""
+    seeded = 0
+    for p in MARQUEE_PRODUCTS:
+        existing = session.exec(
+            select(CreatedProduct).where(CreatedProduct.name == p["name"])
+        ).first()
+        if not existing:
+            create_product(session, p)
+            seeded += 1
+    return seeded
+
+
 def generate_product_pack(opportunity_title: str, opportunity_type: str = "digital") -> dict:
     """Generate a product pack skeleton from a Quick-Cash/Forge opportunity."""
     return {
