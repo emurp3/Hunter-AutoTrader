@@ -113,6 +113,16 @@ def seed_heritage_shirts(
     return {"seeded": seeded, "message": f"Seeded {seeded} heritage shirt product(s)"}
 
 
+@router.post("/seed-america-250")
+def seed_america_250(
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Seed America 250th anniversary polo products."""
+    seeded = prod_svc.seed_america_250(session)
+    return {"seeded": seeded, "message": f"Seeded {seeded} America 250 product(s)"}
+
+
 @router.post("/seed-all-products")
 def seed_all_products(
     session: Session = Depends(get_session),
