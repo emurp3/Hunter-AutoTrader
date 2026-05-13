@@ -77,6 +77,7 @@ const FORGE_LOADERS = {
 
 const QUICKCASH_LOADERS = {
   board: { path: '/quickcash/board?limit=50' },
+  createdProducts: { path: '/quickcash/created-products' },
 }
 class AuthError extends Error {}
 
@@ -1682,6 +1683,77 @@ const LANE_COLORS = { trading: '#00D4FF', signal_copy: '#22d65a', forge: '#FFB30
 const LANE_LABELS = { trading: 'TRADING', signal_copy: 'SIGNAL', forge: 'FORGE' }
 const EFFORT_ICONS = { low: '⚡', medium: '◾', high: '▪' }
 
+
+const PRODUCT_STATUS_COLORS = { draft: '#7a7f8e', created: '#5282e0', launched: '#4caf81', blocked: '#e05252' };
+const PLATFORM_ICONS = { etsy: '🛍️', gumroad: '📦', shopify: '🏪', jetprint: '👟', popcustoms: '👟', manual: '📋' };
+
+function CreatedStoresPanel({ data, onRefresh }) {
+  const products = (data.products || []);
+  const [seeding, setSeeding] = React.useState(false);
+
+  async function seedHunterLeon() {
+    setSeeding(true);
+    await fetch('/api/quickcash/seed-hunter-leon', { method: 'POST', credentials: 'include' });
+    setSeeding(false);
+    onRefresh();
+  }
+
+  return (
+    <div className="hunter-stores-wrap">
+      {products.length === 0 ? (
+        <div className="hunter-stores-empty">
+          <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '12px' }}>No product pages created yet.</p>
+          <button className="hunter-stores-btn" type="button" onClick={seedHunterLeon} disabled={seeding}>
+            {seeding ? 'Seeding…' : '+ Add Hunter Leon Shoes'}
+          </button>
+        </div>
+      ) : (
+        <div className="hunter-stores-list">
+          <div className="hunter-stores-head">
+            <span>Product</span><span>Platform</span><span>Status</span>
+            <span>Price</span><span>Margin</span><span>Next Action</span><span>Actions</span>
+          </div>
+          {products.map((p) => (
+            <div key={p.id} className="hunter-stores-row">
+              <div className="hunter-stores-name">
+                <span>{PLATFORM_ICONS[p.platform] || '📋'}</span>
+                <span>{p.name}</span>
+                {p.manufacturer && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>via {p.manufacturer}</span>}
+              </div>
+              <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{p.platform}</span>
+              <span style={{ fontSize: '11px', color: PRODUCT_STATUS_COLORS[p.status] || '#7a7f8e', fontWeight: 600 }}>{(p.status || '').toUpperCase()}</span>
+              <span style={{ fontSize: '12px' }}>{p.price ? '$' + p.price.toFixed(2) : '—'}</span>
+              <span style={{ fontSize: '12px', color: 'var(--green)' }}>{p.estimated_margin ? (p.estimated_margin * 100).toFixed(0) + '%' : '—'}</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.next_action || '—'}</span>
+              <div className="hunter-stores-actions">
+                {p.url
+                  ? <a href={p.url} target="_blank" rel="noreferrer" className="hunter-stores-btn hunter-stores-btn--go">Open Store</a>
+                  : <span className="hunter-stores-btn hunter-stores-btn--blocked">No URL Yet</span>
+                }
+                {p.status !== 'launched' && (
+                  <button type="button" className="hunter-stores-btn" onClick={async () => {
+                    const url = window.prompt('Enter live URL (or leave blank):');
+                    await fetch('/api/quickcash/created-products/' + p.id + '/mark-launched' + (url ? '?url=' + encodeURIComponent(url) : ''), { method: 'POST', credentials: 'include' });
+                    onRefresh();
+                  }}>Mark Launched</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <button className="hunter-stores-btn" type="button" onClick={onRefresh}>Refresh</button>
+        {products.length > 0 && (
+          <button className="hunter-stores-btn" type="button" onClick={seedHunterLeon} disabled={seeding}>
+            {seeding ? 'Seeding…' : '+ Add Hunter Leon Shoes'}
+          </button>
+        )}
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{products.length} product(s) tracked</span>
+      </div>
+    </div>
+  );
+}
 function QuickCashSection({ onAuthFail }) {
   const { endpoints, refresh } = useSectionData(QUICKCASH_LOADERS, onAuthFail)
   const boardData = endpointData(endpoints.board, {})
