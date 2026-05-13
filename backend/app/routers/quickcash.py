@@ -103,6 +103,27 @@ def seed_hunter_leon(
     seeded = prod_svc.seed_hunter_leon_products(session)
     return {"seeded": seeded, "message": f"Seeded {seeded} Hunter Leon product(s)"}
 
+@router.post("/seed-heritage-shirts")
+def seed_heritage_shirts(
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Seed Heritage Polo shirt products into the created-products board."""
+    seeded = prod_svc.seed_heritage_shirts(session)
+    return {"seeded": seeded, "message": f"Seeded {seeded} heritage shirt product(s)"}
+
+
+@router.post("/seed-all-products")
+def seed_all_products(
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Seed all Hunter Leon shoes + Heritage shirts in one call."""
+    shoes = prod_svc.seed_hunter_leon_products(session)
+    shirts = prod_svc.seed_heritage_shirts(session)
+    return {"seeded_shoes": shoes, "seeded_shirts": shirts, "total": shoes + shirts}
+
+
 
 @router.post("/generate-product-pack")
 def generate_product_pack(
