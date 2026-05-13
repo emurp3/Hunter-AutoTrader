@@ -401,6 +401,142 @@ def seed_heritage_shirts(session: Session) -> int:
     return seeded
 
 
+AMERICA_250_PRODUCTS = [
+    {
+        "name": "250 Years of Independence Polo",
+        "design_variant": "250_years_independence",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 79.00,
+        "estimated_margin": 0.60,
+        "title": "250 Years of Independence Polo | Black Legacy American Story | 1776 2026 Shirt",
+        "description": (
+            "250 Years of Independence. 1776–2026. Black Legacy. American Story. "
+            "Distressed American flag across the chest, gold Liberty Bell medallion, "
+            "African pattern cuffs. AOP sublimation polo. The shirt that tells the full story."
+        ),
+        "tags": ["250th anniversary shirt", "1776 2026 shirt", "black legacy shirt",
+                 "america 250 polo", "independence day shirt", "july 4 2026 shirt",
+                 "american heritage shirt", "liberty bell shirt", "black patriotic shirt",
+                 "fathers day gift black man"],
+        "sales_copy": "250 Years of Independence. Black Legacy. American Story. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo. Base cost ~$32. July 4 2026 = 52 days away.",
+        "launch_checklist": [
+            "⚨️ URGENT: July 4 2026 = 52 days. List by May 21.",
+            "Also strong Father's Day gift (June 15 = 33 days)",
+            "Upload to Printful AOP polo",
+            "Etsy listing with '1776 2026' and 'america 250' tags",
+            "Run Etsy Ads $3/day",
+        ],
+        "source_opportunity": "America 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — July 4 2026 in 52 days. Upload to Printful. List by May 21.",
+        "notes": "TIME-SENSITIVE: America's 250th birthday July 4, 2026. Father's Day crossover.",
+    },
+    {
+        "name": "250 Years Strong Polo",
+        "design_variant": "250_years_strong",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 79.00,
+        "estimated_margin": 0.60,
+        "title": "250 Years Strong Polo | Built by Many Defined by Legacy | 1776 2026 America Shirt",
+        "description": (
+            "250 Years Strong. Built by Many. Defined by Legacy. 1776–2026. "
+            "American flag, Statue of Liberty medallion, 250 sleeve badge. "
+            "Red, white, and gold AOP sublimation polo. Wear the milestone."
+        ),
+        "tags": ["250 years strong shirt", "america 250 polo", "1776 2026 shirt",
+                 "july 4th 2026 shirt", "statue of liberty shirt", "patriotic polo shirt",
+                 "built by many shirt", "american anniversary shirt", "mens polo patriotic"],
+        "sales_copy": "250 Years Strong. Built by Many. Defined by Legacy.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo. July 4 2026 = 52 days.",
+        "launch_checklist": [
+            "⚨️ URGENT: List by May 21 for July 4 indexing",
+            "Upload to Printful AOP polo",
+            "Use '250 years strong' as primary keyword",
+        ],
+        "source_opportunity": "America 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — Upload to Printful. July 4 in 52 days.",
+        "notes": "TIME-SENSITIVE: America 250th anniversary. Broadest patriotic appeal in the collection.",
+    },
+    {
+        "name": "America at 250 Polo — Freedom Faith Black Excellence",
+        "design_variant": "america_at_250",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 79.00,
+        "estimated_margin": 0.60,
+        "title": "America at 250 Polo | Freedom Faith and Black Excellence | 1776 2026 Heritage Shirt",
+        "description": (
+            "America at 250. Freedom, Faith, and Black Excellence. 1776–2026. "
+            "Full flag upper chest, Africa map medallion, gold pinstripe body. "
+            "The shirt that holds both stories at once. AOP sublimation polo."
+        ),
+        "tags": ["america at 250 shirt", "black excellence patriotic shirt", "1776 2026 polo",
+                 "freedom faith shirt", "africa america shirt", "july 4 2026 shirt",
+                 "black american heritage shirt", "america 250 black polo"],
+        "sales_copy": "America at 250. Freedom, Faith, and Black Excellence. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo. Crossover appeal to both patriotic and Black heritage buyers.",
+        "launch_checklist": [
+            "⚨️ URGENT: List by May 21",
+            "Best crossover design — targets both patriotic AND heritage search terms",
+            "Upload to Printful AOP polo",
+        ],
+        "source_opportunity": "America 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — Best crossover design. Upload to Printful now.",
+        "notes": "Highest crossover appeal. Targets patriotic AND Black heritage buyers. Strong Father's Day gift.",
+    },
+    {
+        "name": "Woven Into the Nation Polo",
+        "design_variant": "woven_into_nation",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 75.00,
+        "estimated_margin": 0.57,
+        "title": "Woven Into the Nation Polo | 1776 2026 Our Hands Helped Build America | Black Heritage Shirt",
+        "description": (
+            "Woven Into the Nation. 1776–2026. Our Hands Helped Build America. "
+            "Freedom. Legacy. Endurance. Distressed American flag, Black profile with sunburst halo "
+            "inside chain-break seal, Southwestern border. The most powerful piece in the collection."
+        ),
+        "tags": ["woven into the nation shirt", "our hands built america shirt", "1776 2026 polo",
+                 "black american history shirt", "freedom legacy endurance shirt",
+                 "july 4 black heritage shirt", "black patriot shirt", "built america shirt"],
+        "sales_copy": "Woven Into the Nation. Our Hands Helped Build America. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo. Most powerful messaging in the collection.",
+        "launch_checklist": [
+            "⚨️ URGENT: List by May 21",
+            "Most emotionally resonant design — strong social sharing potential",
+            "Upload to Printful AOP polo",
+        ],
+        "source_opportunity": "America 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — Upload to Printful. Most viral potential in the collection.",
+        "notes": "Strongest emotional message. High social sharing potential. July 4 + Black heritage crossover.",
+    },
+]
+
+
+def seed_america_250(session: Session) -> int:
+    """Seed America 250th anniversary polo products."""
+    seeded = 0
+    for p in AMERICA_250_PRODUCTS:
+        existing = session.exec(
+            select(CreatedProduct).where(CreatedProduct.name == p["name"])
+        ).first()
+        if not existing:
+            create_product(session, p)
+            seeded += 1
+    return seeded
+
+
 def generate_product_pack(opportunity_title: str, opportunity_type: str = "digital") -> dict:
     """Generate a product pack skeleton from a Quick-Cash/Forge opportunity."""
     return {
