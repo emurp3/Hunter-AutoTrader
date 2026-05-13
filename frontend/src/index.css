@@ -5207,3 +5207,58 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   }
 }
 
+
+/* ── Created Stores / Product Pages ──────────────────────────────────────────── */
+.hunter-created-stores {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.hunter-stores-wrap { display: flex; flex-direction: column; gap: 0.75rem; }
+.hunter-stores-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+.hunter-stores-list { display: flex; flex-direction: column; gap: 0; }
+.hunter-stores-head {
+  display: grid;
+  grid-template-columns: 2fr 0.7fr 0.7fr 0.6fr 0.6fr 2fr 1.5fr;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.hunter-stores-row {
+  display: grid;
+  grid-template-columns: 2fr 0.7fr 0.7fr 0.6fr 0.6fr 2fr 1.5fr;
+  gap: 0.5rem;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  align-items: center;
+  font-size: 12px;
+}
+.hunter-stores-row:hover { background: var(--surface2); }
+.hunter-stores-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hunter-stores-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.hunter-stores-btn {
+  font-size: 10px;
+  padding: 4px 8px;
+  border: 1px solid var(--gold);
+  background: transparent;
+  color: var(--gold);
+  border-radius: 2px;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  display: inline-block;
+}
+.hunter-stores-btn:hover { background: rgba(201,168,76,0.12); }
+.hunter-stores-btn--go { border-color: var(--green); color: var(--green); }
+.hunter-stores-btn--go:hover { background: rgba(76,175,129,0.12); }
+.hunter-stores-btn--blocked { border-color: var(--text-muted); color: var(--text-muted); cursor: default; }
