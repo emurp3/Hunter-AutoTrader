@@ -1689,7 +1689,7 @@ const PLATFORM_ICONS = { etsy: '🛍️', gumroad: '📦', shopify: '🏪', jetp
 
 function CreatedStoresPanel({ data, onRefresh }) {
   const products = (data.products || []);
-  const [seeding, setSeeding] = React.useState(false);
+  const [seeding, setSeeding] = useState(false);
 
   async function seedHunterLeon() {
     setSeeding(true);
