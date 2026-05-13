@@ -621,6 +621,112 @@ def seed_royal_legacy_250(session: Session) -> int:
     return seeded
 
 
+ROYAL_LEGACY_COLORWAYS = [
+    {
+        "name": "Royal Legacy 250 Years Polo — Royal Blue",
+        "design_variant": "royal_legacy_250_blue",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 85.00,
+        "estimated_margin": 0.62,
+        "title": "Royal Legacy 250 Years Polo | Royal Blue | Black Legacy American Story | 1776 2026",
+        "description": "Royal Legacy. Est. Always. Royal blue AOP polo. Gold lion crest, 250 Years 1776–2026, Black Legacy. American Story. Red brushstroke, stars, kente panels.",
+        "tags": ["royal legacy blue polo", "250 years polo blue", "1776 2026 shirt", "black legacy american story", "blue patriotic polo", "july 4 2026 shirt", "america 250 blue"],
+        "sales_copy": "Royal Legacy. Est. Always. Royal Blue. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo ROYAL BLUE base. List as color variant with Black/White/Red/Gold in same Etsy listing.",
+        "launch_checklist": ["⚨️ URGENT: List by May 21", "Add as 'Royal Blue' color variant in Royal Legacy Etsy listing"],
+        "source_opportunity": "Royal Legacy Brand — 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ Upload to Printful as Royal Blue variant. List all 5 colorways in one Etsy listing.",
+        "notes": "List all Royal Legacy colorways (Black/White/Blue/Red/Gold) as ONE Etsy listing with color variants. Consolidates reviews.",
+    },
+    {
+        "name": "Royal Legacy 250 Years Polo — Crimson Red",
+        "design_variant": "royal_legacy_250_red",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 85.00,
+        "estimated_margin": 0.62,
+        "title": "Royal Legacy 250 Years Polo | Crimson Red | Black Legacy American Story | 1776 2026",
+        "description": "Royal Legacy. Est. Always. Crimson red AOP polo. Gold lion crest, 250 Years 1776–2026, Black Legacy. American Story. Gold brushstroke, stars, kente green/gold panels.",
+        "tags": ["royal legacy red polo", "250 years polo red", "crimson patriotic polo", "1776 2026 shirt", "black legacy shirt", "july 4 2026 red shirt", "america 250 red"],
+        "sales_copy": "Royal Legacy. Est. Always. Crimson. Gold. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo CRIMSON RED base. List as color variant with others in same Etsy listing.",
+        "launch_checklist": ["⚨️ URGENT: List by May 21", "Add as 'Crimson Red' color variant in Royal Legacy Etsy listing"],
+        "source_opportunity": "Royal Legacy Brand — 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ Upload to Printful as Crimson Red variant.",
+        "notes": "Part of Royal Legacy 5-colorway Etsy listing. Strong Juneteenth/Pan-African color coding.",
+    },
+    {
+        "name": "Royal Legacy 250 Years Polo — Gold",
+        "design_variant": "royal_legacy_250_gold",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 89.00,
+        "estimated_margin": 0.64,
+        "title": "Royal Legacy 250 Years Polo | Gold | Black Legacy American Story | 1776 2026 Premium Polo",
+        "description": "Royal Legacy. Est. Always. Gold/mustard AOP polo. Dark tonal lion crest, 250 Years 1776–2026, Black Legacy. American Story. Black brushstroke, kente panels, American flag sleeve.",
+        "tags": ["royal legacy gold polo", "gold polo shirt", "250 years gold shirt", "1776 2026 gold polo", "black legacy shirt", "mustard polo shirt", "america 250 gold", "luxury gold polo"],
+        "sales_copy": "Royal Legacy. Est. Always. All Gold. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo GOLD/MUSTARD base. Premium price — gold base is rare and eye-catching. List as variant with others.",
+        "launch_checklist": ["⚨️ URGENT: List by May 21", "Add as 'Gold' color variant — use as secondary hero image"],
+        "source_opportunity": "Royal Legacy Brand — 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ Upload to Printful as Gold variant. Use as listing hero image alongside White.",
+        "notes": "Gold base is rare in this niche — strong listing differentiation. Second highest price at $89.",
+    },
+    {
+        "name": "250 Flag Polo — White/Black",
+        "design_variant": "flag_polo_white_black",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 79.00,
+        "estimated_margin": 0.60,
+        "title": "250 Flag Polo | White Black | Distressed American Flag 1776 2026 Patriotic Polo Shirt",
+        "description": (
+            "Bold and clean. White body, black sleeves, distressed American flag centerpiece (vertical), "
+            "gold stars across shoulders, eagle crest '250 / 1776–2026' badge on black sleeve. "
+            "'250 / 1776–2026' gold text at hem. The most mainstream piece in the collection. "
+            "Broadest patriotic crossover appeal."
+        ),
+        "tags": ["american flag polo shirt", "patriotic polo white black", "250 anniversary shirt",
+                 "1776 2026 polo", "distressed flag shirt", "july 4 2026 polo", "white black polo mens",
+                 "american flag shirt men", "independence day polo", "250 years america shirt"],
+        "sales_copy": "250 Years. White. Black. Gold. The flag on your chest. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo WHITE body BLACK sleeves. Broadest patriotic audience. Separate listing from Royal Legacy.",
+        "launch_checklist": [
+            "⚨️ URGENT: List by May 21 — July 4 in 52 days",
+            "Separate Etsy listing — NOT a variant of Royal Legacy",
+            "Target mainstream patriotic buyers, NOT just Black heritage market",
+            "This design has the widest demographic reach in the entire collection",
+            "Upload to Printful — configure white body + black sleeves separately",
+        ],
+        "source_opportunity": "America 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — Broadest audience. Upload to Printful first if only time for one today.",
+        "notes": "WIDEST APPEAL in entire collection. Hits mainstream patriotic buyers, not just heritage niche. Separate listing.",
+    },
+]
+
+
+def seed_royal_legacy_colorways(session: Session) -> int:
+    """Seed Royal Legacy Blue/Red/Gold + Flag Polo."""
+    seeded = 0
+    for p in ROYAL_LEGACY_COLORWAYS:
+        existing = session.exec(
+            select(CreatedProduct).where(CreatedProduct.name == p["name"])
+        ).first()
+        if not existing:
+            create_product(session, p)
+            seeded += 1
+    return seeded
+
+
 def generate_product_pack(opportunity_title: str, opportunity_type: str = "digital") -> dict:
     """Generate a product pack skeleton from a Quick-Cash/Forge opportunity."""
     return {
