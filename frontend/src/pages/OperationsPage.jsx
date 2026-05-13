@@ -1831,6 +1831,12 @@ function QuickCashSection({ onAuthFail }) {
           )
         }
       </DataCard>
-    </SectionFrame>
+    
+      {/* Created Stores / Product Pages */}
+      <div className="hunter-created-stores">
+        <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid var(--border)' }}>⚡ CREATED STORES / PRODUCT PAGES</div>
+        <CreatedStoresPanel data={endpointData(endpoints.createdProducts, {})} onRefresh={refresh} />
+      </div>
+</SectionFrame>
   )
 }
