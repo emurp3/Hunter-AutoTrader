@@ -133,6 +133,16 @@ def seed_royal_legacy(
     return {"seeded": seeded, "message": f"Seeded {seeded} Royal Legacy product(s)"}
 
 
+@router.post("/seed-marquee")
+def seed_marquee(
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Seed the two marquee flagship polo designs."""
+    seeded = prod_svc.seed_marquee_products(session)
+    return {"seeded": seeded, "message": f"Seeded {seeded} marquee product(s)"}
+
+
 @router.post("/seed-all-products")
 def seed_all_products(
     session: Session = Depends(get_session),
