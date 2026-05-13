@@ -1,21 +1,66 @@
 """
-CongressFeedAdapter — fetches Congressional trading disclosures.
+CongressFeedAdapter — Congressional STOCK Act trade disclosures.
 
-Uses Capitol Trades public API (free tier, no auth required for basic access).
-Fallback to QuiverQuant if QUIVER_QUANT_API_KEY is set.
+Primary source: Politician Trade Tracker API via RapidAPI
+  Host: politician-trade-tracker1.p.rapidapi.com
+  Endpoint: GET /trades/latest
+  Auth: X-RapidAPI-Key header (env: RAPIDAPI_POLITICIAN_KEY)
+
+Fallback: QuiverQuant (env: QUIVER_QUANT_API_KEY)
+
+Capitol Trades API (capitoltrades.com) went offline May 2026.
 """
 from __future__ import annotations
 import logging
 import os
-from datetime import datetime, timedelta
+import re
+from datetime import datetime
 from typing import Any
 import httpx
 
 logger = logging.getLogger(__name__)
 
-CAPITOL_TRADES_BASE = "https://api.capitoltrades.com/v1"
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_POLITICIAN_KEY", "")
+RAPIDAPI_HOST = "politician-trade-tracker1.p.rapidapi.com"
 QUIVER_BASE = "https://api.quiverquant.com/beta"
 QUIVER_KEY = os.getenv("QUIVER_QUANT_API_KEY", "")
+
+_AMOUNT_MAP = {
+    "1K-15K": (1_000, 15_000),
+    "15K-50K": (15_000, 50_000),
+    "50K-100K": (50_000, 100_000),
+    "100K-250K": (100_000, 250_000),
+    "250K-500K": (250_000, 500_000),
+    "500K-1M": (500_000, 1_000_000),
+    "1M-5M": (1_000_000, 5_000_000),
+    "5M-25M": (5_000_000, 25_000_000),
+    "25M-50M": (25_000_000, 50_000_000),
+}
+
+
+def _parse_amount(raw: str) -> tuple[float | None, float | None, float | None]:
+    """Return (low, high, midpoint) from a range string like '1K-15K'."""
+    key = re.sub(r"[$s]", "", (raw or "").upper()).replace(",", "")
+    if key in _AMOUNT_MAP:
+        lo, hi = _AMOUNT_MAP[key]
+        return float(lo), float(hi), float((lo + hi) / 2)
+    return None, None, None
+
+
+def _parse_trade_date(raw: str) -> datetime | None:
+    """Parse 'April 17, 2026' style dates."""
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _clean_ticker(raw: str) -> str:
+    """Strip exchange suffix — 'AMT:US' -> 'AMT'. N/A -> ''."""
+    t = (raw or "").split(":")[0].strip()
+    return "" if t.upper() in ("N/A", "", "-") else t
 
 
 class CongressFeedAdapter:
@@ -25,141 +70,123 @@ class CongressFeedAdapter:
         return "congress"
 
     def fetch_recent(self, days_back: int = 30) -> list[dict[str, Any]]:
-        """Return normalised signal dicts from recent Congressional trades."""
+        if RAPIDAPI_KEY:
+            return self._fetch_rapidapi()
         if QUIVER_KEY:
             return self._fetch_quiver(days_back)
-        return self._fetch_capitol_trades(days_back)
+        logger.warning("CongressFeed: no API key set. Set RAPIDAPI_POLITICIAN_KEY or QUIVER_QUANT_API_KEY.")
+        return []
 
-    def _fetch_capitol_trades(self, days_back: int) -> list[dict[str, Any]]:
-        since = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    # ── RapidAPI (primary) ────────────────────────────────────────────────────
+
+    def _fetch_rapidapi(self) -> list[dict[str, Any]]:
         try:
-            with httpx.Client(timeout=12) as client:
+            with httpx.Client(timeout=15) as client:
                 resp = client.get(
-                    f"{CAPITOL_TRADES_BASE}/trades",
-                    params={"pageSize": 100, "since": since},
-                    headers={"User-Agent": "Hunter/0.2 (+https://hunter.onrender.com)"},
+                    f"https://{RAPIDAPI_HOST}/trades/latest",
+                    headers={
+                        "X-RapidAPI-Key": RAPIDAPI_KEY,
+                        "X-RapidAPI-Host": RAPIDAPI_HOST,
+                    },
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                records = resp.json()
         except Exception as exc:
-            logger.warning("CongressFeedAdapter: Capitol Trades fetch failed: %s", exc)
+            logger.warning("CongressFeed: RapidAPI fetch failed: %s", exc)
             return []
 
-        normalised = []
-        for trade in data.get("data", []):
-            try:
-                normalised.append(self._normalise_capitol(trade))
-            except Exception as exc:
-                logger.debug("CongressFeedAdapter: normalise error: %s", exc)
-        return normalised
+        results = []
+        for r in records:
+            row = self._normalise_rapidapi(r)
+            if row:
+                results.append(row)
+        logger.info("CongressFeed: RapidAPI returned %d records", len(results))
+        return results
+
+    def _normalise_rapidapi(self, r: dict) -> dict | None:
+        try:
+            trade_date = _parse_trade_date(r.get("trade_date", ""))
+            latency_hours = float((r.get("days_until_disclosure") or 0)) * 24.0
+            lo, hi, mid = _parse_amount(r.get("trade_amount", ""))
+            ticker = _clean_ticker(r.get("ticker", ""))
+            action = (r.get("trade_type") or "buy").lower()
+            filer = r.get("name") or "Unknown Politician"
+            committee_info = f"{r.get('chamber','')}/{r.get('party','')}/{r.get('state_abbreviation','')}"
+            source_id = f"{filer}|{r.get('ticker','')}|{r.get('trade_date','')}"
+            return {
+                "source": "congress",
+                "source_id": source_id,
+                "filer_name": filer,
+                "filer_type": "politician",
+                "committee": committee_info,
+                "ticker": ticker,
+                "asset_type": "stock",
+                "action": action if action in ("buy", "sell") else "buy",
+                "amount_low": lo,
+                "amount_high": hi,
+                "amount_midpoint": mid,
+                "trade_date": trade_date,
+                "disclosed_at": trade_date,
+                "latency_hours": latency_hours,
+                "raw_json": str(r)[:400],
+            }
+        except Exception as exc:
+            logger.debug("CongressFeed: normalise error: %s", exc)
+            return None
+
+    # ── QuiverQuant fallback ──────────────────────────────────────────────────
 
     def _fetch_quiver(self, days_back: int) -> list[dict[str, Any]]:
-        since = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        since = (datetime.utcnow().__class__.utcnow() )
         try:
             with httpx.Client(timeout=12) as client:
                 resp = client.get(
                     f"{QUIVER_BASE}/bulk/congresstrading",
-                    headers={
-                        "Authorization": f"Token {QUIVER_KEY}",
-                        "User-Agent": "Hunter/0.2",
-                    },
+                    headers={"Authorization": f"Token {QUIVER_KEY}", "User-Agent": "Hunter/0.2"},
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                records = resp.json()
         except Exception as exc:
-            logger.warning("CongressFeedAdapter: QuiverQuant fetch failed: %s", exc)
+            logger.warning("CongressFeed: QuiverQuant fetch failed: %s", exc)
             return []
 
-        normalised = []
-        for trade in data:
-            try:
-                trade_dt = datetime.strptime(trade.get("TransactionDate", ""), "%Y-%m-%d")
-                if (datetime.utcnow() - trade_dt).days <= days_back:
-                    normalised.append(self._normalise_quiver(trade))
-            except Exception:
-                pass
-        return normalised
+        results = []
+        for r in records[:100]:
+            row = self._normalise_quiver(r)
+            if row:
+                results.append(row)
+        return results
 
-    def _normalise_capitol(self, t: dict) -> dict:
-        politician = t.get("politician", {})
-        trade_date_raw = t.get("txDate") or t.get("publishedAt")
-        disclosed_raw = t.get("pubDate") or t.get("publishedAt")
-
-        def parse_dt(s):
-            if not s:
-                return None
-            for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(s[:26], fmt)
-                except Exception:
-                    pass
-            return None
-
-        trade_dt = parse_dt(trade_date_raw)
-        disclosed_dt = parse_dt(disclosed_raw)
-        latency = None
-        if trade_dt and disclosed_dt:
-            latency = (disclosed_dt - trade_dt).total_seconds() / 3600
-
-        amount_low = t.get("reportingGap", {}).get("lower") or 0
-        amount_high = t.get("reportingGap", {}).get("upper") or 0
-
-        return {
-            "source": "congress_" + (politician.get("chamber", "house").lower()),
-            "source_id": str(t.get("id", "")),
-            "filer_name": politician.get("name") or politician.get("fullName", "Unknown"),
-            "filer_type": politician.get("chamber", "unknown").lower(),
-            "committee": None,
-            "ticker": (t.get("issuer", {}).get("ticker") or "").upper(),
-            "asset_type": t.get("assetType", "stock").lower(),
-            "action": (t.get("type", "buy") or "buy").lower(),
-            "amount_low": float(amount_low) if amount_low else None,
-            "amount_high": float(amount_high) if amount_high else None,
-            "amount_midpoint": ((float(amount_low or 0) + float(amount_high or 0)) / 2) or None,
-            "trade_date": trade_dt,
-            "disclosed_at": disclosed_dt,
-            "latency_hours": latency,
-            "raw_json": str(t),
-        }
-
-    def _normalise_quiver(self, t: dict) -> dict:
-        trade_dt = None
-        disclosed_dt = None
+    def _normalise_quiver(self, r: dict) -> dict | None:
         try:
-            trade_dt = datetime.strptime(t.get("TransactionDate", ""), "%Y-%m-%d")
-            disclosed_dt = datetime.strptime(t.get("DisclosureDate", ""), "%Y-%m-%d")
+            raw_date = r.get("Date") or r.get("TransactionDate") or ""
+            dt = None
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    dt = datetime.strptime(raw_date[:10], fmt)
+                    break
+                except ValueError:
+                    pass
+            latency_hours = 0.0
+            if dt:
+                latency_hours = max(0.0, (datetime.utcnow() - dt).total_seconds() / 3600)
+            lo, hi, mid = _parse_amount(r.get("Range", ""))
+            return {
+                "source": "congress",
+                "source_id": f"{r.get('Representative','')}|{r.get('Ticker','')}|{raw_date}",
+                "filer_name": r.get("Representative") or "Unknown",
+                "filer_type": "politician",
+                "committee": r.get("Party") or None,
+                "ticker": (r.get("Ticker") or "").upper(),
+                "asset_type": "stock",
+                "action": "buy" if str(r.get("Transaction", "")).lower() == "purchase" else "sell",
+                "amount_low": lo,
+                "amount_high": hi,
+                "amount_midpoint": mid,
+                "trade_date": dt,
+                "disclosed_at": dt,
+                "latency_hours": latency_hours,
+                "raw_json": str(r)[:400],
+            }
         except Exception:
-            pass
-
-        latency = None
-        if trade_dt and disclosed_dt:
-            latency = (disclosed_dt - trade_dt).total_seconds() / 3600
-
-        amount_raw = t.get("Range", "") or ""
-        amount_low = amount_high = None
-        if "-" in amount_raw:
-            parts = [p.strip().replace("$", "").replace(",", "") for p in amount_raw.split("-")]
-            try:
-                amount_low = float(parts[0].replace("K", "000").replace("M", "000000"))
-                amount_high = float(parts[1].replace("K", "000").replace("M", "000000"))
-            except Exception:
-                pass
-
-        chamber = str(t.get("Chamber", "house")).lower()
-        return {
-            "source": f"congress_{chamber}",
-            "source_id": f"qv-{t.get('ID', '')}",
-            "filer_name": t.get("Representative") or t.get("Senator") or "Unknown",
-            "filer_type": chamber,
-            "committee": None,
-            "ticker": (t.get("Ticker") or "").upper(),
-            "asset_type": (t.get("Asset", "stock") or "stock").lower(),
-            "action": (t.get("Transaction", "buy") or "buy").lower(),
-            "amount_low": amount_low,
-            "amount_high": amount_high,
-            "amount_midpoint": ((amount_low or 0) + (amount_high or 0)) / 2 or None,
-            "trade_date": trade_dt,
-            "disclosed_at": disclosed_dt,
-            "latency_hours": latency,
-            "raw_json": str(t),
-        }
+            return None
