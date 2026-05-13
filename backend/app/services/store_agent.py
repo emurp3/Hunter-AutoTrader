@@ -128,3 +128,127 @@ def get_store_dashboard(session: Session) -> dict:
             for p in products
         ],
     }
+
+
+# ── Autonomous Product Generation ────────────────────────────────────────────────────
+
+BRANDED_THEMES = [
+    "Hunter Leon luxury streetwear",
+    "Royal Legacy heritage polo",
+    "HL Monogram premium collection",
+    "Lion Insignia signature series",
+]
+
+UNBRANDED_THEMES = [
+    "America 250th anniversary 1776-2026",
+    "Juneteenth Black heritage celebration",
+    "Father's Day premium polo gift",
+    "Black excellence empowerment",
+    "Pan-African pride collection",
+    "Fourth of July patriotic",
+    "Melanin culture and pride",
+    "Black American history tribute",
+]
+
+
+def auto_generate_product(session, theme: str | None = None, branded: bool = False) -> dict:
+    """
+    Leon autonomously generates a new product pack using AI.
+    Saves to CreatedProduct and returns the full pack.
+    """
+    import os, json, httpx
+    from app.models.created_product import CreatedProduct
+    from sqlmodel import select
+
+    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return {"error": "No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY."}
+
+    # Pick theme
+    import random
+    if not theme:
+        pool = BRANDED_THEMES if branded else UNBRANDED_THEMES
+        theme = random.choice(pool)
+
+    brand_instruction = (
+        "Include the 'Hunter Leon' or 'Royal Legacy' brand name and lion crest logo in the design."
+        if branded else
+        "This is a standalone design — no external brand name required."
+    )
+
+    prompt = f"""You are Leon, Commerce Division Commander for Hunter AI. Generate a complete AOP polo shirt product pack.
+
+Theme: {theme}
+Branding: {brand_instruction}
+
+Return ONLY valid JSON with these exact fields:
+{{
+  "name": "Product name (max 60 chars)",
+  "title": "Etsy listing title (max 140 chars, SEO optimized)",
+  "description": "Product description (2-3 sentences, compelling)",
+  "price": 72.00,
+  "estimated_margin": 0.55,
+  "platform": "etsy",
+  "manufacturer": "Printful",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7", "tag8"],
+  "sales_copy": "One punchy sentence",
+  "image_prompt": "Detailed prompt to generate the flat print design in ChatGPT/Midjourney",
+  "next_action": "First action to take",
+  "notes": "Why this product will sell",
+  "design_variant": "snake_case_id",
+  "is_branded": {str(branded).lower()}
+}}"""
+
+    try:
+        # Try Anthropic first
+        if os.getenv("ANTHROPIC_API_KEY"):
+            resp = httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": os.getenv("ANTHROPIC_API_KEY", ""), "anthropic-version": "2023-06-01"},
+                json={"model": "claude-3-haiku-20240307", "max_tokens": 1024,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=20,
+            )
+            content = resp.json()["content"][0]["text"]
+        else:
+            resp = httpx.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '')}"},
+                json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}]},
+                timeout=20,
+            )
+            content = resp.json()["choices"][0]["message"]["content"]
+
+        # Parse JSON from response
+        import re
+        json_match = re.search(r'\{[\s\S]+\}', content)
+        pack = json.loads(json_match.group(0) if json_match else content)
+
+    except Exception as exc:
+        logger.error("Leon auto-generate failed: %s", exc)
+        return {"error": str(exc)}
+
+    # Save to DB
+    try:
+        from app.services.product_creation import create_product
+        product = create_product(session, {
+            "name": pack.get("name", theme),
+            "platform": pack.get("platform", "etsy"),
+            "manufacturer": pack.get("manufacturer", "Printful"),
+            "status": "draft",
+            "price": pack.get("price"),
+            "estimated_margin": pack.get("estimated_margin"),
+            "design_variant": pack.get("design_variant"),
+            "next_action": pack.get("next_action"),
+            "notes": pack.get("notes"),
+            "product_pack": json.dumps(pack),
+        })
+        pack["product_id"] = product.id
+        pack["saved"] = True
+    except Exception as exc:
+        logger.error("Leon: failed to save product: %s", exc)
+        pack["saved"] = False
+
+    pack["theme"] = theme
+    pack["branded"] = branded
+    return pack
