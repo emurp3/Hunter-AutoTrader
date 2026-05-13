@@ -13,6 +13,7 @@ const SECTIONS = [
   { id: 'forge', label: 'Forge' },
   { id: 'quickcash', label: 'Quick-Cash Board' },
   { id: 'executive', label: 'Executive Summary' },
+  { id: 'commerce', label: '👑 Commerce' },
 ]
 
 const OCC_LOADERS = {
@@ -78,6 +79,11 @@ const FORGE_LOADERS = {
 const QUICKCASH_LOADERS = {
   board: { path: '/quickcash/board?limit=50' },
   createdProducts: { path: '/quickcash/created-products' },
+}
+
+const COMMERCE_LOADERS = {
+  dashboard: { path: '/store/dashboard' },
+  agent: { path: '/store/agent' },
 }
 class AuthError extends Error {}
 
@@ -331,6 +337,11 @@ export default function OperationsPage({ onBack, onAuthFail }) {
         {activeSection === 'executive' && (
           <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--executive">
             <ExecutiveSummarySection onAuthFail={onAuthFail} />
+          </div>
+        )}
+        {activeSection === 'commerce' && (
+          <div className="occ-legacy-panel hunter-shell-panel hunter-shell-panel--commerce">
+            <CommerceDivisionSection onAuthFail={onAuthFail} />
           </div>
         )}
       </div>
@@ -1839,4 +1850,208 @@ function QuickCashSection({ onAuthFail }) {
       </div>
 </SectionFrame>
   )
+}
+
+
+// ── Commerce Division ──
+const COMMERCE_STATUS_COLORS = { OPERATIONAL: '#4caf81', STANDBY: '#e09a52', OFFLINE: '#e05252' };
+const COMMERCE_BADGE = { draft: '#7a7f8e', created: '#5282e0', launched: '#4caf81', blocked: '#e05252' };
+
+function CommerceDivisionSection({ onAuthFail }) {
+  const { endpoints, refresh } = useSectionData(COMMERCE_LOADERS, onAuthFail);
+  const dash = endpointData(endpoints.dashboard, {});
+  const agentData = endpointData(endpoints.agent, {});
+  const summary = dash.summary || {};
+  const deadlines = asArray(dash.deadlines);
+  const urgentActions = asArray(dash.urgent_actions);
+  const products = asArray(dash.products);
+  const [generating, setGenerating] = useState(false);
+  const [genBranded, setGenBranded] = useState(false);
+  const [lastGen, setLastGen] = useState(null);
+
+  const marquee = products.filter(p => p.is_marquee);
+  const launched = products.filter(p => p.status === 'launched');
+
+  async function autoGenerate() {
+    setGenerating(true);
+    try {
+    const url = '/api/store/auto-generate?branded=' + genBranded;
+    const r = await fetch(url, { method: 'POST', credentials: 'include' });
+    const d = await r.json();
+    setLastGen(d);
+    refresh();
+    } catch(e) { console.error(e); }
+    setGenerating(false);
+  }
+
+  async function seedAll() {
+    await fetch('/api/store/seed', { method: 'POST', credentials: 'include' });
+    refresh();
+  }
+
+  async function launchProduct(id) {
+    const url = window.prompt('Enter live store URL:');
+    if (!url) return;
+    await fetch('/api/store/products/' + id + '/launch?url=' + encodeURIComponent(url), { method: 'POST', credentials: 'include' });
+    refresh();
+  }
+
+  return (
+    <div className="commerce-root">
+      <div className="commerce-hero">
+        <div className="commerce-hero-bg" />
+        <div className="commerce-hero-inner">
+          <div className="commerce-agent-card">
+            <div className="commerce-agent-emblem">
+              <div className="commerce-lion-wrap">
+                <span style={{ fontSize: '3rem' }}>&#129505;</span>
+                <span className="commerce-crown">&#128081;</span>
+              </div>
+            </div>
+            <div className="commerce-agent-info">
+              <div className="commerce-agent-name">{agentData.name || 'LEON'}</div>
+              <div className="commerce-agent-role">{agentData.role || 'Commerce Division Commander'}</div>
+              <div className="commerce-agent-badges">
+                <span className="commerce-badge">
+                  <span className="commerce-dot" style={{ background: COMMERCE_STATUS_COLORS['OPERATIONAL'] }} />
+                  OPERATIONAL
+                </span>
+                <span className="commerce-badge">STORE OPS</span>
+                <span className="commerce-badge">EST. ALWAYS</span>
+              </div>
+              <div className="commerce-mission">{agentData.current_mission || 'Launch the collection.'}</div>
+              <div className="commerce-sig">{agentData.signature || 'Leon. Est. Always.'}</div>
+            </div>
+            <div className="commerce-stats">
+              {[
+                { v: summary.total_products ?? 0, l: 'Products' },
+                { v: launched.length, l: 'Live' },
+                { v: summary.pipeline_value ? '$' + summary.pipeline_value.toLocaleString() : '$0', l: 'Pipeline' },
+                { v: summary.urgent_action_count ?? 0, l: 'Urgent', hot: true },
+              ].map((s, i) => (
+                <div key={i} className={s.hot ? 'commerce-stat commerce-stat--hot' : 'commerce-stat'}>
+                  <div className="commerce-stat-val">{s.v}</div>
+                  <div className="commerce-stat-lbl">{s.l}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="commerce-deadlines">
+            {deadlines.map((dl, i) => (
+              <div key={i} className={dl.urgent || dl.overdue ? 'commerce-dl-card commerce-dl-card--hot' : 'commerce-dl-card'}>
+                <div className="commerce-dl-name">{dl.name}</div>
+                <div className="commerce-dl-days" style={{ color: dl.overdue ? '#e05252' : dl.urgent ? '#e09a52' : '#c9a84c' }}>
+                  {dl.overdue ? 'OVERDUE' : dl.days_to_event + 'd'}
+                </div>
+                <div className="commerce-dl-sub">List by {dl.list_by}</div>
+                <div className="commerce-dl-sub">{dl.launched_products}/{dl.relevant_products} live</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="commerce-body">
+        <div className="commerce-toolbar">
+          <label className="commerce-lbl">
+            <input type="checkbox" checked={genBranded} onChange={e => setGenBranded(e.target.checked)} />
+            Hunter Leon branded
+          </label>
+          <button className="commerce-btn commerce-btn--gold" onClick={autoGenerate} disabled={generating}>
+            {generating ? '⏳ Creating…' : '⚡ Leon: Auto-Generate'}
+          </button>
+          <button className="commerce-btn" onClick={seedAll}>Load All Products</button>
+          <button className="commerce-btn" onClick={refresh}>Refresh</button>
+          <span className="commerce-lbl" style={{ marginLeft: 'auto' }}>{products.length - launched.length} in pipeline · {launched.length} live</span>
+        </div>
+
+        {lastGen && !lastGen.error && (
+          <div className="commerce-gen-card">
+            <div className="commerce-gen-label">✨ LEON JUST CREATED</div>
+            <div className="commerce-gen-name">{lastGen.name}</div>
+            <div className="commerce-gen-desc">{lastGen.description}</div>
+            <div className="commerce-gen-prompt">Image prompt: {lastGen.image_prompt}</div>
+            <div className="commerce-gen-action">Next: {lastGen.next_action}</div>
+          </div>
+        )}
+
+        {marquee.length > 0 && (
+          <div className="commerce-section">
+            <div className="commerce-section-hd">🔥 MARQUEE PIECES</div>
+            <div className="commerce-marquee-grid">
+              {marquee.map(p => <CommerceProductCard key={p.id} p={p} onLaunch={launchProduct} />)}
+            </div>
+          </div>
+        )}
+
+        <div className="commerce-section">
+          <div className="commerce-section-hd">FULL PIPELINE ({products.length})</div>
+          {products.length === 0
+            ? <div className="commerce-empty">No products seeded yet. Click 'Load All Products'.</div>
+            : (
+              <div className="commerce-pipeline">
+                <div className="commerce-pipeline-hd">
+                  <span>Product</span><span>Platform</span><span>Status</span>
+                  <span>Price</span><span>Margin</span><span>Next Action</span><span>Act</span>
+                </div>
+                {products.map(p => (
+                  <div key={p.id} className={p.is_marquee ? 'commerce-pipeline-row commerce-pipeline-row--marquee' : 'commerce-pipeline-row'}>
+                    <div>
+                      {p.is_marquee && <span className="commerce-marquee-pip">&#128293;</span>}
+                      <span style={{ fontSize: '12px' }}>{p.name.replace(' (MARQUEE)', '')}</span>
+                    </div>
+                    <span style={{ fontSize: '11px', textTransform: 'uppercase' }}>{p.platform}</span>
+                    <span style={{ fontSize: '11px', color: COMMERCE_BADGE[p.status] || '#7a7f8e' }}>{(p.status||'').toUpperCase()}</span>
+                    <span style={{ fontSize: '12px' }}>{p.price ? '$' + p.price.toFixed(0) : '—'}</span>
+                    <span style={{ fontSize: '12px', color: 'var(--green)' }}>{p.margin ? (p.margin*100).toFixed(0)+'%' : '—'}</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
+                      {(p.next_action || '').replace(/[⚨🔥].*?— /g, '').slice(0,60)}
+                    </span>
+                    <div>
+                      {p.url
+                        ? <a href={p.url} target="_blank" rel="noreferrer" className="commerce-btn commerce-btn--go" style={{ fontSize: '10px', padding: '3px 8px' }}>Open</a>
+                        : <button className="commerce-btn" style={{ fontSize: '10px', padding: '3px 8px' }} onClick={() => launchProduct(p.id)}>Launch</button>
+                      }
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+        </div>
+
+        {urgentActions.length > 0 && (
+          <div className="commerce-section">
+            <div className="commerce-section-hd">⚨️ LEON'S ACTION QUEUE</div>
+            {urgentActions.map((a, i) => (
+              <div key={i} className={a.is_marquee ? 'commerce-action commerce-action--hot' : 'commerce-action'}>
+                <span className="commerce-action-name">{a.product_name?.replace(' (MARQUEE)', '')}</span>
+                <span className="commerce-action-text">{(a.action||'').replace(/[⚨🔥].*?— /g,'').slice(0,80)}</span>
+                {a.price && <span className="commerce-action-price">${a.price}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CommerceProductCard({ p, onLaunch }) {
+  return (
+    <div className="commerce-product-card">
+      <div className="commerce-product-card-name">{p.name.replace(' (MARQUEE)', '')}</div>
+      <div className="commerce-product-card-meta">
+        <span>{p.platform}</span>
+        <span style={{ color: COMMERCE_BADGE[p.status] || '#7a7f8e', fontSize: '10px' }}>{(p.status||'').toUpperCase()}</span>
+        {p.price && <span style={{ color: 'var(--gold)' }}>${p.price}</span>}
+        {p.margin && <span style={{ color: 'var(--green)' }}>{(p.margin*100).toFixed(0)}%</span>}
+      </div>
+      <div className="commerce-product-card-note">{p.notes || p.next_action}</div>
+      {p.url
+        ? <a href={p.url} target="_blank" rel="noreferrer" className="commerce-btn commerce-btn--go" style={{ fontSize:'10px',marginTop:'8px',display:'inline-block' }}>Open Store &#8599;</a>
+        : <button className="commerce-btn" style={{ fontSize:'10px',marginTop:'8px' }} onClick={() => onLaunch(p.id)}>Mark Launched</button>
+      }
+    </div>
+  );
 }
