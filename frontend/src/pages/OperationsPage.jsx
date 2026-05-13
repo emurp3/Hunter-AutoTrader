@@ -1693,7 +1693,7 @@ function CreatedStoresPanel({ data, onRefresh }) {
 
   async function seedHunterLeon() {
     setSeeding(true);
-    await fetch('/api/quickcash/seed-hunter-leon', { method: 'POST', credentials: 'include' });
+    await fetch('/api/quickcash/seed-all-products', { method: 'POST', credentials: 'include' });
     setSeeding(false);
     onRefresh();
   }
@@ -1704,7 +1704,7 @@ function CreatedStoresPanel({ data, onRefresh }) {
         <div className="hunter-stores-empty">
           <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginBottom: '12px' }}>No product pages created yet.</p>
           <button className="hunter-stores-btn" type="button" onClick={seedHunterLeon} disabled={seeding}>
-            {seeding ? 'Seeding…' : '+ Add Hunter Leon Shoes'}
+            {seeding ? 'Seeding…' : '+ Load All Products'}
           </button>
         </div>
       ) : (
@@ -1746,7 +1746,7 @@ function CreatedStoresPanel({ data, onRefresh }) {
         <button className="hunter-stores-btn" type="button" onClick={onRefresh}>Refresh</button>
         {products.length > 0 && (
           <button className="hunter-stores-btn" type="button" onClick={seedHunterLeon} disabled={seeding}>
-            {seeding ? 'Seeding…' : '+ Add Hunter Leon Shoes'}
+            {seeding ? 'Seeding…' : '+ Load All Products'}
           </button>
         )}
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{products.length} product(s) tracked</span>
