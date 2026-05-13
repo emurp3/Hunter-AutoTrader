@@ -537,6 +537,90 @@ def seed_america_250(session: Session) -> int:
     return seeded
 
 
+ROYAL_LEGACY_250_PRODUCTS = [
+    {
+        "name": "Royal Legacy 250 Years Polo — Black",
+        "design_variant": "royal_legacy_250_black",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 85.00,
+        "estimated_margin": 0.62,
+        "title": "Royal Legacy 250 Years Polo | Black Legacy American Story | 1776 2026 Lion Crest Shirt",
+        "description": (
+            "Royal Legacy. Est. Always. 250 Years. 1776–2026. "
+            "Celebrating Freedom. Honoring Legacy. Building Tomorrow. "
+            "Black Legacy. American Story. "
+            "Distressed American flag, gold lion crest with laurel wreath, "
+            "African geometric side panels. AOP sublimation polo. The definitive piece."
+        ),
+        "tags": ["royal legacy shirt", "250 years polo black", "1776 2026 shirt",
+                 "black legacy american story", "lion crest polo", "july 4 2026 shirt",
+                 "america 250 polo", "black patriotic polo", "fathers day gift black man",
+                 "black excellence shirt"],
+        "sales_copy": "Royal Legacy. Est. Always. Black Legacy. American Story. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo black base. Premium price point. Pairs with white colorway.",
+        "launch_checklist": [
+            "⚨️ URGENT: List by May 21 — July 4 in 52 days",
+            "List as PAIR with white colorway — offer both in same Etsy listing as variants",
+            "Upload to Printful AOP polo",
+            "Cross-link with Royal Legacy White in listing",
+        ],
+        "source_opportunity": "Royal Legacy Brand — 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — Upload to Printful. List with white variant. July 4 in 52 days.",
+        "notes": "Premium flagship piece. List black + white as color variants in same Etsy listing for best SEO.",
+    },
+    {
+        "name": "Royal Legacy 250 Years Polo — White",
+        "design_variant": "royal_legacy_250_white",
+        "platform": "etsy",
+        "manufacturer": "Printful",
+        "price": 89.00,
+        "estimated_margin": 0.64,
+        "title": "Royal Legacy 250 Years Polo | White | Black Legacy American Story | 1776 2026 Premium Polo",
+        "description": (
+            "Royal Legacy. Est. Always. 250 Years. 1776–2026. "
+            "White premium AOP sublimation polo. Gold lion crest, red brushstroke diagonal, "
+            "gold stars, African kente side panels, American flag sleeve. "
+            "Celebrating Freedom. Honoring Legacy. Building Tomorrow. "
+            "Black Legacy. American Story. The cleanest piece in the collection."
+        ),
+        "tags": ["royal legacy white polo", "white patriotic polo", "250 years polo white",
+                 "1776 2026 white shirt", "black legacy american story", "lion crest polo white",
+                 "july 4 2026 polo", "america 250 white shirt", "premium polo shirt mens",
+                 "white independence day shirt"],
+        "sales_copy": "Royal Legacy. Est. Always. White. Gold. Clean. 1776–2026.",
+        "manufacturer_url": "https://www.printful.com",
+        "manufacturer_notes": "Printful AOP polo WHITE base. Premium price — white base stands out in Etsy listings. Pairs with black.",
+        "launch_checklist": [
+            "⚨️ URGENT: List by May 21",
+            "White base is the standout piece — use as listing hero image",
+            "List as color variant with black in same Etsy listing",
+            "Upload to Printful AOP polo — configure white base separately",
+            "Price at $89 — white base justifies premium",
+        ],
+        "source_opportunity": "Royal Legacy Brand — 250th Anniversary Collection",
+        "status": "draft",
+        "next_action": "⚨️ URGENT — Use as hero image. White base stands out. Upload to Printful now.",
+        "notes": "Highest price point in entire collection. White AOP polo is rare in this niche — huge differentiation.",
+    },
+]
+
+
+def seed_royal_legacy_250(session: Session) -> int:
+    """Seed Royal Legacy 250 black + white polo products."""
+    seeded = 0
+    for p in ROYAL_LEGACY_250_PRODUCTS:
+        existing = session.exec(
+            select(CreatedProduct).where(CreatedProduct.name == p["name"])
+        ).first()
+        if not existing:
+            create_product(session, p)
+            seeded += 1
+    return seeded
+
+
 def generate_product_pack(opportunity_title: str, opportunity_type: str = "digital") -> dict:
     """Generate a product pack skeleton from a Quick-Cash/Forge opportunity."""
     return {
