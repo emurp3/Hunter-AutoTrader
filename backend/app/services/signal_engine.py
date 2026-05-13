@@ -92,10 +92,8 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
             if existing:
                 skipped += 1
                 continue
-            if not raw.get("ticker"):
-                skipped += 1
-                continue
-
+            # ticker may be empty for SEC Form 4 records resolved without a CIK match
+            # allow through — scoring already applies a 0.05 bonus when ticker is present
             confidence = score_signal(raw)
             decision, reason = route_signal(
                 confidence, raw.get("latency_hours"), raw.get("amount_midpoint"))
