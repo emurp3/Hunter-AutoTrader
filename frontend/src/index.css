@@ -5662,3 +5662,99 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
 .sm-card-mfg { font-size: 0.65rem; color: #aaa; text-transform: uppercase; letter-spacing: 0.05em; }
 
 .sm-empty { color: #999; font-size: 13px; padding: 2rem 0; text-align: center; }
+
+/* ── Leon Commerce Status Card (Executive Summary) ────────────────────────── */
+.exec-leon-card {
+  border: 1px solid rgba(201,168,76,0.3);
+  border-radius: 4px;
+  padding: 1rem 1.25rem;
+  background: linear-gradient(135deg, rgba(201,168,76,0.06) 0%, rgba(0,0,0,0) 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.exec-leon-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.exec-leon-icon { font-size: 1.6rem; flex-shrink: 0; }
+.exec-leon-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.exec-leon-sub {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.exec-leon-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.exec-leon-dot--ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.exec-leon-dot--urgent { background: var(--orange); box-shadow: 0 0 8px var(--orange); animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.exec-leon-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+}
+.exec-leon-stat { text-align: center; }
+.exec-leon-val {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+.exec-leon-val--gold { color: var(--gold); }
+.exec-leon-lbl {
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.exec-leon-deadline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.04);
+  font-size: 11px;
+  border-left: 2px solid rgba(201,168,76,0.3);
+}
+.exec-leon-deadline--hot {
+  border-left-color: var(--orange);
+  background: rgba(224,154,82,0.08);
+}
+.exec-leon-dl-name { flex: 1; color: var(--text-muted); }
+.exec-leon-dl-days { font-weight: 800; font-size: 1rem; }
+
+.exec-leon-action {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.exec-leon-action-icon { color: var(--gold); }
+.exec-leon-action-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
