@@ -48,6 +48,8 @@ const RESULTS_LOADERS = {
 
 const EXECUTIVE_LOADERS = {
   leonStatus: { path: '/store/dashboard' },
+  cryptoAllocation: { path: '/signals/crypto-allocation' },
+  cryptoFeed: { path: '/signals/crypto-feed' },
   health: { path: '/system/health' },
   readiness: { path: '/system/readiness' },
   summary: { path: '/operations/summary' },
@@ -1379,6 +1381,9 @@ function ExecutiveSummarySection({ onAuthFail }) {
   const leonDeadlines = asArray(leonDash.deadlines);
   const leonUrgent = asArray(leonDash.urgent_actions);
   const leonNextDL = leonDeadlines.find(d => !d.overdue && d.relevant_products > 0) || leonDeadlines[0];
+  const cryptoState = endpointData(endpoints.cryptoAllocation, {});
+  const cryptoFeedData = endpointData(endpoints.cryptoFeed, {});
+  const cryptoSignals = asArray(cryptoFeedData.signals);
   const weekly = endpointData(endpoints.weekly, {})
   const transactions = asArray(endpointData(endpoints.transactions, {}))
   const [pipelineOpen, setPipelineOpen] = useState(false)
