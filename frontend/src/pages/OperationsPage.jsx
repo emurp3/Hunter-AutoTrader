@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import storeHeroImg from '../assets/store-hero.png'
 
 const API = '/api'
 const REQUEST_TIMEOUT_MS = 8000
@@ -1947,15 +1948,9 @@ function CommerceDivisionSection({ onAuthFail }) {
           </div>
         </div>
 
-        {/* Right side: agent visual + stats */}
+        {/* Right side: hero photo */}
         <div className="sm-hero-right">
-          <div className="sm-hero-agent">
-            <div className="sm-agent-crown">&#128081;</div>
-            <div className="sm-agent-lion">&#129505;</div>
-            <div className="sm-agent-name-hero">{agentData.name || 'LEON'}</div>
-            <div className="sm-agent-title-hero">{agentData.role || 'Commerce Division Commander'}</div>
-            <div className="sm-agent-sig-hero">{agentData.signature || 'Est. Always.'}</div>
-          </div>
+          <div className="sm-hero-img" style={{ backgroundImage: 'url(' + storeHeroImg + ')' }} role="img" aria-label="Store team wearing the collection" />
 
           <div className="sm-stats-bar">
             <div className="sm-stat-item">
