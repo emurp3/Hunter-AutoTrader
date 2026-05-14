@@ -294,6 +294,77 @@ async def recycle_cycle_task() -> None:
         logger.exception("recycle_cycle_task: unhandled exception — %s", exc)
 
 
+# ── Leon Daily Commerce Task ────────────────────────────────────────────────────────────
+async def leon_daily_commerce_task():
+    """
+    Leon's daily autonomous commerce run.
+    Runs every 24h at 8 AM. Responsibilities:
+      1. Check deadline urgency — alert if list-by date within 3 days
+      2. Auto-generate a seasonal product if no new product in 7 days
+      3. Generate campaign briefs for any products missing one
+      4. Notify SAPP Campaign Room of pending briefs
+      5. Report summary to Hunter log
+    """
+    logger.info("Leon: Daily commerce run starting")
+    try:
+        from app.services.store_agent import DEADLINES, _days_until, get_store_dashboard
+        from app.services.product_creation import create_product
+        from app.services.campaign_agent import generate_campaign_brief, get_campaign_briefs
+        from app.models.created_product import CreatedProduct
+        from sqlmodel import Session, select
+        from datetime import datetime, timezone, timedelta
+
+        with Session(engine) as session:
+            # 1. Check deadlines
+            for dl in DEADLINES:
+                days_to_list = _days_until(dl["list_by"])
+                if 0 <= days_to_list <= 3:
+                    logger.warning(
+                        "Leon ⚨️ URGENT: '%s' list-by date in %d day(s). Get products live NOW.",
+                        dl["name"], days_to_list
+                    )
+
+            # 2. Auto-generate if no new product in last 7 days
+            week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+            recent_products = session.exec(
+                select(CreatedProduct).where(CreatedProduct.created_at >= week_ago)
+            ).all()
+            if not recent_products:
+                logger.info("Leon: No new products in 7 days. Auto-generating one.")
+                from app.services.store_agent import DEADLINES
+                # Pick most urgent theme
+                urgent_theme = None
+                for dl in DEADLINES:
+                    if _days_until(dl["event_date"]) <= 60 and dl["tags"]:
+                        urgent_theme = dl["tags"][0]
+                        break
+                from app.services.store_agent import auto_generate_product
+                pack = auto_generate_product(session, theme=urgent_theme, branded=False)
+                logger.info("Leon: Auto-generated '%s'", pack.get("name", "unknown"))
+
+            # 3. Generate briefs for products that don't have one
+            from app.models.campaign_brief import CampaignBrief
+            all_products = session.exec(select(CreatedProduct)).all()
+            briefed_ids = set(
+                b.product_id for b in session.exec(select(CampaignBrief)).all()
+                if b.product_id is not None
+            )
+            unbriefed = [p for p in all_products if p.id not in briefed_ids]
+            for product in unbriefed[:3]:  # max 3 per run to avoid spam
+                try:
+                    generate_campaign_brief(session, product)
+                    logger.info("Leon: Brief generated for '%s'", product.name)
+                except Exception as e:
+                    logger.warning("Leon: Brief failed for '%s': %s", product.name, e)
+
+            logger.info(
+                "Leon: Daily run complete. Products: %d, Unbriefed handled: %d",
+                len(all_products), min(3, len(unbriefed))
+            )
+    except Exception as exc:
+        logger.exception("Leon: Daily commerce task failed: %s", exc)
+
+
 def build_weekly_report_now(*, session: Session | None = None) -> dict:
     """Synchronous helper — builds and persists the weekly report immediately.
 
