@@ -147,3 +147,73 @@ def get_agent_identity(
         "signature": "Leon. Est. Always.",
         "current_mission": "Launch 14 products before July 4, 2026. Juneteenth in 37 days.",
     }
+
+
+# ── Campaign Briefs (Leon → SAPP handoff) ─────────────────────────────────────────────
+from app.services import campaign_agent as cam_svc
+from app.models.campaign_brief import CampaignBrief
+
+
+@router.get("/campaign-briefs")
+def get_campaign_briefs(
+    status: Optional[str] = Query(default=None, description="pending | accepted | in_progress | launched"),
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """All campaign briefs Leon has generated for SAPP."""
+    briefs = cam_svc.get_campaign_briefs(session, status=status)
+    return {
+        "count": len(briefs),
+        "briefs": [
+            {
+                "id": b.id,
+                "product_name": b.product_name,
+                "campaign_title": b.campaign_title,
+                "status": b.status,
+                "target_audience": b.target_audience,
+                "key_message": b.key_message,
+                "urgency_note": b.urgency_note,
+                "platforms": b.platforms,
+                "hashtags": b.hashtags,
+                "video_concept": b.video_concept,
+                "social_caption": b.social_caption,
+                "price": b.price,
+                "product_url": b.product_url,
+                "sapp_campaign_id": b.sapp_campaign_id,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+            }
+            for b in briefs
+        ],
+    }
+
+
+@router.post("/campaign-briefs/{brief_id}/accept")
+def accept_brief(
+    brief_id: int,
+    sapp_campaign_id: Optional[str] = Query(default=None),
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """SAPP calls this when it accepts and starts working on a campaign brief."""
+    brief = cam_svc.mark_brief_accepted(session, brief_id, sapp_campaign_id)
+    if not brief:
+        raise HTTPException(status_code=404, detail="Brief not found")
+    return {"status": "accepted", "brief_id": brief.id, "campaign_title": brief.campaign_title}
+
+
+@router.post("/campaign-briefs/generate")
+def generate_brief_for_product(
+    product_id: int = Query(...),
+    urgency_note: Optional[str] = Query(default=None),
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Leon manually generates a campaign brief for an existing product."""
+    product = session.get(prod_svc.CreatedProduct.__class__, product_id)
+    from sqlmodel import select as sql_select
+    from app.models.created_product import CreatedProduct as CP
+    product = session.exec(sql_select(CP).where(CP.id == product_id)).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    brief = cam_svc.generate_campaign_brief(session, product, urgency_note=urgency_note)
+    return {"status": "generated", "brief_id": brief.id, "campaign_title": brief.campaign_title, "notified_sapp": bool(brief.id)}
