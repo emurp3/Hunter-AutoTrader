@@ -217,3 +217,12 @@ def generate_brief_for_product(
         raise HTTPException(status_code=404, detail="Product not found")
     brief = cam_svc.generate_campaign_brief(session, product, urgency_note=urgency_note)
     return {"status": "generated", "brief_id": brief.id, "campaign_title": brief.campaign_title, "notified_sapp": bool(brief.id)}
+
+
+@router.get("/trends")
+def get_trend_signals(
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Leon's Google Trends signal feed — what's rising before it peaks."""
+    from app.services.leon_trends import get_trend_report
+    return get_trend_report()
