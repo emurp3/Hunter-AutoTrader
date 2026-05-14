@@ -1859,10 +1859,10 @@ const COMMERCE_STATUS_COLORS = { OPERATIONAL: '#4caf81', STANDBY: '#e09a52', OFF
 const COMMERCE_BADGE_COLORS = { draft: '#888', created: '#5282e0', launched: '#4caf81', blocked: '#e05252' };
 
 const COMMERCE_NAV = [
-  { id: 'store',   icon: '🛒', label: 'Manage Store',      desc: 'Products & listings' },
-  { id: 'team',    icon: '👥', label: 'Team Overview',     desc: 'Leon & agents' },
-  { id: 'sales',   icon: '📈', label: 'Sales Performance', desc: 'Revenue & growth' },
-  { id: 'catalog', icon: '👕', label: 'Product Catalog',   desc: 'All designs' },
+  { id: 'store',   icon: '🏪', label: 'LEAD.',    desc: 'Manage your store' },
+  { id: 'team',    icon: '👥', label: 'EMPOWER.', desc: 'Leon & team' },
+  { id: 'sales',   icon: '📈', label: 'GROW.',    desc: 'Revenue & growth' },
+  { id: 'catalog', icon: '🤝', label: 'REPEAT.',  desc: 'Full catalog' },
 ];
 
 function CommerceDivisionSection({ onAuthFail }) {
@@ -1911,11 +1911,11 @@ function CommerceDivisionSection({ onAuthFail }) {
       {/* ── HERO ── */}
       <div className="sm-hero">
         <div className="sm-hero-left">
-          <div className="sm-brand">HUNTER <span className="sm-brand-growing">GROWING</span></div>
+          <div className="sm-brand">HUNTER</div>
 
           <h1 className="sm-welcome">
             WELCOME,<br />
-            <span className="sm-welcome-role">STORE MANAGER</span>
+            <span className="sm-welcome-role">TO THE TEAM!</span>
           </h1>
 
           <p className="sm-subtitle">
