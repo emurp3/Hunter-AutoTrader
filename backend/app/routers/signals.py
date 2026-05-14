@@ -134,3 +134,49 @@ def vip_watchlist(
         "max_daily_spend": VIP_MAX_DAILY_SPEND,
         "watchlist": get_vip_watchlist(),
     }
+
+
+@router.get("/crypto-allocation")
+def crypto_allocation(
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Current crypto exposure vs the 15% hard wall."""
+    from app.services.crypto_engine import get_crypto_allocation_state
+    return get_crypto_allocation_state()
+
+
+@router.post("/crypto-buy")
+def crypto_buy(
+    symbol: str,
+    notional: float = 10.0,
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Place a crypto buy order. Hard wall enforced — rejects if over 15% cap."""
+    from app.services.crypto_engine import place_crypto_order
+    return place_crypto_order(symbol, "buy", notional)
+
+
+@router.get("/crypto-feed")
+def crypto_feed(
+    session: Session = Depends(get_session),
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """Crypto-only signals from the feed."""
+    from sqlmodel import select as sql_select
+    signals = session.exec(
+        sql_select(CopySignal)
+        .where(CopySignal.source == "crypto_coingecko")
+        .order_by(CopySignal.created_at.desc())
+        .limit(20)
+    ).all()
+    return {
+        "count": len(signals),
+        "signals": [
+            {"id": s.id, "ticker": s.ticker, "action": s.action,
+             "decision": s.decision, "confidence": s.confidence_score,
+             "committee": s.committee,  # holds 24h/7d pct change
+             "disclosed_at": s.disclosed_at.isoformat() if s.disclosed_at else None}
+            for s in signals
+        ]
+    }
