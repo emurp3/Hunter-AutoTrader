@@ -49,6 +49,7 @@ _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
 # misfire_grace_time=3600: if the app was briefly down at 8 AM it still fires
 # within the hour rather than silently skipping.
 _SCHEDULER_TZ = "America/New_York"
+_startup_logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
