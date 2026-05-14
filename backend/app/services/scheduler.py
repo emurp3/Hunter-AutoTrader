@@ -357,6 +357,17 @@ async def leon_daily_commerce_task():
                 except Exception as e:
                     logger.warning("Leon: Brief failed for '%s': %s", product.name, e)
 
+
+            # Trends check
+            try:
+                from app.services.leon_trends import fetch_trend_signals
+                trend_signals = fetch_trend_signals()
+                for ts in trend_signals[:2]:  # max 2 trend products per run
+                    from app.services.store_agent import auto_generate_product
+                    result = auto_generate_product(session, theme=ts["topic"], branded=False)
+                    logger.info("Leon Trends AUTO-CREATE: '%s' (momentum %.2f)", ts["topic"], ts["momentum"])
+            except Exception as te:
+                logger.warning("Leon Trends check failed: %s", te)
             logger.info(
                 "Leon: Daily run complete. Products: %d, Unbriefed handled: %d",
                 len(all_products), min(3, len(unbriefed))
