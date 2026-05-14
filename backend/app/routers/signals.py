@@ -120,3 +120,17 @@ def override_decision(
     session.add(signal)
     session.commit()
     return {"status": "updated", "decision": decision}
+
+
+@router.get("/vip-watchlist")
+def vip_watchlist(
+    _: UserInDB = Depends(get_current_user),
+) -> dict:
+    """VIP politician watchlist and micro-invest settings."""
+    from app.services.signal_engine import get_vip_watchlist, VIP_MICRO_INVEST_AMOUNT, VIP_MAX_DAILY_SPEND
+    return {
+        "vip_count": len(get_vip_watchlist()),
+        "micro_invest_per_signal": VIP_MICRO_INVEST_AMOUNT,
+        "max_daily_spend": VIP_MAX_DAILY_SPEND,
+        "watchlist": get_vip_watchlist(),
+    }
