@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 from app.models.copy_signal import CopySignal, SignalScanState
 from app.services.sources.congress_feed import CongressFeedAdapter
 from app.services.sources.sec_edgar import SecEdgarAdapter
+from app.services.sources.crypto_signal import CryptoSignalAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ def get_vip_watchlist() -> list[dict]:
 
 
 def run_signal_scan(session: Session, days_back: int = 30) -> dict:
-    adapters = [CongressFeedAdapter(), SecEdgarAdapter()]
+    adapters = [CongressFeedAdapter(), SecEdgarAdapter(), CryptoSignalAdapter()]
     new_signals = 0
     skipped = 0
     errors = []
@@ -199,6 +200,8 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
                 continue
             # ticker may be empty for SEC Form 4 records resolved without a CIK match
             # allow through — scoring already applies a 0.05 bonus when ticker is present
+            # Use pre-computed decision from crypto adapter if present
+            pre_decision = raw.pop("_pre_decision", None)
             confidence = score_signal(raw)
             # VIP check: auto micro-invest if watchlist match
             _vip = _match_vip(raw.get("filer_name", ""), raw.get("source", ""))
@@ -206,7 +209,10 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
                 _vticker = _vip.get("ticker_override") or raw.get("ticker", "")
                 _vresult = _execute_vip_micro_invest(_vticker, raw.get("action", "buy"), _vip["label"])
                 errors.append(f"VIP:{_vip['label']}:{_vresult['status']}")
-            decision, reason = route_signal(
+            if pre_decision and raw.get("asset_type") == "crypto":
+                decision, reason = pre_decision, f"CoinGecko velocity signal: {pre_decision}"
+            else:
+                decision, reason = route_signal(
                 confidence, raw.get("latency_hours"), raw.get("amount_midpoint"))
 
             signal = CopySignal(
