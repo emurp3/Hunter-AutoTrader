@@ -93,6 +93,12 @@ def _get_csv(name: str, default: str) -> list[str]:
 # ── Capital / bankroll ─────────────────────────────────────────────
 WEEKLY_BUDGET: float = float(os.getenv("HUNTER_INITIAL_BANKROLL", os.getenv("HUNTER_WEEKLY_BUDGET", "100")))
 
+# Crypto allocation hard wall — crypto positions (cost basis + unrealized gains)
+# may NEVER exceed this fraction of total portfolio value. Enforced before every order.
+CRYPTO_ALLOCATION_CAP: float = float(_resolve_env_value("CRYPTO_ALLOCATION_CAP", "0.15"))
+CRYPTO_MICRO_INVEST:   float = float(_resolve_env_value("CRYPTO_MICRO_INVEST",   "10.00"))
+CRYPTO_SUPPORTED = ["BTC", "ETH", "SOL", "AVAX", "LINK", "DOT"]  # Alpaca-listed coins
+
 # When True, POST /budget/allocate will be rejected if the amount would exceed
 # remaining_budget.
 BUDGET_STRICT_MODE: bool = os.getenv("HUNTER_BUDGET_STRICT_MODE", "true").lower() == "true"
