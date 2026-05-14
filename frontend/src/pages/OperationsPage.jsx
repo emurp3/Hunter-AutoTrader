@@ -47,6 +47,7 @@ const RESULTS_LOADERS = {
 }
 
 const EXECUTIVE_LOADERS = {
+  leonStatus: { path: '/store/dashboard' },
   health: { path: '/system/health' },
   readiness: { path: '/system/readiness' },
   summary: { path: '/operations/summary' },
@@ -1373,6 +1374,11 @@ function ExecutiveSummarySection({ onAuthFail }) {
   const errors = asArray(endpointData(endpoints.diagErrors, {}))
   const performance = endpointData(endpoints.performance, {})
   const daily = endpointData(endpoints.daily, {})
+  const leonDash = endpointData(endpoints.leonStatus, {});
+  const leonSummary = leonDash.summary || {};
+  const leonDeadlines = asArray(leonDash.deadlines);
+  const leonUrgent = asArray(leonDash.urgent_actions);
+  const leonNextDL = leonDeadlines.find(d => !d.overdue && d.relevant_products > 0) || leonDeadlines[0];
   const weekly = endpointData(endpoints.weekly, {})
   const transactions = asArray(endpointData(endpoints.transactions, {}))
   const [pipelineOpen, setPipelineOpen] = useState(false)
@@ -1685,6 +1691,59 @@ function ForgeSection({ onAuthFail }) {
           { label: 'AutoDS', value: 'Dropship fulfillment — autods.com' },
         ]} />
       </DataCard>
+
+      {/* Leon — Commerce Division Status */}
+      <div className="exec-leon-card">
+        <div className="exec-leon-hd">
+          <span className="exec-leon-icon">&#129505;</span>
+          <div>
+            <div className="exec-leon-title">LEON — COMMERCE</div>
+            <div className="exec-leon-sub">Commerce Division Commander</div>
+          </div>
+          <div className={leonSummary.urgent_action_count > 0 ? 'exec-leon-dot exec-leon-dot--urgent' : 'exec-leon-dot exec-leon-dot--ok'} />
+        </div>
+        <div className="exec-leon-stats">
+          <div className="exec-leon-stat">
+            <div className="exec-leon-val">{leonSummary.total_products ?? 0}</div>
+            <div className="exec-leon-lbl">Products</div>
+          </div>
+          <div className="exec-leon-stat">
+            <div className="exec-leon-val">{leonSummary.launched_count ?? 0}</div>
+            <div className="exec-leon-lbl">Live</div>
+          </div>
+          <div className="exec-leon-stat">
+            <div className="exec-leon-val">{leonSummary.draft_count ?? 0}</div>
+            <div className="exec-leon-lbl">Pipeline</div>
+          </div>
+          <div className="exec-leon-stat">
+            <div className="exec-leon-val exec-leon-val--gold">{leonSummary.pipeline_value ? '$' + Number(leonSummary.pipeline_value).toLocaleString() : '$0'}</div>
+            <div className="exec-leon-lbl">Value</div>
+          </div>
+        </div>
+        {leonNextDL && (
+          <div className={leonNextDL.days_to_event <= 7 ? 'exec-leon-deadline exec-leon-deadline--hot' : 'exec-leon-deadline'}>
+            <span>&#128197;</span>
+            <span className="exec-leon-dl-name">{leonNextDL.name}</span>
+            <span className="exec-leon-dl-days" style={{ color: leonNextDL.days_to_event <= 7 ? '#e05252' : leonNextDL.days_to_event <= 14 ? '#e09a52' : '#c9a84c' }}>
+              {leonNextDL.days_to_event}d
+            </span>
+            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}>
+              {leonNextDL.launched_products}/{leonNextDL.relevant_products} live
+            </span>
+          </div>
+        )}
+        {leonUrgent.length > 0 && (
+          <div className="exec-leon-action">
+            <span className="exec-leon-action-icon">&#9889;</span>
+            <span className="exec-leon-action-text">
+              {leonUrgent[0].product_name ? leonUrgent[0].product_name.replace(' (MARQUEE)', '') : ''}
+            </span>
+          </div>
+        )}
+        {leonSummary.urgent_action_count === 0 && leonSummary.launched_count > 0 && (
+          <div style={{ fontSize: '11px', color: '#4caf81', marginTop: '6px' }}>&#10003; All products on track</div>
+        )}
+      </div>
     </SectionFrame>
   )
 }
