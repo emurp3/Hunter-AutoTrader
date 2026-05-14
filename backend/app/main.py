@@ -36,7 +36,7 @@ from app.routers.quickcash import router as quickcash_router
 from app.routers.store import router as store_router
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table  # noqa: F401 — registers table
-from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task
+from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -54,7 +54,10 @@ _startup_logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
+    try:
+        create_db_and_tables()
+    except Exception as _dbe:
+        _startup_logger.warning("create_db_and_tables failed: %s", _dbe)
     try:
         from app.database.config import engine
         from app.services.autotrader import bootstrap_intake
@@ -97,6 +100,15 @@ async def lifespan(app: FastAPI):
             max_instances=1,        # Never allow concurrent cycle runs
             misfire_grace_time=30,
         )
+    scheduler.add_job(
+        leon_daily_commerce_task,
+        "cron",
+        hour=8,
+        minute=5,
+        timezone=_SCHEDULER_TZ,
+        id="leon_daily",
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
@@ -141,6 +153,7 @@ app.include_router(diag_router)
 app.include_router(signals_router)   # /signals  — Public-Signal Copy Engine
 app.include_router(forge_router)     # /forge    — Opportunity Forge Engine
 app.include_router(quickcash_router) # /quickcash — Cross-lane Quick-Cash Board
+app.include_router(store_router)     # /store     — Leon Commerce Division
 
 # ── Static file serving (production only) ────────────────────────────────────
 # _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).
