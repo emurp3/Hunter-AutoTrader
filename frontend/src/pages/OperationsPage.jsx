@@ -1853,9 +1853,16 @@ function QuickCashSection({ onAuthFail }) {
 }
 
 
-// ── Commerce Division ──
+// ── Commerce Division ──────────────────────────────────────────────────────────
 const COMMERCE_STATUS_COLORS = { OPERATIONAL: '#4caf81', STANDBY: '#e09a52', OFFLINE: '#e05252' };
-const COMMERCE_BADGE = { draft: '#7a7f8e', created: '#5282e0', launched: '#4caf81', blocked: '#e05252' };
+const COMMERCE_BADGE_COLORS = { draft: '#888', created: '#5282e0', launched: '#4caf81', blocked: '#e05252' };
+
+const COMMERCE_NAV = [
+  { id: 'store',   icon: '🛒', label: 'Manage Store',      desc: 'Products & listings' },
+  { id: 'team',    icon: '👥', label: 'Team Overview',     desc: 'Leon & agents' },
+  { id: 'sales',   icon: '📈', label: 'Sales Performance', desc: 'Revenue & growth' },
+  { id: 'catalog', icon: '👕', label: 'Product Catalog',   desc: 'All designs' },
+];
 
 function CommerceDivisionSection({ onAuthFail }) {
   const { endpoints, refresh } = useSectionData(COMMERCE_LOADERS, onAuthFail);
@@ -1863,195 +1870,238 @@ function CommerceDivisionSection({ onAuthFail }) {
   const agentData = endpointData(endpoints.agent, {});
   const summary = dash.summary || {};
   const deadlines = asArray(dash.deadlines);
-  const urgentActions = asArray(dash.urgent_actions);
   const products = asArray(dash.products);
+  const urgentActions = asArray(dash.urgent_actions);
+  const [activeView, setActiveView] = useState('store');
   const [generating, setGenerating] = useState(false);
   const [genBranded, setGenBranded] = useState(false);
   const [lastGen, setLastGen] = useState(null);
 
-  const marquee = products.filter(p => p.is_marquee);
   const launched = products.filter(p => p.status === 'launched');
-
-  async function autoGenerate() {
-    setGenerating(true);
-    try {
-    const url = '/api/store/auto-generate?branded=' + genBranded;
-    const r = await fetch(url, { method: 'POST', credentials: 'include' });
-    const d = await r.json();
-    setLastGen(d);
-    refresh();
-    } catch(e) { console.error(e); }
-    setGenerating(false);
-  }
+  const drafts = products.filter(p => p.status === 'draft');
+  const pctLive = products.length ? Math.round((launched.length / products.length) * 100) : 0;
 
   async function seedAll() {
     await fetch('/api/store/seed', { method: 'POST', credentials: 'include' });
     refresh();
   }
 
+  async function autoGenerate() {
+    setGenerating(true);
+    try {
+      const r = await fetch('/api/store/auto-generate?branded=' + genBranded, { method: 'POST', credentials: 'include' });
+      const d = await r.json();
+      setLastGen(d);
+      refresh();
+    } catch(e) { console.error(e); }
+    setGenerating(false);
+  }
+
   async function launchProduct(id) {
-    const url = window.prompt('Enter live store URL:');
+    const url = window.prompt('Enter live store URL (Etsy/Printful):');
     if (!url) return;
     await fetch('/api/store/products/' + id + '/launch?url=' + encodeURIComponent(url), { method: 'POST', credentials: 'include' });
     refresh();
   }
 
   return (
-    <div className="commerce-root">
-      <div className="commerce-hero">
-        <div className="commerce-hero-bg" />
-        <div className="commerce-hero-inner">
-          <div className="commerce-agent-card">
-            <div className="commerce-agent-emblem">
-              <div className="commerce-lion-wrap">
-                <span style={{ fontSize: '3rem' }}>&#129505;</span>
-                <span className="commerce-crown">&#128081;</span>
+    <div className="sm-root">
+
+      {/* ── HERO ── */}
+      <div className="sm-hero">
+        <div className="sm-hero-left">
+          <div className="sm-brand">HUNTER <span className="sm-brand-growing">GROWING</span></div>
+
+          <h1 className="sm-welcome">
+            WELCOME,<br />
+            <span className="sm-welcome-role">STORE MANAGER</span>
+          </h1>
+
+          <p className="sm-subtitle">
+            Your mission is our mission. Manage your store,<br />
+            empower your team, and grow with Hunter.<br />
+            {"Let's build "}<span className="sm-accent">legacy</span>{" together."}
+          </p>
+
+          {/* Real interactive nav cards */}
+          <div className="sm-nav-cards">
+            {COMMERCE_NAV.map(nav => (
+              <button
+                key={nav.id}
+                type="button"
+                className={activeView === nav.id ? 'sm-nav-card sm-nav-card--active' : 'sm-nav-card'}
+                onClick={() => setActiveView(nav.id)}
+              >
+                <span className="sm-nav-icon">{nav.icon}</span>
+                <span className="sm-nav-label">{nav.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <button className="sm-cta" onClick={() => setActiveView('sales')}>
+            &#9121; VIEW DASHBOARD
+          </button>
+
+          <div className="sm-tagline">
+            LEAD.&nbsp;&nbsp;<span className="sm-accent">EMPOWER.</span>&nbsp;&nbsp;GROW. REPEAT.
+          </div>
+        </div>
+
+        {/* Right side: agent visual + stats */}
+        <div className="sm-hero-right">
+          <div className="sm-hero-agent">
+            <div className="sm-agent-crown">&#128081;</div>
+            <div className="sm-agent-lion">&#129505;</div>
+            <div className="sm-agent-name-hero">{agentData.name || 'LEON'}</div>
+            <div className="sm-agent-title-hero">{agentData.role || 'Commerce Division Commander'}</div>
+            <div className="sm-agent-sig-hero">{agentData.signature || 'Est. Always.'}</div>
+          </div>
+
+          <div className="sm-stats-bar">
+            <div className="sm-stat-item">
+              <span className="sm-stat-icon">&#128200;</span>
+              <div>
+                <div className="sm-stat-val">{pctLive}%</div>
+                <div className="sm-stat-lbl">LIVE RATE</div>
               </div>
             </div>
-            <div className="commerce-agent-info">
-              <div className="commerce-agent-name">{agentData.name || 'LEON'}</div>
-              <div className="commerce-agent-role">{agentData.role || 'Commerce Division Commander'}</div>
-              <div className="commerce-agent-badges">
-                <span className="commerce-badge">
-                  <span className="commerce-dot" style={{ background: COMMERCE_STATUS_COLORS['OPERATIONAL'] }} />
-                  OPERATIONAL
-                </span>
-                <span className="commerce-badge">STORE OPS</span>
-                <span className="commerce-badge">EST. ALWAYS</span>
+            <div className="sm-stat-item">
+              <span className="sm-stat-icon">&#128101;</span>
+              <div>
+                <div className="sm-stat-val">{summary.total_products ?? 0}</div>
+                <div className="sm-stat-lbl">PRODUCTS</div>
               </div>
-              <div className="commerce-mission">{agentData.current_mission || 'Launch the collection.'}</div>
-              <div className="commerce-sig">{agentData.signature || 'Leon. Est. Always.'}</div>
             </div>
-            <div className="commerce-stats">
-              {[
-                { v: summary.total_products ?? 0, l: 'Products' },
-                { v: launched.length, l: 'Live' },
-                { v: summary.pipeline_value ? '$' + summary.pipeline_value.toLocaleString() : '$0', l: 'Pipeline' },
-                { v: summary.urgent_action_count ?? 0, l: 'Urgent', hot: true },
-              ].map((s, i) => (
-                <div key={i} className={s.hot ? 'commerce-stat commerce-stat--hot' : 'commerce-stat'}>
-                  <div className="commerce-stat-val">{s.v}</div>
-                  <div className="commerce-stat-lbl">{s.l}</div>
+            <div className="sm-stat-item">
+              <span className="sm-stat-icon">&#127942;</span>
+              <div>
+                <div className="sm-stat-val">{summary.urgent_action_count ?? 0}</div>
+                <div className="sm-stat-lbl">URGENT</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── BODY (sub-views) ── */}
+      <div className="sm-body">
+
+        {activeView === 'store' && (
+          <div className="sm-section">
+            <div className="sm-section-hd">&#128722; MANAGE STORE</div>
+            <div className="sm-toolbar">
+              <button className="sm-btn sm-btn--gold" onClick={seedAll}>Load All Products</button>
+              <label className="sm-lbl">
+                <input type="checkbox" checked={genBranded} onChange={e => setGenBranded(e.target.checked)} />
+                &nbsp;Hunter Leon branded
+              </label>
+              <button className="sm-btn sm-btn--gold" onClick={autoGenerate} disabled={generating}>
+                {generating ? '\u23f3 Creating\u2026' : '\u26a1 Auto-Generate'}
+              </button>
+              <button className="sm-btn" onClick={refresh}>Refresh</button>
+            </div>
+            {lastGen && !lastGen.error && (
+              <div className="sm-gen">
+                <div className="sm-gen-lbl">&#10024; LEON JUST CREATED</div>
+                <div className="sm-gen-name">{lastGen.name}</div>
+                <div className="sm-gen-desc">{lastGen.description}</div>
+                <div className="sm-gen-prompt">&#128247; {lastGen.image_prompt}</div>
+                <div className="sm-gen-action">Next: {lastGen.next_action}</div>
+              </div>
+            )}
+            {urgentActions.length > 0 && (
+              <div className="sm-urgent">
+                <div className="sm-urgent-hd">&#9888;&#65039; ACTION QUEUE</div>
+                {urgentActions.map((a, i) => (
+                  <div key={i} className={a.is_marquee ? 'sm-action sm-action--hot' : 'sm-action'}>
+                    <span className="sm-action-name">{a.product_name ? a.product_name.replace(' (MARQUEE)', '') : ''}</span>
+                    <span className="sm-action-text">{(a.action || '').slice(0, 80)}</span>
+                    {a.price && <span className="sm-action-price">{'$' + a.price}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeView === 'team' && (
+          <div className="sm-section">
+            <div className="sm-section-hd">&#128101; TEAM OVERVIEW</div>
+            <div className="sm-agent-profile">
+              <div className="sm-agent-lion-lg">&#129505;</div>
+              <div>
+                <div className="sm-agent-n">{agentData.name || 'LEON'}</div>
+                <div className="sm-agent-r">{agentData.role || 'Commerce Division Commander'}</div>
+                <div className="sm-agent-m">{agentData.current_mission || 'Launch the collection.'}</div>
+                <div className="sm-agent-s">{agentData.signature || 'Leon. Est. Always.'}</div>
+                <div className="sm-agent-specs">
+                  {(agentData.specialties || ['AOP Polo Collection', 'Heritage Brand Strategy', 'POD Pipeline Management']).map((s, i) => (
+                    <span key={i} className="sm-spec">{s}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeView === 'sales' && (
+          <div className="sm-section">
+            <div className="sm-section-hd">&#128200; SALES PERFORMANCE</div>
+            <div className="sm-metrics">
+              <div className="sm-metric"><div className="sm-metric-val">{summary.total_products ?? 0}</div><div className="sm-metric-lbl">Total Products</div></div>
+              <div className="sm-metric"><div className="sm-metric-val">{launched.length}</div><div className="sm-metric-lbl">Live Listings</div></div>
+              <div className="sm-metric"><div className="sm-metric-val">{drafts.length}</div><div className="sm-metric-lbl">In Pipeline</div></div>
+              <div className="sm-metric sm-metric--gold">
+                <div className="sm-metric-val">{'$' + (summary.pipeline_value || 0).toLocaleString()}</div>
+                <div className="sm-metric-lbl">Pipeline Value</div>
+              </div>
+            </div>
+            <div className="sm-section-hd" style={{ marginTop: '1.5rem' }}>&#128198; DEADLINES</div>
+            <div className="sm-deadlines">
+              {deadlines.map((dl, i) => (
+                <div key={i} className={dl.urgent || dl.overdue ? 'sm-dl sm-dl--hot' : 'sm-dl'}>
+                  <div className="sm-dl-name">{dl.name}</div>
+                  <div className="sm-dl-days" style={{ color: dl.overdue ? '#e05252' : dl.urgent ? '#e09a52' : '#c9a84c' }}>
+                    {dl.overdue ? 'OVERDUE' : dl.days_to_event + 'd'}
+                  </div>
+                  <div className="sm-dl-sub">List by {dl.list_by}</div>
+                  <div className="sm-dl-sub">{dl.launched_products}/{dl.relevant_products} live</div>
                 </div>
               ))}
             </div>
           </div>
-          <div className="commerce-deadlines">
-            {deadlines.map((dl, i) => (
-              <div key={i} className={dl.urgent || dl.overdue ? 'commerce-dl-card commerce-dl-card--hot' : 'commerce-dl-card'}>
-                <div className="commerce-dl-name">{dl.name}</div>
-                <div className="commerce-dl-days" style={{ color: dl.overdue ? '#e05252' : dl.urgent ? '#e09a52' : '#c9a84c' }}>
-                  {dl.overdue ? 'OVERDUE' : dl.days_to_event + 'd'}
-                </div>
-                <div className="commerce-dl-sub">List by {dl.list_by}</div>
-                <div className="commerce-dl-sub">{dl.launched_products}/{dl.relevant_products} live</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="commerce-body">
-        <div className="commerce-toolbar">
-          <label className="commerce-lbl">
-            <input type="checkbox" checked={genBranded} onChange={e => setGenBranded(e.target.checked)} />
-            Hunter Leon branded
-          </label>
-          <button className="commerce-btn commerce-btn--gold" onClick={autoGenerate} disabled={generating}>
-            {generating ? '⏳ Creating…' : '⚡ Leon: Auto-Generate'}
-          </button>
-          <button className="commerce-btn" onClick={seedAll}>Load All Products</button>
-          <button className="commerce-btn" onClick={refresh}>Refresh</button>
-          <span className="commerce-lbl" style={{ marginLeft: 'auto' }}>{products.length - launched.length} in pipeline · {launched.length} live</span>
-        </div>
-
-        {lastGen && !lastGen.error && (
-          <div className="commerce-gen-card">
-            <div className="commerce-gen-label">✨ LEON JUST CREATED</div>
-            <div className="commerce-gen-name">{lastGen.name}</div>
-            <div className="commerce-gen-desc">{lastGen.description}</div>
-            <div className="commerce-gen-prompt">Image prompt: {lastGen.image_prompt}</div>
-            <div className="commerce-gen-action">Next: {lastGen.next_action}</div>
-          </div>
         )}
 
-        {marquee.length > 0 && (
-          <div className="commerce-section">
-            <div className="commerce-section-hd">🔥 MARQUEE PIECES</div>
-            <div className="commerce-marquee-grid">
-              {marquee.map(p => <CommerceProductCard key={p.id} p={p} onLaunch={launchProduct} />)}
-            </div>
-          </div>
-        )}
-
-        <div className="commerce-section">
-          <div className="commerce-section-hd">FULL PIPELINE ({products.length})</div>
-          {products.length === 0
-            ? <div className="commerce-empty">No products seeded yet. Click 'Load All Products'.</div>
-            : (
-              <div className="commerce-pipeline">
-                <div className="commerce-pipeline-hd">
-                  <span>Product</span><span>Platform</span><span>Status</span>
-                  <span>Price</span><span>Margin</span><span>Next Action</span><span>Act</span>
-                </div>
-                {products.map(p => (
-                  <div key={p.id} className={p.is_marquee ? 'commerce-pipeline-row commerce-pipeline-row--marquee' : 'commerce-pipeline-row'}>
-                    <div>
-                      {p.is_marquee && <span className="commerce-marquee-pip">&#128293;</span>}
-                      <span style={{ fontSize: '12px' }}>{p.name.replace(' (MARQUEE)', '')}</span>
-                    </div>
-                    <span style={{ fontSize: '11px', textTransform: 'uppercase' }}>{p.platform}</span>
-                    <span style={{ fontSize: '11px', color: COMMERCE_BADGE[p.status] || '#7a7f8e' }}>{(p.status||'').toUpperCase()}</span>
-                    <span style={{ fontSize: '12px' }}>{p.price ? '$' + p.price.toFixed(0) : '—'}</span>
-                    <span style={{ fontSize: '12px', color: 'var(--green)' }}>{p.margin ? (p.margin*100).toFixed(0)+'%' : '—'}</span>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
-                      {(p.next_action || '').replace(/[⚨🔥].*?— /g, '').slice(0,60)}
-                    </span>
-                    <div>
+        {activeView === 'catalog' && (
+          <div className="sm-section">
+            <div className="sm-section-hd">&#128085; PRODUCT CATALOG ({products.length})</div>
+            {products.length === 0
+              ? <div className="sm-empty">No products yet. Go to Manage Store and click Load All Products.</div>
+              : (
+                <div className="sm-catalog-grid">
+                  {products.map(p => (
+                    <div key={p.id} className={p.is_marquee ? 'sm-card sm-card--marquee' : 'sm-card'}>
+                      <div className="sm-card-icon">{p.platform === 'etsy' ? '\uD83D\uDECD\uFE0F' : '\uD83D\uDC55'}</div>
+                      {p.is_marquee && <div className="sm-card-marquee">&#128293; MARQUEE</div>}
+                      <div className="sm-card-name">{p.name.replace(' (MARQUEE)', '')}</div>
+                      <div className="sm-card-meta">
+                        <span style={{ color: COMMERCE_BADGE_COLORS[p.status] || '#888' }}>{(p.status || '').toUpperCase()}</span>
+                        {p.price && <span style={{ color: '#b8960c', fontWeight: 700 }}>{'$' + p.price}</span>}
+                        {p.margin && <span style={{ color: '#4caf81' }}>{(p.margin * 100).toFixed(0) + '%'}</span>}
+                      </div>
+                      <div className="sm-card-mfg">{p.manufacturer || 'Printful'}</div>
                       {p.url
-                        ? <a href={p.url} target="_blank" rel="noreferrer" className="commerce-btn commerce-btn--go" style={{ fontSize: '10px', padding: '3px 8px' }}>Open</a>
-                        : <button className="commerce-btn" style={{ fontSize: '10px', padding: '3px 8px' }} onClick={() => launchProduct(p.id)}>Launch</button>
+                        ? <a href={p.url} target="_blank" rel="noreferrer" className="sm-btn sm-btn--go" style={{ marginTop: '10px', display: 'inline-block', fontSize: '11px' }}>Open Store</a>
+                        : <button className="sm-btn" style={{ marginTop: '10px', fontSize: '11px' }} onClick={() => launchProduct(p.id)}>Mark Launched</button>
                       }
                     </div>
-                  </div>
-                ))}
-              </div>
-            )
-          }
-        </div>
-
-        {urgentActions.length > 0 && (
-          <div className="commerce-section">
-            <div className="commerce-section-hd">⚨️ LEON'S ACTION QUEUE</div>
-            {urgentActions.map((a, i) => (
-              <div key={i} className={a.is_marquee ? 'commerce-action commerce-action--hot' : 'commerce-action'}>
-                <span className="commerce-action-name">{a.product_name?.replace(' (MARQUEE)', '')}</span>
-                <span className="commerce-action-text">{(a.action||'').replace(/[⚨🔥].*?— /g,'').slice(0,80)}</span>
-                {a.price && <span className="commerce-action-price">${a.price}</span>}
-              </div>
-            ))}
+                  ))}
+                </div>
+              )
+            }
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function CommerceProductCard({ p, onLaunch }) {
-  return (
-    <div className="commerce-product-card">
-      <div className="commerce-product-card-name">{p.name.replace(' (MARQUEE)', '')}</div>
-      <div className="commerce-product-card-meta">
-        <span>{p.platform}</span>
-        <span style={{ color: COMMERCE_BADGE[p.status] || '#7a7f8e', fontSize: '10px' }}>{(p.status||'').toUpperCase()}</span>
-        {p.price && <span style={{ color: 'var(--gold)' }}>${p.price}</span>}
-        {p.margin && <span style={{ color: 'var(--green)' }}>{(p.margin*100).toFixed(0)}%</span>}
-      </div>
-      <div className="commerce-product-card-note">{p.notes || p.next_action}</div>
-      {p.url
-        ? <a href={p.url} target="_blank" rel="noreferrer" className="commerce-btn commerce-btn--go" style={{ fontSize:'10px',marginTop:'8px',display:'inline-block' }}>Open Store &#8599;</a>
-        : <button className="commerce-btn" style={{ fontSize:'10px',marginTop:'8px' }} onClick={() => onLaunch(p.id)}>Mark Launched</button>
-      }
     </div>
   );
 }
