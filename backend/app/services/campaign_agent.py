@@ -85,15 +85,9 @@ def generate_campaign_brief(
     )
 
     social_caption = (
-        f"{pack.get('sales_copy', product.name)}
-
-"
-        f"{pack.get('description', '')[:120]}
-
-"
-        f"Available now on Etsy — link in bio.
-
-"
+        f"{pack.get('sales_copy', product.name)}\n\n"
+        f"{pack.get('description', '')[:120]}\n\n"
+        "Available now on Etsy \u2014 link in bio.\n\n"
         + " ".join(hashtags[:6])
     )
 
