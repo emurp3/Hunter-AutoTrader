@@ -115,7 +115,7 @@ HUNTER_LEON_PRODUCTS = [
         "source_opportunity": "Hunter Leon Brand — Luxury Footwear",
         "status": "draft",
         "next_action": "Export HL monogram SVG and upload to JetPrint configurator",
-    },,
+    },
     {
         "name": "Hunter Leon Sneaker — Lion Insignia (White/Black)",
         "design_variant": "lion_insignia_white",
