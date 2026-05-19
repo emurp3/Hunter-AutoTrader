@@ -16,56 +16,69 @@ services:
       - key: HUNTER_REPORTS_PATH
         value: /data/reports
 
-      # Execution mode (sandbox = paper trading, never live without explicit change)
+      # Execution — live trading via Alpaca
       - key: EXECUTION_MODE
         value: live
+      - key: EXECUTION_PROVIDER
+        value: alpaca
+      - key: ALPACA_ENABLED
+        value: "true"
+      - key: ALPACA_BASE_URL
+        value: https://api.alpaca.markets
+
+      # Alpaca credentials — set values in Render dashboard, never commit
+      # Legacy names (SANDBOX_*) are kept — config.py resolves them as live credentials
+      - key: SANDBOX_API_KEY
+        sync: false
+      - key: SANDBOX_SECRET_KEY
+        sync: false
+      # Canonical names — set whichever your Alpaca account uses
+      - key: LIVE_API_KEY
+        sync: false
+      - key: LIVE_SECRET_KEY
+        sync: false
+
+      # Auth / admin
       - key: HUNTER_JWT_SECRET
         sync: false
       - key: HUNTER_ADMIN_PASSWORD
         sync: false
       - key: HUNTER_WORKER_TOKEN
         sync: false
+
+      # Opportunity intake
       - key: AUTOTRADER_SOURCE_TYPE
         value: file
       - key: AUTOTRADER_FILE_PATH
         value: /opt/render/project/src/backend/data/seed_opportunities.json
 
-      # Alpaca paper trading credentials — set these in the Render dashboard
-      - key: SANDBOX_API_KEY
+      # Congressional signal feed — Capitol Trades went offline May 2026
+      # Primary: Politician Trade Tracker via RapidAPI
+      - key: RAPIDAPI_POLITICIAN_KEY
         sync: false
-      - key: SANDBOX_SECRET_KEY
+      # Fallback: QuiverQuant
+      - key: QUIVER_QUANT_API_KEY
         sync: false
 
-      # Optional: advisor AI keys — set in Render dashboard if used
-      # - key: VENICE_API_KEY
-      #   sync: false
-      # - key: DEEPSEEK_API_KEY
-      #   sync: false
-      # - key: GROK_API_KEY
-      #   sync: false
+      # Advisor AI keys — daily opportunity rotation (Venice Mon/Thu, Grok Tue/Fri/Sun, DeepSeek Wed/Sat)
+      - key: VENICE_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
 
-      # Operating account (Robins Financial checking — label only, no credentials)
+      # Operating account (label only — no credentials stored here)
       - key: HUNTER_OPERATING_ACCOUNT_PROVIDER
         value: robins_financial
-      # HUNTER_INITIAL_BANKROLL — set to your actual starting checking balance in USD
       - key: HUNTER_INITIAL_BANKROLL
-        value: "100"
+        value: "163"
 
-      # Facebook Marketplace compliant execution lane
-      # MARKETPLACE_FB_LANE_ENABLED — set to true when ready to use the lane
+      # Facebook Marketplace lane (disabled until ready)
       - key: MARKETPLACE_FB_LANE_ENABLED
         value: "false"
-      # MARKETPLACE_FB_PROVIDER — api2cart_facebook_marketplace | autods_facebook_marketplace | manual
       - key: MARKETPLACE_FB_PROVIDER
         value: manual
-      # Provider API keys — set these in the Render dashboard, never commit values
-      # - key: API2CART_API_KEY
-      #   sync: false
-      # - key: AUTODS_API_KEY
-      #   sync: false
-      # - key: AUTODS_PARTNER_TOKEN
-      #   sync: false
-      # MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED — set true to enable customer message drafting
       - key: MARKETPLACE_FB_MESSAGE_SUPPORT_ENABLED
         value: "false"
       - key: MARKETPLACE_FB_RATE_LIMIT_PER_HOUR
