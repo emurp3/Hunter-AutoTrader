@@ -95,7 +95,7 @@
     "description": "Offer one-time Shopify store audits to DTC brands under $500k revenue — identifying conversion leaks, dead SKUs, and checkout friction.",
     "estimated_profit": 480,
     "currency": "USD",
-    "confidence": 0.80,
+    "confidence": 0.8,
     "next_action": "build a 10-point audit template and pitch three Shopify brands found via Twitter/X product drops",
     "category": "consulting",
     "source": "hunter_seed",
@@ -128,5 +128,47 @@
     "url": "https://www.facebook.com/groups/",
     "timestamp": "2026-04-03T08:00:00Z",
     "notes": "Charge the sub a flat monthly access fee or a per-job referral cut of 8–12%. Keep matching manual at first."
+  },
+  {
+    "id": "seed-trading-spy-01",
+    "description": "SPY Intraday Momentum Trade",
+    "estimated_profit": 28,
+    "currency": "USD",
+    "confidence": 0.72,
+    "next_action": "Place market buy order for SPY, hold 4h, set 1.5% trailing stop",
+    "category": "trading",
+    "source": "hunter_seed",
+    "ticker": "SPY",
+    "url": "https://alpaca.markets",
+    "timestamp": "2026-05-21T08:00:00Z",
+    "notes": "ticker=SPY lane=trading handoff_path=trading executability=fully_executable"
+  },
+  {
+    "id": "seed-trading-nvda-02",
+    "description": "NVDA Swing Trade on AI Momentum",
+    "estimated_profit": 45,
+    "currency": "USD",
+    "confidence": 0.68,
+    "next_action": "Place market buy order for NVDA, target +2%, stop -1%",
+    "category": "trading",
+    "source": "hunter_seed",
+    "ticker": "NVDA",
+    "url": "https://alpaca.markets",
+    "timestamp": "2026-05-21T08:01:00Z",
+    "notes": "ticker=NVDA lane=trading handoff_path=trading executability=fully_executable"
+  },
+  {
+    "id": "seed-trading-qqq-03",
+    "description": "QQQ Tech Sector Mean Reversion",
+    "estimated_profit": 22,
+    "currency": "USD",
+    "confidence": 0.65,
+    "next_action": "Place fractional market buy for QQQ, 1-day hold, 0.8% stop loss",
+    "category": "trading",
+    "source": "hunter_seed",
+    "ticker": "QQQ",
+    "url": "https://alpaca.markets",
+    "timestamp": "2026-05-21T08:02:00Z",
+    "notes": "ticker=QQQ lane=trading handoff_path=trading executability=fully_executable"
   }
 ]
