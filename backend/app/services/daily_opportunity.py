@@ -112,7 +112,8 @@ Response format:
   "handoff_path": "marketplace_listing | service_outreach | trading | digital_product_launch | manual",
   "executability": "fully_executable" | "semi_executable" | "manual_only",
   "human_dependency_reason": "null if fully_executable, else short reason why a human must act",
-  "required_human_actions": "null if fully_executable, else pipe-separated list: action1 | action2"
+  "required_human_actions": "null if fully_executable, else pipe-separated list: action1 | action2",
+  "ticker": "UPPERCASE_SYMBOL_or_null — REQUIRED for trading lane (e.g. SPY, NVDA, BTC/USD), null otherwise"
 }"""
 
 _OPPORTUNITY_USER_PROMPT = """Today is {today}. It is {weekday}.
@@ -182,6 +183,7 @@ def generate_today_opportunity(session: Session) -> DailyOpportunity:
         handoff_path=result.get("handoff_path"),
         status=OpportunityStatus.pending,
         raw_response_json=result.get("raw_json"),
+        ticker=result.get("ticker"),
         executability=result.get("executability", ExecutabilityClass.manual_only),
         human_dependency_reason=result.get("human_dependency_reason"),
         required_human_actions=result.get("required_human_actions"),
@@ -413,6 +415,152 @@ def _call_advisor_api(advisor: str, cfg: dict, today_str: str, weekday_str: str)
     if req_human and str(req_human).lower() in ("null", "none", ""):
         req_human = None
 
+    ticker_raw = parsed.get("ticker", None)
+    ticker = None
+    if ticker_raw and str(ticker_raw).strip().lower() not in ("null", "none", ""):
+        import re as _re
+        m = _re.match(r'^[A-Z0-9/\-]{1,10}
+        "lane": lane,
+        "rationale": str(parsed.get("rationale", ""))[:1000],
+        "required_action": str(parsed.get("required_action", ""))[:500],
+        "expected_profit": float(parsed.get("expected_profit", 0.0)),
+        "confidence": confidence,
+        "handoff_path": parsed.get("handoff_path"),
+        "executability": executability,
+        "human_dependency_reason": str(human_dep)[:500] if human_dep else None,
+        "required_human_actions": str(req_human)[:500] if req_human else None,
+        "raw_json": json.dumps(data),
+        "ticker": ticker,
+    }
+
+
+def _current_week_start() -> date:
+    today = date.today()
+    return today.replace(day=today.day - today.weekday())  # Monday of current week
+
+
+def _upsert_weekly_score(
+    advisor: str,
+    session: Session,
+    *,
+    generated: int = 0,
+    dispatched: int = 0,
+    succeeded: int = 0,
+    profit: float = 0.0,
+) -> AdvisorWeeklyScore:
+    ws = _current_week_start()
+    stmt = select(AdvisorWeeklyScore).where(
+        AdvisorWeeklyScore.week_start == ws,
+        AdvisorWeeklyScore.advisor_name == advisor,
+    )
+    row = session.exec(stmt).first()
+    if not row:
+        row = AdvisorWeeklyScore(week_start=ws, advisor_name=advisor)
+        session.add(row)
+
+    row.opportunities_generated += generated
+    row.opportunities_dispatched += dispatched
+    row.opportunities_succeeded += succeeded
+    row.total_actual_profit += profit
+    row.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _refresh_winner(ref_date: date, session: Session) -> None:
+    """Mark the current weekly winner (highest profit, then most successes)."""
+    ws = _current_week_start()
+    stmt = select(AdvisorWeeklyScore).where(AdvisorWeeklyScore.week_start == ws)
+    rows = list(session.exec(stmt).all())
+    if not rows:
+        return
+    best = max(rows, key=lambda r: (r.total_actual_profit, r.opportunities_succeeded))
+    for r in rows:
+        r.is_winner = r.advisor_name == best.advisor_name
+        r.updated_at = datetime.now(timezone.utc)
+        session.add(r)
+    session.commit()
+
+
+def _ensure_pipeline_source(opp: DailyOpportunity, session: Session) -> IncomeSource:
+    """
+    Mirror the daily opportunity into the main IncomeSource pipeline so the
+    existing dashboard, strategy, and packet flows can reuse it.
+    """
+    source_id = get_source_id_for_opportunity(opp)
+    source = session.exec(
+        select(IncomeSource).where(IncomeSource.source_id == source_id)
+    ).first()
+
+    notes_parts = [
+        f"daily_opportunity_id={opp.id}",
+        *([(f"ticker={opp.ticker}")] if getattr(opp, "ticker", None) else []),
+        f"assigned_advisor={opp.assigned_advisor}",
+        f"actual_advisor={opp.actual_advisor}",
+        f"lane={opp.lane}",
+        f"executability={opp.executability}",
+        f"status={opp.status}",
+        f"rationale={opp.rationale}",
+    ]
+    if opp.handoff_path:
+        notes_parts.append(f"handoff_path={opp.handoff_path}")
+    if opp.human_dependency_reason:
+        notes_parts.append(f"human_dependency_reason={opp.human_dependency_reason}")
+    if opp.required_human_actions:
+        notes_parts.append(f"required_human_actions={opp.required_human_actions}")
+    notes = "\n".join(notes_parts)
+
+    created = False
+    if not source:
+        source = IncomeSource(
+            source_id=source_id,
+            description=opp.title,
+            estimated_profit=max(0.0, opp.expected_profit),
+            currency="USD",
+            status=SourceStatus.new,
+            date_found=opp.opp_date,
+            next_action=opp.required_action,
+            notes=notes,
+            origin_module="daily_opportunity",
+            category=opp.lane,
+            confidence=opp.confidence,
+        )
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+        created = True
+    else:
+        source.description = opp.title
+        source.estimated_profit = max(0.0, opp.expected_profit)
+        source.next_action = opp.required_action
+        source.notes = notes
+        source.origin_module = source.origin_module or "daily_opportunity"
+        source.category = opp.lane
+        source.confidence = opp.confidence
+        session.add(source)
+        session.commit()
+        session.refresh(source)
+
+    if created or source.score is None:
+        from app.services.orchestrator import process_new_opportunity
+
+        process_new_opportunity(source, session)
+
+    # Daily opportunities should always have a surfaced packet and a linked
+    # strategy candidate even when their score lands below the normal
+    # high/elite auto-strategy threshold used by the generic orchestrator.
+    from app.services.action_packets import generate_packet, get_packet
+    from app.services.strategies import create_strategy_from_opportunity
+
+    if not get_packet(source.source_id, session):
+        generate_packet(source.source_id, session)
+
+    create_strategy_from_opportunity(source.source_id, session)
+
+    return source
+, str(ticker_raw).strip().upper())
+        ticker = m.group(0) if m else None
     return {
         "title": str(parsed.get("title", "Untitled opportunity"))[:200],
         "lane": lane,
