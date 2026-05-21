@@ -419,7 +419,10 @@ def _call_advisor_api(advisor: str, cfg: dict, today_str: str, weekday_str: str)
     ticker = None
     if ticker_raw and str(ticker_raw).strip().lower() not in ("null", "none", ""):
         import re as _re
-        m = _re.match(r'^[A-Z0-9/\-]{1,10}
+        m = _re.match(r'^[A-Z0-9/.-]{1,10}$', str(ticker_raw).strip().upper())
+        ticker = m.group(0) if m else None
+    return {
+        "title": str(parsed.get("title", "Untitled opportunity"))[:200],
         "lane": lane,
         "rationale": str(parsed.get("rationale", ""))[:1000],
         "required_action": str(parsed.get("required_action", ""))[:500],
@@ -432,6 +435,7 @@ def _call_advisor_api(advisor: str, cfg: dict, today_str: str, weekday_str: str)
         "raw_json": json.dumps(data),
         "ticker": ticker,
     }
+
 
 
 def _current_week_start() -> date:
@@ -559,21 +563,6 @@ def _ensure_pipeline_source(opp: DailyOpportunity, session: Session) -> IncomeSo
     create_strategy_from_opportunity(source.source_id, session)
 
     return source
-, str(ticker_raw).strip().upper())
-        ticker = m.group(0) if m else None
-    return {
-        "title": str(parsed.get("title", "Untitled opportunity"))[:200],
-        "lane": lane,
-        "rationale": str(parsed.get("rationale", ""))[:1000],
-        "required_action": str(parsed.get("required_action", ""))[:500],
-        "expected_profit": float(parsed.get("expected_profit", 0.0)),
-        "confidence": confidence,
-        "handoff_path": parsed.get("handoff_path"),
-        "executability": executability,
-        "human_dependency_reason": str(human_dep)[:500] if human_dep else None,
-        "required_human_actions": str(req_human)[:500] if req_human else None,
-        "raw_json": json.dumps(data),
-    }
 
 
 def _current_week_start() -> date:
