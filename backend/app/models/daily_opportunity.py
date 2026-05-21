@@ -55,6 +55,7 @@ class DailyOpportunity(SQLModel, table=True):
     human_dependency_reason: Optional[str] = Field(default=None)
     # Pipe-delimited list of specific human actions needed (null when fully_executable)
     required_human_actions: Optional[str] = Field(default=None)
+    ticker: Optional[str] = Field(default=None)  # Ticker symbol for trading lane (e.g. SPY, NVDA, QQQ)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = Field(default=None)
 
