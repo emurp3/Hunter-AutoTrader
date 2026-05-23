@@ -35,6 +35,7 @@ class ExecutionPath(str, Enum):
     automation_proposal = "automation_proposal"  # code/automation consulting
     affiliate_content = "affiliate_content"   # content + affiliate monetization
     trading = "trading"                        # Alpaca market execution
+    referral_network = "referral_network"      # local referral broker network
     advisor_review = "advisor_review"          # needs advisor consensus first
     none = "none"                              # no path assigned
 

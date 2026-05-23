@@ -85,6 +85,7 @@ def _determine_action_state(source: IncomeSource, t: dict[str, float]) -> Action
 # Priority order: category overrides > origin_module default
 _CATEGORY_PATH_MAP: dict[str, ExecutionPath] = {
     "trading": ExecutionPath.trading,
+    "referral-network": ExecutionPath.referral_network,
     "electronics-flip": ExecutionPath.arbitrage,
     "home-goods-flip": ExecutionPath.arbitrage,
     "collectible-flip": ExecutionPath.arbitrage,
