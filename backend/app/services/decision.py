@@ -85,6 +85,8 @@ def _determine_action_state(source: IncomeSource, t: dict[str, float]) -> Action
 # Priority order: category overrides > origin_module default
 _CATEGORY_PATH_MAP: dict[str, ExecutionPath] = {
     "trading": ExecutionPath.trading,
+    "referral-network": ExecutionPath.referral_network,
+    "referral_network": ExecutionPath.referral_network,
     "electronics-flip": ExecutionPath.arbitrage,
     "home-goods-flip": ExecutionPath.arbitrage,
     "collectible-flip": ExecutionPath.arbitrage,
@@ -312,6 +314,26 @@ def _generate_action_payload(source: IncomeSource, path: ExecutionPath) -> dict[
             "requires": ["symbol", "qty_or_notional", "side"],
             "time_to_revenue_estimate": "minutes to days",
             "priority_action": next_action or "Generate trade order and submit for review",
+            "confidence": confidence,
+        }
+
+    if path == ExecutionPath.referral_network:
+        import os as _os
+        return {
+            "path": "referral_network",
+            "description": desc[:80],
+            "action": "Identify overflow businesses and matching subs, broker connection, collect referral fee",
+            "prospect_target": 5,
+            "sub_target": 1,
+            "capital_required": round(profit * 0.15, 2),
+            "service_types": ["HVAC", "plumbers", "landscapers", "general contractors"],
+            "pitch": (
+                f"Connect {round(profit * 0.15 / 5, 0):.0f}/lead overflow operators with subs seeking work — "
+                f"collect referral fee on each successful match."
+            ),
+            "location": _os.getenv("HUNTER_SERVICE_LOCATION", ""),
+            "time_to_revenue_estimate": "1–2 weeks",
+            "priority_action": next_action or "Identify 5 local HVAC operators with overflow + 1 sub seeking leads",
             "confidence": confidence,
         }
 
