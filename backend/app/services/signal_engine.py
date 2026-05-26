@@ -14,6 +14,7 @@ from app.models.copy_signal import CopySignal, SignalScanState
 from app.services.sources.congress_feed import CongressFeedAdapter
 from app.services.sources.sec_edgar import SecEdgarAdapter
 from app.services.sources.crypto_signal import CryptoSignalAdapter
+from app.services.sources.oge_278t import Oge278TAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,22 @@ HIGH_VALUE_COMMITTEES = {
     "energy", "health", "commerce", "foreign relations",
 }
 
+# Executive roles that get a scoring boost (reused from 278T committee field)
+HIGH_VALUE_EXEC_ROLES = {
+    "president", "vice president", "secretary of treasury",
+    "secretary of commerce", "secretary of state", "trade advisor",
+    "doge", "special advisor",
+}
+
 
 def score_signal(signal: dict) -> float:
     score = 0.0
     src = str(signal.get("source", "")).lower()
-    if "congress" in src:
+
+    # Source base scores
+    if "oge_278t" in src:
+        score += 0.30   # Executive branch — highest alpha (decision-makers)
+    elif "congress" in src:
         score += 0.20
     elif "sec" in src:
         score += 0.12
@@ -50,6 +62,8 @@ def score_signal(signal: dict) -> float:
     committee = str(signal.get("committee") or "").lower()
     if any(c in committee for c in HIGH_VALUE_COMMITTEES):
         score += 0.10
+    if any(r in committee for r in HIGH_VALUE_EXEC_ROLES):
+        score += 0.10   # executive role bonus
 
     if str(signal.get("action", "")).lower() == "buy":
         score += 0.05
@@ -72,31 +86,41 @@ def route_signal(confidence: float, latency_hours, amount) -> tuple:
 
 
 
-# ── VIP Watchlist & Auto Micro-Invest ─────────────────────────────────────────
+# ── VIP Watchlist & Auto Micro-Invest ───────────────────────────────────────────────
 
 # VIPs whose trades trigger automatic micro-invest regardless of normal threshold
 VIP_WATCHLIST = {
-    # Presidential / Executive orbit (via SEC Form 4 - DJT insiders)
-    "TRUMP DONALD J":  {"label": "President Trump",      "source": "sec_form4", "ticker_override": "DJT"},
-    "Trump Donald":    {"label": "President Trump",      "source": "sec_form4", "ticker_override": "DJT"},
-    "NUNES DEVIN":     {"label": "Devin Nunes (DJT)",    "source": "sec_form4", "ticker_override": "DJT"},
-    "Nunes Devin":     {"label": "Devin Nunes (DJT)",    "source": "sec_form4", "ticker_override": "DJT"},
-    # Congressional VIPs - House
-    "Nancy Pelosi":    {"label": "Speaker Pelosi",       "source": "congress",  "ticker_override": None},
-    "Pelosi Nancy":    {"label": "Speaker Pelosi",       "source": "congress",  "ticker_override": None},
-    "Matt Gaetz":      {"label": "Rep. Gaetz",           "source": "congress",  "ticker_override": None},
-    "Dan Crenshaw":    {"label": "Rep. Crenshaw",        "source": "congress",  "ticker_override": None},
-    "Michael McCaul":  {"label": "Rep. McCaul",          "source": "congress",  "ticker_override": None},
-    # Congressional VIPs - Senate
-    "Mitch McConnell": {"label": "Sen. McConnell",       "source": "congress",  "ticker_override": None},
-    "Chuck Schumer":   {"label": "Sen. Schumer",         "source": "congress",  "ticker_override": None},
-    "Marco Rubio":     {"label": "Sen. Rubio",           "source": "congress",  "ticker_override": None},
-    "Elizabeth Warren":{"label": "Sen. Warren",          "source": "congress",  "ticker_override": None},
-    "Mark Warner":     {"label": "Sen. Warner",          "source": "congress",  "ticker_override": None},
-    "Tommy Tuberville":{"label": "Sen. Tuberville",      "source": "congress",  "ticker_override": None},
-    "Tommy Tubervill": {"label": "Sen. Tuberville",      "source": "congress",  "ticker_override": None},
-    "Josh Hawley":     {"label": "Sen. Hawley",          "source": "congress",  "ticker_override": None},
-    "Pat Toomey":      {"label": "Sen. Toomey",          "source": "congress",  "ticker_override": None},
+    # ─── Executive Branch — OGE Form 278T (personal investment transactions) ──────
+    "Trump, Donald J.": {"label": "President Trump",       "source": "oge_278t",  "ticker_override": None},
+    "Trump, Donald":    {"label": "President Trump",       "source": "oge_278t",  "ticker_override": None},
+    "Vance, JD":        {"label": "VP Vance",              "source": "oge_278t",  "ticker_override": None},
+    "Vance, James D.": {"label": "VP Vance",              "source": "oge_278t",  "ticker_override": None},
+    "Bessent, Scott":   {"label": "Sec. Bessent (Treasury)","source": "oge_278t", "ticker_override": None},
+    "Lutnick, Howard":  {"label": "Sec. Lutnick (Commerce)","source": "oge_278t", "ticker_override": None},
+    "Navarro, Peter":   {"label": "Peter Navarro (Trade)", "source": "oge_278t",  "ticker_override": None},
+    "Musk, Elon":       {"label": "Elon Musk (DOGE)",      "source": "oge_278t",  "ticker_override": None},
+    "Gabbard, Tulsi":  {"label": "DNI Gabbard",           "source": "oge_278t",  "ticker_override": None},
+    "Kennedy, Robert F.": {"label": "Sec. RFK Jr. (HHS)", "source": "oge_278t",  "ticker_override": None},
+    # ─── Presidential / Executive orbit via SEC Form 4 (DJT insiders) ──────────
+    "TRUMP DONALD J":   {"label": "President Trump (DJT)", "source": "sec_form4", "ticker_override": "DJT"},
+    "Trump Donald":     {"label": "President Trump (DJT)", "source": "sec_form4", "ticker_override": "DJT"},
+    "NUNES DEVIN":      {"label": "Devin Nunes (DJT)",     "source": "sec_form4", "ticker_override": "DJT"},
+    "Nunes Devin":      {"label": "Devin Nunes (DJT)",     "source": "sec_form4", "ticker_override": "DJT"},
+    # ─── Congressional VIPs — STOCK Act Form 8 ──────────────────────────
+    "Nancy Pelosi":     {"label": "Speaker Pelosi",        "source": "congress",  "ticker_override": None},
+    "Pelosi Nancy":     {"label": "Speaker Pelosi",        "source": "congress",  "ticker_override": None},
+    "Matt Gaetz":       {"label": "Rep. Gaetz",            "source": "congress",  "ticker_override": None},
+    "Dan Crenshaw":     {"label": "Rep. Crenshaw",         "source": "congress",  "ticker_override": None},
+    "Michael McCaul":   {"label": "Rep. McCaul",           "source": "congress",  "ticker_override": None},
+    "Mitch McConnell":  {"label": "Sen. McConnell",        "source": "congress",  "ticker_override": None},
+    "Chuck Schumer":    {"label": "Sen. Schumer",          "source": "congress",  "ticker_override": None},
+    "Marco Rubio":      {"label": "Sen. Rubio",            "source": "congress",  "ticker_override": None},
+    "Elizabeth Warren": {"label": "Sen. Warren",           "source": "congress",  "ticker_override": None},
+    "Mark Warner":      {"label": "Sen. Warner",           "source": "congress",  "ticker_override": None},
+    "Tommy Tuberville": {"label": "Sen. Tuberville",       "source": "congress",  "ticker_override": None},
+    "Tommy Tubervill":  {"label": "Sen. Tuberville",       "source": "congress",  "ticker_override": None},
+    "Josh Hawley":      {"label": "Sen. Hawley",           "source": "congress",  "ticker_override": None},
+    "Pat Toomey":       {"label": "Sen. Toomey",           "source": "congress",  "ticker_override": None},
 }
 
 VIP_MICRO_INVEST_AMOUNT = 15.00   # dollars per VIP signal (notional)
@@ -139,7 +163,7 @@ def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str) -> dict:
         secret_key = (os.getenv("LIVE_SECRET_KEY") or os.getenv("SANDBOX_SECRET_KEY", "")).strip()
         base_url   = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
 
-        symbol = ticker.split(":")[0]  # strip :US exchange suffix
+        symbol = ticker.split(":")[0]
         side   = "buy" if (action or "buy").lower() != "sell" else "sell"
 
         resp = httpx.post(
@@ -177,7 +201,12 @@ def get_vip_watchlist() -> list[dict]:
 
 
 def run_signal_scan(session: Session, days_back: int = 30) -> dict:
-    adapters = [CongressFeedAdapter(), SecEdgarAdapter(), CryptoSignalAdapter()]
+    adapters = [
+        CongressFeedAdapter(),
+        SecEdgarAdapter(),
+        CryptoSignalAdapter(),
+        Oge278TAdapter(),          # Executive branch 278T — Trump admin trades
+    ]
     new_signals = 0
     skipped = 0
     errors = []
@@ -198,12 +227,8 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
             if existing:
                 skipped += 1
                 continue
-            # ticker may be empty for SEC Form 4 records resolved without a CIK match
-            # allow through — scoring already applies a 0.05 bonus when ticker is present
-            # Use pre-computed decision from crypto adapter if present
             pre_decision = raw.pop("_pre_decision", None)
             confidence = score_signal(raw)
-            # VIP check: auto micro-invest if watchlist match
             _vip = _match_vip(raw.get("filer_name", ""), raw.get("source", ""))
             if _vip:
                 _vticker = _vip.get("ticker_override") or raw.get("ticker", "")
