@@ -232,3 +232,5 @@ class Oge278TAdapter:
         except Exception as exc:
             logger.debug("Oge278T: normalize error: %s", exc)
             return None
+
+# deploy-trigger: 2026-05-29T03:54:48.704Z
