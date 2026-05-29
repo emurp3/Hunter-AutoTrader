@@ -428,6 +428,8 @@ _ORIGIN_TO_TASK_TYPE: dict[str, str] = {
 
 _CATEGORY_TO_TASK_TYPE: dict[str, str] = {
     "marketplace": "marketplace_listing",
+    "referral-network": "referral_broker",
+    "referral_network": "referral_broker",
     "service": "service_outreach",
     "gig": "gig_application",
     "github": "github_bounty",
@@ -556,6 +558,33 @@ def auto_dispatch_for_source(source_id: str, session: Session) -> Optional[Task]
             "contact_email": _sf(_notes, "contact_email"),
             "search_query": _search_query,
             "location": _sos.getenv("HUNTER_SERVICE_LOCATION", ""),
+        }
+
+    if task_type == "referral_broker":
+        import re as _rre
+        import os as _ros
+
+        def _rf(notes: str | None, key: str) -> str | None:
+            if not notes:
+                return None
+            m = _rre.search(rf'\b{_rre.escape(key)}:\s*([^|]+)', notes)
+            return m.group(1).strip() if m else None
+
+        _rnotes = source.notes or ""
+        _next = source.next_action or ""
+        _sq = _rre.search(r'["']([^"']{{5,60}})["']', _next)
+        _search_query = _sq.group(1) if _sq else (source.description or "")[:50]
+
+        spec["referral_broker"] = {
+            "business_types": ["HVAC", "plumber", "landscaper", "general_contractor"],
+            "execution_path": "referral_network",
+            "search_query": _search_query,
+            "location": _ros.getenv("HUNTER_SERVICE_LOCATION", ""),
+            "prospect_target": 5,
+            "sub_target": 1,
+            "referral_fee_model": "flat_per_match",
+            "contact_url": _rf(_rnotes, "contact_url"),
+            "notes": _rnotes,
         }
 
     band_priority = {"elite": 15, "high": 10, "medium": 5, "low": 3}
