@@ -3,6 +3,7 @@ import HeroPage      from './pages/HeroPage'
 import OperationsPage from './pages/OperationsPage'
 import Login          from './pages/Login'
 import StatusPage     from './pages/StatusPage'
+import HunterAssistant from './components/HunterAssistant'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
 const loadStyle = {
@@ -42,6 +43,7 @@ export default function App() {
   return (
     <AuthProvider>
       <AppInner />
+      <HunterAssistant />
     </AuthProvider>
   )
 }
