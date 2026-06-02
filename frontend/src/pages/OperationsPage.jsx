@@ -284,7 +284,21 @@ function sortOpps(opps, by) {
   return copy.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0))
 }
 
-const TRADING_CATS = new Set(['trading', 'options', 'stocks', 'forex', 'crypto', 'equities', 'futures'])
+const HUNTER_CATEGORIES = new Set(['trading', 'stocks', 'options', 'crypto', 'equities', 'forex', 'futures'])
+const TRADING_CATS = HUNTER_CATEGORIES
+
+function isHunterExecutable(opp) {
+  const executionReady = opp?.execution_ready ?? opp?.decision?.execution_ready
+  const executionPath = String(opp?.execution_path ?? opp?.decision?.execution_path ?? '').toLowerCase()
+  const category = String(opp?.category || '').toLowerCase()
+  const originModule = String(opp?.origin_module || '').toLowerCase()
+
+  if (executionPath === 'advisor_review') return false
+
+  return executionReady === true ||
+    HUNTER_CATEGORIES.has(category) ||
+    originModule === 'autotrader'
+}
 
 function bandCls(band) {
   if (band === 'elite') return 'occ-band--elite'
@@ -538,6 +552,16 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
     return sortOpps(opps, view.sort)
   }, [rawOpps, view])
 
+  const hunterOpps = useMemo(() => sortOpps(
+    rawOpps.filter(isHunterExecutable),
+    view.sort
+  ), [rawOpps, view.sort])
+
+  const humanOpps = useMemo(() => sortOpps(
+    rawOpps.filter((o) => !hunterOpps.includes(o)),
+    view.sort
+  ), [rawOpps, hunterOpps, view.sort])
+
   const displayPackets = view.type === 'packets'
     ? (view.packetGroup === 'building' ? buildingPackets : view.packetGroup === 'executed' ? executedPackets : killedPackets)
     : []
@@ -749,53 +773,37 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
 
           {/* Opportunities table */}
           {view.type === 'opps' && (
-            displayOpps.length === 0 ? (
-              <div className="occ-empty">
-                {anyLoading ? 'Loading opportunities…' : 'No opportunities returned from live data.'}
-              </div>
-            ) : (
-              <>
-                <div className="occ-ranked-table">
-                  <div className="occ-ranked-head">
-                    <span>#</span>
-                    <span>OPPORTUNITY</span>
-                    <span>TYPE</span>
-                    <span>CONFIDENCE</span>
-                    <span>EST. UPSIDE</span>
-                    <span>SCORE</span>
-                    <span>STATUS</span>
-                    <span>ACTION</span>
-                  </div>
-                  {displayOpps.slice(0, 12).map((opp, i) => (
-                    <button
-                      key={opp.source_id || i}
-                      type="button"
-                      className={`occ-ranked-row${selectedOpp?.source_id === opp.source_id ? ' occ-ranked-row--selected' : ''}`}
-                      onClick={() => setSelectedOpp(selectedOpp?.source_id === opp.source_id ? null : opp)}
-                    >
-                      <span className="occ-rank">{i + 1}</span>
-                      <span className="occ-opp-name" title={opp.description}>{opp.description || opp.source_id}</span>
-                      <span className="occ-opp-type">{formatText(opp.category || opp.origin_module) || '—'}</span>
-                      <span className="occ-conf-cell">
-                        {opp.confidence != null ? (
-                          <>
-                            <div className="occ-conf-track"><div className="occ-conf-bar" style={{ width: `${Math.min(100, Math.round(Number(opp.confidence) * 100))}%` }} /></div>
-                            <span className="occ-conf-pct">{formatPercent(opp.confidence)}</span>
-                          </>
-                        ) : <span className="occ-na">—</span>}
-                      </span>
-                      <span className="occ-upside-val">{formatCurrency(opp.estimated_profit)}</span>
-                      <span className="occ-score-cell">{opp.score != null ? opp.score : '—'}</span>
-                      <span className={`occ-status-pill occ-status-pill--${String(opp.status || '').toLowerCase()}`}>{formatText(opp.status)}</span>
-                      <span className="occ-open-btn">Open Brief</span>
-                    </button>
-                  ))}
+            <div className="occ-split-grid">
+              <div className="occ-split-col">
+                <div className="occ-split-header occ-split-header--hunter">
+                  <span className="occ-split-icon">🤖</span>
+                  <h2 className="occ-split-title">HUNTER EXECUTES</h2>
+                  <span className="occ-split-count">{hunterOpps.length} opportunities</span>
                 </div>
-                {rawOpps.length > 12 && (
-                  <p className="occ-view-all">Showing top 12 of {rawOpps.length} — click a metric card to sort</p>
+                {hunterOpps.length === 0 ? (
+                  <div className="occ-empty">
+                    {anyLoading ? 'Loading…' : 'No autonomous opportunities in queue.'}
+                  </div>
+                ) : (
+                  <OppTable opps={hunterOpps} selectedOpp={selectedOpp} onSelect={setSelectedOpp} />
                 )}
-              </>
-            )
+              </div>
+
+              <div className="occ-split-col">
+                <div className="occ-split-header occ-split-header--human">
+                  <span className="occ-split-icon">👤</span>
+                  <h2 className="occ-split-title">HUMAN EXECUTES</h2>
+                  <span className="occ-split-count">{humanOpps.length} opportunities</span>
+                </div>
+                {humanOpps.length === 0 ? (
+                  <div className="occ-empty">
+                    {anyLoading ? 'Loading…' : 'No manual opportunities in queue.'}
+                  </div>
+                ) : (
+                  <OppTable opps={humanOpps} selectedOpp={selectedOpp} onSelect={setSelectedOpp} />
+                )}
+              </div>
+            </div>
           )}
 
           {/* Packet table */}
@@ -925,6 +933,47 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
           {insightConf != null && <span className="occ-gauge-sub">weighted avg</span>}
         </div>
       </div>
+    </div>
+  )
+}
+
+function OppTable({ opps, selectedOpp, onSelect }) {
+  return (
+    <div className="occ-ranked-table">
+      <div className="occ-ranked-head">
+        <span>#</span>
+        <span>OPPORTUNITY</span>
+        <span>TYPE</span>
+        <span>CONFIDENCE</span>
+        <span>EST. UPSIDE</span>
+        <span>SCORE</span>
+        <span>STATUS</span>
+        <span>ACTION</span>
+      </div>
+      {opps.slice(0, 10).map((opp, i) => (
+        <button
+          key={opp.source_id || i}
+          type="button"
+          className={`occ-ranked-row${selectedOpp?.source_id === opp.source_id ? ' occ-ranked-row--selected' : ''}`}
+          onClick={() => onSelect(selectedOpp?.source_id === opp.source_id ? null : opp)}
+        >
+          <span className="occ-rank">{i + 1}</span>
+          <span className="occ-opp-name" title={opp.description}>{opp.description || opp.source_id}</span>
+          <span className="occ-opp-type">{formatText(opp.category || opp.origin_module) || '—'}</span>
+          <span className="occ-conf-cell">
+            {opp.confidence != null ? (
+              <>
+                <div className="occ-conf-track"><div className="occ-conf-bar" style={{ width: `${Math.min(100, Math.round(Number(opp.confidence) * 100))}%` }} /></div>
+                <span className="occ-conf-pct">{formatPercent(opp.confidence)}</span>
+              </>
+            ) : <span className="occ-na">—</span>}
+          </span>
+          <span className="occ-upside-val">{formatCurrency(opp.estimated_profit)}</span>
+          <span className="occ-score-cell">{opp.score != null ? opp.score : '—'}</span>
+          <span className={`occ-status-pill occ-status-pill--${String(opp.status || '').toLowerCase()}`}>{formatText(opp.status)}</span>
+          <span className="occ-open-btn">Open Brief</span>
+        </button>
+      ))}
     </div>
   )
 }
