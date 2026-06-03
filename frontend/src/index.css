@@ -3854,6 +3854,73 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   white-space: nowrap;
 }
 
+/* Two-column split */
+.occ-split-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 16px;
+}
+
+.occ-split-col {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.occ-split-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.occ-split-header--hunter { border-bottom-color: rgba(0, 212, 255, 0.3); }
+.occ-split-header--human  { border-bottom-color: rgba(201, 168, 76, 0.3); }
+
+.occ-split-icon { font-size: 18px; }
+
+.occ-split-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #ccc;
+  margin: 0;
+  flex: 1;
+}
+
+.occ-split-count {
+  font-size: 11px;
+  color: #666;
+}
+
+.occ-split-col .occ-ranked-head,
+.occ-split-col .occ-ranked-row {
+  grid-template-columns: 28px minmax(120px, 1.8fr) minmax(70px, 0.8fr) minmax(78px, 1fr) minmax(76px, 0.9fr) minmax(44px, 0.6fr) minmax(66px, 0.8fr) minmax(64px, 0.8fr);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.occ-split-col .occ-ranked-head > span {
+  font-size: 0.52rem;
+}
+
+.occ-split-col .occ-open-btn,
+.occ-split-col .occ-status-pill {
+  font-size: 0.52rem;
+}
+
+@media (max-width: 900px) {
+  .occ-body-grid { grid-template-columns: 1fr; }
+  .occ-table-zone { border-right: none; }
+  .occ-split-grid { grid-template-columns: 1fr; }
+}
+
 /* ── Detail panel ────────────────────────────────────────────────────────────── */
 .occ-detail-panel {
   background: linear-gradient(180deg, rgba(13, 17, 23, 0.95), rgba(10, 13, 19, 0.9));
