@@ -381,9 +381,33 @@ def get_broker_capital_state(
         )
 
 
+
+def _market_is_open_now() -> bool:
+    """Return True if the US equity market is likely open (weekday 09:30-16:00 ET).
+
+    Uses stdlib datetime only — no Alpaca clock call, no extra dependencies.
+    Does not account for market holidays, but is safe for the pre-market cancel guard.
+    """
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # Fallback: assume UTC-4 (works Jun-Nov EDT; off by 1 h during EST)
+        from datetime import timezone, timedelta
+        now_et = datetime.now(timezone(timedelta(hours=-4)))
+    if now_et.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    return (now_et.hour, now_et.minute) >= (9, 30) and now_et.hour < 16
+
 def cancel_stale_buy_orders() -> list[str]:
     """
     Cancel all unfilled buy orders older than STALE_ORDER_TIMEOUT_SECONDS.
+
+    Market-hours guard: when the market is closed, 'day' / 'opg' / 'cls' TIF
+    orders are left alone.  They are waiting for the next open and must not be
+    cancelled before they have a chance to fill.  Only GTC or unknown-TIF
+    orders are culled outside of regular market hours.
+
     Returns list of cancelled order_ids. Never raises.
     """
     if not ALPACA_ENABLED:
@@ -398,6 +422,16 @@ def cancel_stale_buy_orders() -> list[str]:
             if order.status not in open_statuses:
                 continue
             if order.side not in ("buy", "BUY"):
+                continue
+            # Skip 'day' / 'opg' / 'cls' orders when market is closed.
+            raw_tif = ""
+            if isinstance(order.raw, dict):
+                raw_tif = (order.raw.get("time_in_force") or "").lower()
+            if not _market_is_open_now() and raw_tif in ("day", "opg", "cls"):
+                logger.debug(
+                    "cancel_stale_buy_orders: skipping pre-market day order %s (%s)",
+                    order.order_id, order.symbol,
+                )
                 continue
             snap = _map_order_snapshot(order)
             if snap.is_stale:
