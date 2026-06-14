@@ -44,10 +44,10 @@ from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENA
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
 
-# ── Scheduler timezone — all jobs run at 08:00 America/New_York ──────────────
-# First fire: Monday 2026-04-07 08:00 ET (next Monday from deploy).
-# Subsequent fires: every day at 08:00 ET (daily scan) / every Monday (weekly report).
-# misfire_grace_time=3600: if the app was briefly down at 8 AM it still fires
+# ── Scheduler timezone — cron jobs run in America/New_York ───────────────────
+# daily_scan fires at 09:35 ET so market orders are created after the open.
+# weekly_report remains Monday 08:00 ET; Leon commerce remains daily 08:05 ET.
+# misfire_grace_time=3600: if the app was briefly down at the scheduled time it still fires
 # within the hour rather than silently skipping.
 _SCHEDULER_TZ = "America/New_York"
 _startup_logger = logging.getLogger(__name__)
@@ -74,8 +74,8 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         daily_scan_task,
         "cron",
-        hour=8,
-        minute=0,
+        hour=9,
+        minute=35,
         timezone=_SCHEDULER_TZ,
         id="daily_scan",
         misfire_grace_time=3600,
