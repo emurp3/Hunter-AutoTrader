@@ -321,7 +321,7 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
         session,
         summary=f"Order submitted via Alpaca ({'paper' if ALPACA_PAPER else 'live'}) for packet {packet.id}",
         metadata={
-            "packet_id": packet.id,
+            "packet_id": str(packet.id),
             "allocation_id": allocation.id,
             "provider": "alpaca",
             "mode": "paper" if ALPACA_PAPER else "live",
@@ -604,7 +604,7 @@ def _transition_packet_execution(
         new_state=target_state,
         summary=f"Execution state changed: {old_state} -> {target_state}",
         metadata={
-            "packet_id": packet.id,
+            "packet_id": str(packet.id),
             "allocation_id": allocation.id if allocation else None,
             "actual_return": actual_return,
             "success_reason": success_reason,
@@ -920,7 +920,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             reason,
             affected_component="execution.auto_trade",
-            metadata={"source_id": source_id, "packet_id": packet.id if packet else None},
+            metadata={"source_id": source_id, "packet_id": str(packet.id) if packet else None},
         )
         _mark_packet_trade_skipped(packet, session, reason)
         return None
@@ -984,7 +984,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             metadata={
                 "source_id": source_id,
-                "packet_id": packet.id,
+                "packet_id": str(packet.id),
                 "symbol": symbol,
                 "side": side,
                 "notional": notional,
@@ -1004,7 +1004,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
                 "execution.status",
                 metadata={
                     "source_id": source_id,
-                    "packet_id": packet.id,
+                    "packet_id": str(packet.id),
                     "skip_reason": "provider_order_already_in_flight",
                 },
             )
@@ -1155,7 +1155,7 @@ def _packet_payload(packet: ActionPacket, session: Session) -> dict:
         symbol=provider_order.symbol if provider_order else None,
     )
     return {
-        "packet_id": packet.id,
+        "packet_id": str(packet.id),
         "source_id": packet.source_id,
         "opportunity_summary": packet.opportunity_summary,
         "status": packet.status,
