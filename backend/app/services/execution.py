@@ -944,7 +944,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             reason,
             affected_component="execution.auto_trade",
-            metadata={"source_id": source_id, "packet_id": packet.id},
+            metadata={"source_id": source_id, "packet_id": str(packet.id)},
         )
         _mark_packet_trade_skipped(packet, session, reason)
         return None
@@ -957,7 +957,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             reason,
             affected_component="execution.auto_trade",
-            metadata={"source_id": source_id, "packet_id": packet.id},
+            metadata={"source_id": source_id, "packet_id": str(packet.id)},
         )
         _mark_packet_trade_skipped(packet, session, reason)
         return None
@@ -970,7 +970,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             reason,
             affected_component="execution.auto_trade",
-            metadata={"source_id": source_id, "packet_id": packet.id},
+            metadata={"source_id": source_id, "packet_id": str(packet.id)},
         )
         _mark_packet_trade_skipped(packet, session, reason)
         return None
@@ -1014,7 +1014,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             err,
             affected_component="execution.auto_trade",
-            metadata={"source_id": source_id, "packet_id": packet.id},
+            metadata={"source_id": source_id, "packet_id": str(packet.id)},
         )
         _mark_packet_trade_skipped(packet, session, err)
         _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
@@ -1024,7 +1024,7 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
             "execution.status",
             exc,
             affected_component="execution.auto_trade",
-            metadata={"source_id": source_id, "packet_id": packet.id},
+            metadata={"source_id": source_id, "packet_id": str(packet.id)},
         )
         _mark_packet_trade_skipped(packet, session, str(exc), canceled=False)
         _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
