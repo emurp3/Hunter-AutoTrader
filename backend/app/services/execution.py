@@ -544,7 +544,7 @@ def _transition_packet_execution(
                 session,
                 allocation,
                 source_id=packet.source_id,
-                action_packet_id=packet.id,
+                action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
                 actual_return=actual_return,
                 notes=notes,
             )
@@ -580,7 +580,7 @@ def _transition_packet_execution(
                     session,
                     allocation,
                     source_id=packet.source_id,
-                    action_packet_id=packet.id,
+                    action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
                     notes=notes,
                 )
             else:
@@ -588,7 +588,7 @@ def _transition_packet_execution(
                     session,
                     allocation,
                     source_id=packet.source_id,
-                    action_packet_id=packet.id,
+                    action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
                     actual_return=actual_return or 0.0,
                     notes=notes,
                 )
@@ -672,7 +672,7 @@ def _record_outcome(
         source_id=packet.source_id,
     )
     outcome = ExecutionOutcome(
-        action_packet_id=packet.id,
+        action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
         allocation_id=allocation.id if allocation else None,
         source_id=packet.source_id,
         strategy_id=strategy.strategy_id if strategy else None,
@@ -724,7 +724,7 @@ def _record_budget_outcome(
         time_to_completion_hours=completion_hours,
         source_id=packet.source_id,
         strategy_id=strategy.strategy_id if strategy else None,
-        action_packet_id=packet.id,
+        action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
         lane=_infer_lane(source),
         category=source.category if source else None,
     )
@@ -1088,7 +1088,7 @@ def _mark_packet_trade_skipped(
         if not existing_outcome:
             session.add(
                 ExecutionOutcome(
-                    action_packet_id=packet.id,
+                    action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
                     allocation_id=allocation.id if allocation else None,
                     source_id=packet.source_id,
                     execution_state=packet.execution_state,
@@ -1259,7 +1259,7 @@ def reconcile_completed_packet_outcomes(session: Session) -> dict:
 
         session.add(
             ExecutionOutcome(
-                action_packet_id=packet.id,
+                action_packet_id=None,  # packet.id is UUID; column is int — cross-ref omitted
                 allocation_id=allocation.id if allocation else lifecycle.allocation_id,
                 source_id=packet.source_id,
                 strategy_id=strategy.strategy_id if strategy else None,
