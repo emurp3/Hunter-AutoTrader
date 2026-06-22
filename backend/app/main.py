@@ -35,6 +35,8 @@ from app.routers.forge import router as forge_router
 from app.routers.quickcash import router as quickcash_router
 from app.routers.store import router as store_router
 from app.routers.assistant import router as assistant_router
+from app.routers.policy import router as policy_router
+from app.models.policy_event import PolicyEvent  # noqa: F401 — registers table
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table  # noqa: F401 — registers table
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task
@@ -155,7 +157,8 @@ app.include_router(signals_router)   # /signals  — Public-Signal Copy Engine
 app.include_router(forge_router)     # /forge    — Opportunity Forge Engine
 app.include_router(quickcash_router) # /quickcash — Cross-lane Quick-Cash Board
 app.include_router(store_router)     # /store     — Leon Commerce Division
-app.include_router(assistant_router)  # /assistant — Hunter AI onboard advisor
+app.include_router(assistant_router)
+app.include_router(policy_router)     # /policy   — Policy-to-Profit Intelligence Center  # /assistant — Hunter AI onboard advisor
 
 # ── Static file serving (production only) ────────────────────────────────────
 # _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).
