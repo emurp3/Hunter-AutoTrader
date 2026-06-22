@@ -37,6 +37,7 @@ from app.services import strategies as strategy_svc
 from app.services import alerts as alert_svc
 from app.services import reporting as reporting_svc
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
+from app.services.policy_engine import run_policy_scan  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +375,27 @@ async def leon_daily_commerce_task():
             )
     except Exception as exc:
         logger.exception("Leon: Daily commerce task failed: %s", exc)
+
+
+
+async def policy_scan_task() -> None:
+    """
+    Policy-to-Profit Engine daily scan.
+    Runs at 06:30 ET — before markets open, so fresh intelligence is ready.
+    Monitors all P2P sources, processes new events through LLM, and creates
+    scored IncomeSource records for the MurphBoard dashboard.
+    """
+    logger.info("policy_scan_task: starting Policy-to-Profit scan")
+    try:
+        result = run_policy_scan()
+        logger.info(
+            "policy_scan_task: complete — fetched=%d new=%d opportunities=%d",
+            result.get("total_events_fetched", 0),
+            result.get("total_new_events", 0),
+            result.get("total_opportunities_created", 0),
+        )
+    except Exception as exc:
+        logger.exception("policy_scan_task: failed — %s", exc)
 
 
 def build_weekly_report_now(*, session: Session | None = None) -> dict:
