@@ -40,15 +40,6 @@ from app.models.policy_event import PolicyEvent  # noqa: F401 — registers tabl
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table  # noqa: F401 — registers table
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task
-    scheduler.add_job(
-        policy_scan_task,
-        "cron",
-        hour=6,
-        minute=30,
-        timezone=_SCHEDULER_TZ,
-        id="policy_scan",
-        misfire_grace_time=3600,
-    )
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -119,6 +110,15 @@ async def lifespan(app: FastAPI):
         minute=5,
         timezone=_SCHEDULER_TZ,
         id="leon_daily",
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        policy_scan_task,
+        "cron",
+        hour=6,
+        minute=30,
+        timezone=_SCHEDULER_TZ,
+        id="policy_scan",
         misfire_grace_time=3600,
     )
     scheduler.start()
