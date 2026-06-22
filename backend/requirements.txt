@@ -12,3 +12,5 @@ playwright
 python-jose[cryptography]
 pytrends>=4.9.2
 openai
+beautifulsoup4
+lxml
