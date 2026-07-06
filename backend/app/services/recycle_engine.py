@@ -816,7 +816,16 @@ def _get_fast_recycle_state(broker_state: BrokerCapitalState) -> FastRecycleStat
         sum(float(lifecycle.realized_pl or 0.0) for lifecycle in closed_fast),
         2,
     )
-    gross_capital = round(max(0.0, FAST_RECYCLE_TRANCHE + realized_fast), 2)
+    # Fully flat (no open fast_recycle positions) means the tranche has
+    # completed a full round trip. Historical realized losses should not
+    # permanently suppress gross_capital below FAST_RECYCLE_TRANCHE once flat
+    # — that created a lockout where the bucket clamped to $0 forever and
+    # never re-deployed even though the broker account held ample free cash.
+    # Profits are still credited (never resets a gain back down).
+    if not fast_symbols:
+        gross_capital = round(max(FAST_RECYCLE_TRANCHE, FAST_RECYCLE_TRANCHE + realized_fast), 2)
+    else:
+        gross_capital = round(max(0.0, FAST_RECYCLE_TRANCHE + realized_fast), 2)
     deployed_capital = round(
         sum(float(pos.market_value or 0.0) for pos in fast_positions)
         + sum(float(order.notional or 0.0) for order in fast_open_orders),
