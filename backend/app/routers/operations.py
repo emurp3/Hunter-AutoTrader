@@ -247,6 +247,19 @@ def run_pipeline_now(session: Session = Depends(get_session)):
     return results
 
 
+@router.get("/recycle-status")
+def recycle_status():
+    """
+    Live INTRADAY_RECYCLE engine state — strategy mode, broker-synced capital,
+    and the fast_recycle bucket's gross/available capital. Exposes
+    get_cycle_status() so a stuck-at-$0 fast_recycle tranche (or a
+    STRATEGY_MODE/ALPACA_ENABLED misconfiguration that silently skips the
+    scheduler job) is visible without reading source code or Render logs.
+    """
+    from app.services.recycle_engine import get_cycle_status
+    return get_cycle_status()
+
+
 @router.get("/diagnostics")
 def execution_diagnostics(session: Session = Depends(get_session)):
     """
