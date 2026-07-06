@@ -1,4 +1,12 @@
 import logging
+
+# Root logger has no handler by default under uvicorn — without this, every
+# logger.info() call in the scheduler tasks (daily_scan_task, recycle_cycle_task,
+# etc.) silently vanishes. This was masking a live trading stall for weeks.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 from contextlib import asynccontextmanager
 from pathlib import Path
 
