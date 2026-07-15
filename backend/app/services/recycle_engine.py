@@ -712,7 +712,8 @@ def _load_live_candidates() -> list[dict]:
                 )
                 .where(
                     IncomeSource.status.in_([
-                        SourceStatus.new, SourceStatus.scored,
+                        SourceStatus.new, SourceStatus.active,
+                        SourceStatus.scored, SourceStatus.prioritized,
                         SourceStatus.review_ready, SourceStatus.budgeted,
                     ]),
                     IncomeSource.score.isnot(None),
