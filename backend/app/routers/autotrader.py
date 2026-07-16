@@ -54,7 +54,7 @@ def _run_intake_background() -> None:
 
 
 @router.get("/status")
-def autotrader_status(_: UserInDB = Depends(get_current_user)) -> dict:
+def autotrader_status() -> dict:
     refresh_intake_state()
     state = get_intake_state()
 
@@ -90,7 +90,7 @@ def autotrader_status(_: UserInDB = Depends(get_current_user)) -> dict:
 
 
 @router.get("/intake-summary")
-def intake_summary(session: Session = Depends(get_session), _: UserInDB = Depends(get_current_user)) -> dict:
+def intake_summary(session: Session = Depends(get_session)) -> dict:
     state = refresh_intake_state()
     intake_origins = ["autotrader", "autotrader_seed"]
     if state.last_source_type == "live" or state.current_data_mode == "live":
@@ -231,7 +231,6 @@ def autotrader_opportunities(
     limit: int = Query(default=50, ge=1, le=200),
     band: str | None = Query(default=None, description="Filter by priority band: elite, high, medium, low"),
     session: Session = Depends(get_session),
-    _: UserInDB = Depends(get_current_user),
 ) -> dict:
     """
     Live-scored opportunities from all ingestion sources, ordered by score descending.
