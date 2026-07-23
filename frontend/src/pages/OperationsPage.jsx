@@ -765,6 +765,74 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
                     {selectedOpp.decision.capital_recommendation != null && (
                       <div><span>Capital Rec.</span><strong>{formatCurrency(selectedOpp.decision.capital_recommendation)}</strong></div>
                     )}
+                    {selectedOpp.decision.execution_ready === false ? (
+                      <div className="occ-detail-full" style={{ marginTop: '14px', gridColumn: 'span 2' }}>
+                        <button
+                          type="button"
+                          className="ops-primary-button"
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            background: '#7c3aed',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '6px',
+                            fontWeight: '700',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                            letterSpacing: '0.03em',
+                            transition: 'background 0.2s',
+                            boxShadow: '0 0 12px rgba(124, 58, 237, 0.4)'
+                          }}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const approveRes = await fetch(`/api/decisions/${selectedOpp.source_id}/approve`, { method: 'POST', credentials: 'include' });
+                              if (approveRes.ok) {
+                                const runRes = await fetch('/operations/run-pipeline', { method: 'POST', credentials: 'include' });
+                                if (runRes.ok) {
+                                  alert(`Successfully approved and executed "${selectedOpp.description || selectedOpp.source_id}"! check orders.`);
+                                } else {
+                                  alert(`Approved "${selectedOpp.description || selectedOpp.source_id}" but pipeline flush failed.`);
+                                }
+                                refresh();
+                                setSelectedOpp(null);
+                              } else {
+                                const txt = await approveRes.text();
+                                alert('Approval failed: ' + txt);
+                              }
+                            } catch (err) {
+                              alert('Error executing: ' + err.message);
+                            }
+                          }}
+                        >
+                          Approve & Execute Opportunity ⚡
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="occ-detail-full" style={{ marginTop: '14px', gridColumn: 'span 2' }}>
+                        <div style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          background: '#064e3b',
+                          color: '#10b981',
+                          borderRadius: '6px',
+                          fontWeight: '700',
+                          fontSize: '11px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          border: '1px solid #10b981'
+                        }}>
+                          ✓ Opportunity is Executing / Active
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
