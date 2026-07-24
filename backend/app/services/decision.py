@@ -475,7 +475,12 @@ def get_decision(source_id: str, session: Session) -> OpportunityDecision | None
 def approve_decision(source_id: str, reviewer_note: str | None, session: Session) -> OpportunityDecision:
     decision = get_decision(source_id, session)
     if not decision:
-        raise ValueError(f"No decision found for source_id={source_id}")
+        from app.models.income_source import IncomeSource
+        from sqlmodel import select
+        source = session.exec(select(IncomeSource).where(IncomeSource.source_id == source_id)).first()
+        if not source:
+            raise ValueError(f"No income source found for source_id={source_id}")
+        decision = decide(source, session)
 
     decision.approval_required = False
 # Field approved_at removed to fix database schema mismatch
