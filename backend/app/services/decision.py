@@ -478,7 +478,7 @@ def approve_decision(source_id: str, reviewer_note: str | None, session: Session
         raise ValueError(f"No decision found for source_id={source_id}")
 
     decision.approval_required = False
-    decision.approved_at = datetime.now(timezone.utc)  # type: ignore[attr-defined]
+# Field approved_at removed to fix database schema mismatch
     decision.reviewer_note = reviewer_note
     decision.reviewed_at = datetime.now(timezone.utc)
     decision.execution_ready = decision.action_state not in (ActionState.ignore, ActionState.watch)
