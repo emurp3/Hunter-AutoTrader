@@ -85,7 +85,15 @@ def approve_decision(
     session: Session = Depends(get_session),
 ) -> dict:
     """Clear the approval gate on a decision, marking it execution_ready."""
-    decision = decision_svc.approve_decision(source_id, reviewer_note, session)
-    if not decision:
-        raise HTTPException(status_code=404, detail=f"No decision found for {source_id}")
-    return decision.to_dict()
+    try:
+        decision = decision_svc.approve_decision(source_id, reviewer_note, session)
+        if not decision:
+            raise HTTPException(status_code=404, detail=f"No decision found for {source_id}")
+        return decision.to_dict()
+    except Exception as exc:
+        import traceback
+        return {
+            "error": "approval_failed",
+            "message": str(exc),
+            "traceback": traceback.format_exc()
+        }
