@@ -72,7 +72,13 @@ services:
       - key: HUNTER_OPERATING_ACCOUNT_PROVIDER
         value: robins_financial
       - key: HUNTER_INITIAL_BANKROLL
-        value: "163"
+        value: "500"
+      # Business objective: replace at least $400/month of lost income across Hunter's lanes.
+      # This is a performance target, not permission to exceed capital/risk controls.
+      - key: HUNTER_MONTHLY_NET_INCOME_TARGET
+        value: "400"
+      - key: HUNTER_WEEKLY_NET_INCOME_TARGET
+        value: "100"
 
       # Facebook Marketplace lane (disabled until ready)
       - key: MARKETPLACE_FB_LANE_ENABLED
