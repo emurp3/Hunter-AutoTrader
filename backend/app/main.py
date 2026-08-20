@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 # Root logger has no handler by default under uvicorn — without this, every
@@ -46,90 +47,50 @@ from app.routers.assistant import router as assistant_router
 from app.routers.policy import router as policy_router
 from app.models.policy_event import PolicyEvent  # noqa: F401 — registers table
 from app.models.created_product import CreatedProduct  # noqa
-from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table  # noqa: F401 — registers table
+from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
-
-# ── Scheduler timezone — cron jobs run in America/New_York ───────────────────
-# daily_scan fires at 09:35 ET so market orders are created after the open.
-# weekly_report remains Monday 08:00 ET; Leon commerce remains daily 08:05 ET.
-# misfire_grace_time=3600: if the app was briefly down at the scheduled time it still fires
-# within the hour rather than silently skipping.
 _SCHEDULER_TZ = "America/New_York"
 _startup_logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    try:
-        create_db_and_tables()
-    except Exception as _dbe:
-        _startup_logger.warning("create_db_and_tables failed: %s", _dbe)
+def _bootstrap_intake_after_startup() -> None:
+    """Run optional opportunity bootstrap after the web app is already healthy."""
     try:
         from app.database.config import engine
         from app.services.autotrader import bootstrap_intake
-
         with Session(engine) as session:
             bootstrap_intake(session)
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         _startup_logger.warning(
-            "bootstrap_intake failed at startup — %s: %s",
-            type(_exc).__name__,
-            _exc,
+            "bootstrap_intake failed after startup — %s: %s",
+            type(exc).__name__,
+            exc,
         )
-    scheduler.add_job(
-        daily_scan_task,
-        "cron",
-        hour=9,
-        minute=35,
-        timezone=_SCHEDULER_TZ,
-        id="daily_scan",
-        misfire_grace_time=3600,
-    )
-    scheduler.add_job(
-        weekly_report_task,
-        "cron",
-        day_of_week="mon",
-        hour=8,
-        minute=0,
-        timezone=_SCHEDULER_TZ,
-        id="weekly_report",
-        misfire_grace_time=3600,
-    )
-    # ── INTRADAY_RECYCLE cycle — runs every N seconds during market hours ─────
-    # Sell-first → refresh → buy-after loop. Only active in RECYCLE mode.
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Keep the critical startup path local and bounded. External opportunity
+    # intake is deliberately deferred so Render's health check can answer fast.
+    try:
+        create_db_and_tables()
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning("create_db_and_tables failed: %s", exc)
+
+    scheduler.add_job(daily_scan_task, "cron", hour=9, minute=35, timezone=_SCHEDULER_TZ, id="daily_scan", misfire_grace_time=3600)
+    scheduler.add_job(weekly_report_task, "cron", day_of_week="mon", hour=8, minute=0, timezone=_SCHEDULER_TZ, id="weekly_report", misfire_grace_time=3600)
     if ALPACA_ENABLED and STRATEGY_MODE == "RECYCLE":
-        scheduler.add_job(
-            recycle_cycle_task,
-            "interval",
-            seconds=RECYCLE_CYCLE_INTERVAL_SECONDS,
-            id="recycle_cycle",
-            max_instances=1,        # Never allow concurrent cycle runs
-            misfire_grace_time=30,
-        )
-    scheduler.add_job(
-        leon_daily_commerce_task,
-        "cron",
-        hour=8,
-        minute=5,
-        timezone=_SCHEDULER_TZ,
-        id="leon_daily",
-        misfire_grace_time=3600,
-    )
-    scheduler.add_job(
-        policy_scan_task,
-        "cron",
-        hour=6,
-        minute=30,
-        timezone=_SCHEDULER_TZ,
-        id="policy_scan",
-        misfire_grace_time=3600,
-    )
+        scheduler.add_job(recycle_cycle_task, "interval", seconds=RECYCLE_CYCLE_INTERVAL_SECONDS, id="recycle_cycle", max_instances=1, misfire_grace_time=30)
+    scheduler.add_job(leon_daily_commerce_task, "cron", hour=8, minute=5, timezone=_SCHEDULER_TZ, id="leon_daily", misfire_grace_time=3600)
+    scheduler.add_job(policy_scan_task, "cron", hour=6, minute=30, timezone=_SCHEDULER_TZ, id="policy_scan", misfire_grace_time=3600)
     scheduler.start()
+
+    # Do not block ASGI startup/health on opportunity intake or its providers.
+    asyncio.create_task(asyncio.to_thread(_bootstrap_intake_after_startup))
     yield
     scheduler.shutdown(wait=False)
 
@@ -141,8 +102,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── API routers ───────────────────────────────────────────────────────────────
-app.include_router(system_router)        # /system — health + readiness (first for priority)
+app.include_router(system_router)
 app.include_router(opportunities_router)
 app.include_router(reports_router)
 app.add_middleware(
@@ -170,53 +130,27 @@ app.include_router(marketplace_router)
 app.include_router(tasks_router)
 app.include_router(auth_router)
 app.include_router(diag_router)
-app.include_router(signals_router)   # /signals  — Public-Signal Copy Engine
-app.include_router(forge_router)     # /forge    — Opportunity Forge Engine
-app.include_router(quickcash_router) # /quickcash — Cross-lane Quick-Cash Board
-app.include_router(store_router)     # /store     — Leon Commerce Division
+app.include_router(signals_router)
+app.include_router(forge_router)
+app.include_router(quickcash_router)
+app.include_router(store_router)
 app.include_router(assistant_router)
-app.include_router(policy_router)     # /policy   — Policy-to-Profit Intelligence Center  # /assistant — Hunter AI onboard advisor
+app.include_router(policy_router)
 
-# ── Static file serving (production only) ────────────────────────────────────
-# _FRONTEND_DIST only exists after build.sh runs (i.e. on Render).
-# When absent, local dev uses the Vite dev server as before.
 if _FRONTEND_DIST.exists():
-    app.mount(
-        "/assets",
-        StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
-        name="assets",
-    )
-    app.mount(
-        "/media",
-        StaticFiles(directory=str(_FRONTEND_DIST / "media")),
-        name="media",
-    )
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+    app.mount("/media", StaticFiles(directory=str(_FRONTEND_DIST / "media")), name="media")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
-        """Catch-all: serve index.html for all unmatched paths (SPA client-side routing)."""
         return FileResponse(str(_FRONTEND_DIST / "index.html"))
-
 else:
     @app.get("/")
     def root():
         return {"message": "Hunter v0.2.0 — autonomous operations engine running"}
 
 
-# ── ASGI middleware: strip /api prefix ───────────────────────────────────────
-# Must be the LAST thing in this module — wraps the entire app including
-# lifespan. Rewrites /api/... → /... so the frontend's const API = '/api'
-# works in production (same origin, no proxy) while all backend routes
-# remain unchanged. Local dev uses the Vite proxy instead; this middleware
-# is still present but harmless (direct curl hits /api/... and it strips).
-
 class _StripApiPrefix:
-    """
-    Pure ASGI middleware. Strips the /api prefix from HTTP request paths.
-    Passes lifespan and websocket scopes through unchanged.
-    Both scope["path"] and scope["raw_path"] are rewritten for consistency.
-    """
-
     __slots__ = ("_app",)
 
     def __init__(self, inner_app):
