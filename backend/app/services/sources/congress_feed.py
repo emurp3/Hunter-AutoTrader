@@ -149,29 +149,50 @@ class CongressFeedAdapter:
 
     def _normalise_tracefour(self, r: dict, *, member_slug: str) -> dict | None:
         try:
-            raw_date = r.get("transactionDate") or r.get("date") or r.get("filedAt") or ""
-            trade_date = _parse_trade_date(raw_date) or _parse_iso_date(raw_date)
-            filer = r.get("member") or r.get("filerName") or member_slug.replace("-", " ").title()
-            ticker = _clean_ticker(r.get("ticker") or r.get("symbol") or "")
-            amount_raw = r.get("amountRange") or r.get("range") or ""
-            lo, hi, mid = _parse_amount(amount_raw)
-            if mid is None:
-                # Tracefour may give a direct value instead of a range.
-                value = r.get("value") or r.get("amount")
-                if value:
-                    lo = hi = mid = float(value)
-            action = str(r.get("type") or r.get("transactionType") or "buy").lower()
+            # Field names confirmed against a live Tracefour response
+            # (2026-09-02) -- these are NOT guesses from the OpenAPI spec,
+            # which doesn't document per-field schemas.
+            raw_txn_date = r.get("transactionDate") or ""
+            raw_disclosure_date = r.get("disclosureDate") or ""
+            trade_date = _parse_iso_date(raw_txn_date) or _parse_trade_date(raw_txn_date)
+            disclosure_date = _parse_iso_date(raw_disclosure_date) or _parse_trade_date(raw_disclosure_date)
+
+            filer = r.get("memberName") or member_slug.replace("-", " ").title()
+            ticker = _clean_ticker(r.get("ticker") or "")
+
+            # Tracefour gives direct min/mid/max values -- prefer those over
+            # parsing amountLabel ("$500,001 - $1,000,000"), which doesn't
+            # match the existing _AMOUNT_MAP key format anyway.
+            lo = r.get("amountMin")
+            hi = r.get("amountMax")
+            mid = r.get("amountMid")
+            if mid is None and (lo is not None or hi is not None):
+                mid = ((lo or 0) + (hi or lo or 0)) / 2
+            lo = float(lo) if lo is not None else None
+            hi = float(hi) if hi is not None else None
+            mid = float(mid) if mid is not None else None
+
+            action = str(r.get("type") or "buy").lower()
             if action.startswith("p") or "buy" in action:
                 action = "buy"
             elif action.startswith("s") or "sell" in action:
                 action = "sell"
+
+            # True STOCK Act reporting latency: time between the transaction
+            # and when it was actually disclosed, not "how old is this trade
+            # now" (which is what the age-since-trade fallback used
+            # elsewhere in this file computes, and is a different, less
+            # useful signal -- a filer who takes the full 45-day STOCK Act
+            # window to disclose is a meaningfully different signal than one
+            # who discloses same-day, regardless of how old the record is
+            # by the time Hunter happens to scan it).
             latency_hours = 0.0
-            if trade_date:
-                latency_hours = max(0.0, (datetime.utcnow() - trade_date).total_seconds() / 3600)
+            if trade_date and disclosure_date:
+                latency_hours = max(0.0, (disclosure_date - trade_date).total_seconds() / 3600)
 
             return {
                 "source": "congress",
-                "source_id": f"{filer}|{ticker}|{raw_date}",
+                "source_id": r.get("filingId") or f"{filer}|{ticker}|{raw_txn_date}",
                 "filer_name": filer,
                 "filer_type": "politician",
                 "committee": r.get("chamber") or r.get("party") or None,
@@ -182,7 +203,7 @@ class CongressFeedAdapter:
                 "amount_high": hi,
                 "amount_midpoint": mid,
                 "trade_date": trade_date,
-                "disclosed_at": trade_date,
+                "disclosed_at": disclosure_date or trade_date,
                 "latency_hours": latency_hours,
                 "raw_json": str(r)[:400],
             }
