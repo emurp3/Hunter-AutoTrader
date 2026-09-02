@@ -256,7 +256,8 @@ SOURCES_MARKETPLACE_MAX_RESULTS: int = int(
 )
 SOURCES_MARKETPLACE_QUERIES: list[str] = _get_csv(
     "HUNTER_SOURCES_MARKETPLACE_QUERIES",
-    "dyson,lego,makita,canon,nintendo,ipad",
+    "dyson,lego,makita,canon,nintendo,ipad,"
+    "clearance,liquidation pallet,open box,warehouse deal,overstock,closeout",
 )
 
 SOURCES_LOCAL_ENABLED: bool = _get_bool("HUNTER_SOURCES_LOCAL_ENABLED", True)
@@ -295,6 +296,9 @@ SOURCES_RFP_QUERIES: list[str] = _get_csv(
 SOURCES_RFP_DETAIL_FETCH_LIMIT: int = int(os.getenv("HUNTER_SOURCES_RFP_DETAIL_FETCH_LIMIT", "6"))
 
 SOURCES_AFFILIATE_ENABLED: bool = _get_bool("HUNTER_SOURCES_AFFILIATE_ENABLED", True)
+
+SOURCES_BOUNTY_ENABLED: bool = _get_bool("HUNTER_SOURCES_BOUNTY_ENABLED", True)
+SOURCES_BOUNTY_MAX_RESULTS: int = int(os.getenv("HUNTER_SOURCES_BOUNTY_MAX_RESULTS", "10"))
 
 # How often the lightweight discovery-only scan (all source adapters, no
 # trading candidates / quota checks) re-runs. Default 3 hours — frequent

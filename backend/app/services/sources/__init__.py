@@ -7,6 +7,7 @@ from app.services.sources.local_business_prospector import LocalBusinessProspect
 from app.services.sources.digital_product_scanner import DigitalProductGapAdapter
 from app.services.sources.rfp_scanner import RfpScannerAdapter
 from app.services.sources.affiliate_scanner import AffiliateScannerAdapter
+from app.services.sources.bounty_scanner import BountyScannerAdapter
 
 __all__ = [
     "SourceAdapter",
@@ -20,4 +21,5 @@ __all__ = [
     "DigitalProductGapAdapter",
     "RfpScannerAdapter",
     "AffiliateScannerAdapter",
+    "BountyScannerAdapter",
 ]

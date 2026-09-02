@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from app.config import (
     SOURCES_AFFILIATE_ENABLED,
+    SOURCES_BOUNTY_ENABLED,
     SOURCES_DIGITAL_ENABLED,
     SOURCES_GIG_ENABLED,
     SOURCES_GITHUB_ENABLED,
@@ -27,6 +28,7 @@ from app.services.orchestrator import process_new_opportunity, build_action_plan
 from app.services.scoring import score_opportunity
 from app.services.sources import (
     AffiliateScannerAdapter,
+    BountyScannerAdapter,
     DigitalProductGapAdapter,
     GigScannerAdapter,
     GitHubScannerAdapter,
@@ -46,6 +48,7 @@ SOURCE_ORIGINS = (
     "digital_product_scanner",
     "rfp_scanner",
     "affiliate_scanner",
+    "bounty_scanner",
 )
 
 
@@ -75,6 +78,7 @@ def _build_adapters():
         DigitalProductGapAdapter(enabled=SOURCES_DIGITAL_ENABLED),
         RfpScannerAdapter(enabled=SOURCES_RFP_ENABLED),
         AffiliateScannerAdapter(enabled=SOURCES_AFFILIATE_ENABLED),
+        BountyScannerAdapter(enabled=SOURCES_BOUNTY_ENABLED),
     ]
 
 
