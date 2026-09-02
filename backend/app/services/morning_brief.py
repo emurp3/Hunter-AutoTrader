@@ -79,6 +79,16 @@ def build_morning_brief(session: Session) -> dict[str, Any]:
     ).one()
     signals_total = session.exec(select(func.count(CopySignal.id))).one()
 
+    from app.models.budget import BudgetAllocation
+    vip_allocations_today = session.exec(
+        select(func.count(BudgetAllocation.id), func.coalesce(func.sum(BudgetAllocation.amount_allocated), 0.0))
+        .where(
+            BudgetAllocation.allocation_name.like("VIP mirror:%"),
+            func.date(BudgetAllocation.created_at) == today,
+        )
+    ).first()
+    vip_trades_today_count, vip_trades_today_amount = vip_allocations_today or (0, 0.0)
+
     # ── Strategy quota ───────────────────────────────────────────────────
     strategy_quota = strategy_svc.check_quota(session)
 
@@ -155,6 +165,8 @@ def build_morning_brief(session: Session) -> dict[str, Any]:
         "signal_engine": {
             "total_signals": signals_total,
             "vip_pending_approval": vip_pending,
+            "vip_trades_today_count": vip_trades_today_count,
+            "vip_trades_today_amount": round(vip_trades_today_amount, 2),
         },
         "strategies": {
             "active": strategy_quota["active_count"],

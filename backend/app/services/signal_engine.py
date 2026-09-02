@@ -239,6 +239,49 @@ def _flag_vip_needs_approval(session: Session, vip: dict, raw: dict, amount: flo
         logger.exception("Failed to raise VIP approval alert for %s", vip.get("label"))
 
 
+def _record_vip_allocation(session: Session, vip: dict, raw: dict, exec_result: dict, confidence: float) -> None:
+    """
+    Previously, a successful VIP auto-invest hit Alpaca directly via
+    httpx and nothing else -- no BudgetAllocation record, invisible in
+    /budget/allocations, /budget/transactions, and the budget scoreboard,
+    even though the trade was real and the money genuinely moved. Broker-
+    reconciled capital totals were still accurate (broker truth wins,
+    see get_broker_reconciled_capital_state), but there was no way to
+    see WHICH trades were VIP-mirror trades, or how that lane is
+    performing on its own. This records that allocation so it's visible
+    and attributable, not just absorbed into the aggregate cash number.
+    """
+    try:
+        from app.models.budget import BudgetAllocation, AllocationCategory, AllocationStatus
+        from app.services.budget import get_open_budget
+
+        budget = get_open_budget(session)
+        if not budget:
+            logger.warning("VIP allocation not recorded — no open budget cycle")
+            return
+
+        ticker = exec_result.get("ticker", raw.get("ticker", "?"))
+        allocation = BudgetAllocation(
+            weekly_budget_id=budget.id,
+            allocation_name=f"VIP mirror: {vip['label']} — {ticker}",
+            category=AllocationCategory.trading,
+            amount_allocated=exec_result.get("amount", 0.0),
+            rationale=(
+                f"Confidence-scaled auto-invest (confidence={confidence:.2f}) on "
+                f"{vip['label']}'s disclosed {raw.get('source', 'transaction')}. "
+                f"Alpaca order {exec_result.get('alpaca_order_id', 'n/a')}."
+            ),
+            source_id=str(raw.get("source_id", "")) or None,
+            approval_required=False,  # already executed under the standing $5-threshold auto-invest policy
+            approved_by_commander=True,
+            status=AllocationStatus.active,
+        )
+        session.add(allocation)
+        session.commit()
+    except Exception:
+        logger.exception("Failed to record VIP allocation for %s", vip.get("label"))
+
+
 def get_vip_watchlist() -> list[dict]:
     """Return the full VIP watchlist for the /signals/vip-watchlist endpoint."""
     return [
@@ -297,6 +340,8 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
                     _vticker = _vip.get("ticker_override") or raw.get("ticker", "")
                     _vresult = _execute_vip_micro_invest(_vticker, raw.get("action", "buy"), _vip["label"], amount=vip_amount)
                     errors.append(f"VIP:{_vip['label']}:{_vresult['status']}(${vip_amount:.2f})")
+                    if _vresult.get("status") == "executed":
+                        _record_vip_allocation(session, _vip, raw, _vresult, confidence)
                 else:
                     # Monitoring stays on; unattended real-money execution on
                     # a VIP name match requires HUNTER_ENABLE_VIP_AUTO_INVEST=true.
