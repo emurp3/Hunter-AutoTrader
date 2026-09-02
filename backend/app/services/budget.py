@@ -123,7 +123,31 @@ def open_weekly_budget(
             f"An active bankroll already exists (id={existing.id}, evaluation_start={existing.evaluation_start_date})."
         )
 
-    amount = starting_budget if starting_budget is not None else WEEKLY_BUDGET
+    if starting_budget is not None:
+        # Caller gave an explicit amount — respect it as-is.
+        amount = starting_budget
+    else:
+        # No amount given. Previously this silently fell back to the static
+        # HUNTER_INITIAL_BANKROLL config value (WEEKLY_BUDGET), which can be
+        # completely disconnected from what's actually in the broker account
+        # (e.g. set to $500 as a target deposit that was never actually made).
+        # Prefer the real, live broker cash balance when Alpaca is reachable,
+        # and only fall back to the static config value if Alpaca is disabled
+        # or the live lookup fails.
+        amount = WEEKLY_BUDGET
+        if ALPACA_ENABLED:
+            try:
+                from app.integration.brokerage.alpaca import get_alpaca_adapter
+
+                account = get_alpaca_adapter().get_account()
+                amount = float(account.cash)
+            except Exception:
+                _logger.warning(
+                    "open_weekly_budget: failed to fetch live broker cash for "
+                    "default starting_budget — falling back to HUNTER_INITIAL_BANKROLL=%s",
+                    WEEKLY_BUDGET,
+                    exc_info=True,
+                )
     today = date.today()
     bankroll = WeeklyBudget(
         week_start_date=today,
@@ -1011,6 +1035,17 @@ def get_broker_reconciled_capital_state(session: Session) -> dict:
         display_funded_packets = internal_funded_count
         display_unrealized_pl  = 0.0
         display_effective_bp   = internal_available
+
+    # broker_dict was snapshotted from broker_state before the reconciliation
+    # block above corrected internal_available_capital / internal_committed_capital /
+    # internal_current_bankroll / mismatch_detected. Without this, the nested
+    # "broker" object in the API response stays permanently stale (e.g. still
+    # showing mismatch_detected=True) even after a successful reconcile.
+    broker_dict["internal_available_capital"] = broker_state.internal_available_capital
+    broker_dict["internal_committed_capital"] = broker_state.internal_committed_capital
+    broker_dict["internal_current_bankroll"] = broker_state.internal_current_bankroll
+    broker_dict["mismatch_detected"] = broker_state.mismatch_detected
+    broker_dict["mismatch_details"] = broker_state.mismatch_details
 
     is_live = EXECUTION_MODE == "live"
 
