@@ -26,6 +26,7 @@ from app.services import budget as budget_svc
 from app.services import strategies as strategy_svc
 from app.services.autotrader import get_intake_state
 from app.services import reporting as reporting_svc
+from app.services import morning_brief as morning_brief_svc
 from app.services.scheduler import build_weekly_report_now
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -213,6 +214,20 @@ def get_daily_report(session: Session = Depends(get_session)) -> dict:
     report["legacy_performance"] = timing_report["legacy"]
     report["open_position_snapshot"] = timing_report["open_position_snapshot"]
     return report
+
+
+@router.get("/morning")
+def get_morning_brief(session: Session = Depends(get_session)) -> dict:
+    """
+    Condensed "is Hunter operating correctly" watcher digest.
+
+    Same underlying data as /reports/daily but reframed around a single
+    overall_status (healthy/needs_attention/critical) and a one-line
+    summary, so a watcher (human or another assistant) can tell at a
+    glance whether anything needs eyes today. This is what
+    morning_report_task pushes out on a schedule -- see scheduler.py.
+    """
+    return morning_brief_svc.build_morning_brief(session)
 
 
 @router.get("/weekly")

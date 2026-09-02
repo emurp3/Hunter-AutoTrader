@@ -39,6 +39,15 @@ Jobs registered at startup:
                        sorts by score desc, and writes a JSON summary to
                        HUNTER_REPORTS_PATH. Also includes budget_commander_summary.
 
+  morning_report_task — runs daily at HUNTER_MORNING_REPORT_HOUR:MINUTE
+                       (default 7:00 ET). Hunter proactively builds and
+                       submits its own condensed status brief (see
+                       app.services.morning_brief) -- pushed via webhook to
+                       AMETHYST_REPORT_WEBHOOK_URL if configured, otherwise
+                       just logged and available at GET /reports/morning.
+                       The point: the report is submitted on schedule
+                       without anyone having to come ask for it.
+
 All jobs open their own Session(engine) — they run outside the FastAPI
 request lifecycle so FastAPI's Depends() is not available.
 """
@@ -170,6 +179,51 @@ def _build_weekly_report(session: Session) -> dict:
     report["legacy_performance"] = timing_report["legacy"]
     report["open_position_snapshot"] = timing_report["open_position_snapshot"]
     return report
+
+
+async def morning_report_task() -> None:
+    """
+    Hunter proactively submits its own morning status brief -- not
+    waiting to be asked for it. Builds the condensed watcher digest (see
+    app.services.morning_brief) and, if AMETHYST_REPORT_WEBHOOK_URL is
+    configured, POSTs it there. If no webhook is configured, this just
+    logs the summary line and overall_status -- it never fails the job
+    or blocks anything else on delivery not being wired up yet.
+    """
+    logger.info("morning_report_task: starting")
+    from app.database.config import engine as _engine
+    from app.services.morning_brief import build_morning_brief
+    from app.config import AMETHYST_REPORT_WEBHOOK_URL, AMETHYST_REPORT_WEBHOOK_TOKEN
+
+    with Session(_engine) as session:
+        try:
+            brief = build_morning_brief(session)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("morning_report_task: failed to build brief — %s", exc)
+            return
+
+    logger.info(
+        "morning_report_task: brief built — status=%s | %s",
+        brief["overall_status"], brief["summary"],
+    )
+
+    if not AMETHYST_REPORT_WEBHOOK_URL:
+        logger.info("morning_report_task: no delivery webhook configured — brief available at GET /reports/morning only")
+        return
+
+    try:
+        import httpx
+        headers = {"Content-Type": "application/json"}
+        if AMETHYST_REPORT_WEBHOOK_TOKEN:
+            headers["Authorization"] = f"Bearer {AMETHYST_REPORT_WEBHOOK_TOKEN}"
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(AMETHYST_REPORT_WEBHOOK_URL, json=brief, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning("morning_report_task: delivery failed — HTTP %d: %s", resp.status_code, resp.text[:300])
+        else:
+            logger.info("morning_report_task: delivered to webhook — HTTP %d", resp.status_code)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("morning_report_task: delivery exception — %s", exc)
 
 
 async def signal_scan_task() -> None:

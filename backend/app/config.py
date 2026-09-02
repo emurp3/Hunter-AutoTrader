@@ -316,6 +316,17 @@ DISCOVERY_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_DISCOVERY_SCAN_INTE
 SIGNAL_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_SIGNAL_SCAN_INTERVAL_SECONDS", "21600"))
 ENABLE_VIP_AUTO_INVEST: bool = _get_bool("HUNTER_ENABLE_VIP_AUTO_INVEST", False)
 
+# Morning brief — Hunter proactively pushes a condensed status digest here
+# every morning (see morning_report_task in scheduler.py) rather than
+# waiting to be asked. Empty by default: the brief still builds and is
+# reachable via GET /reports/morning even with no delivery configured,
+# so this can be tested before any receiving endpoint exists. Set to an
+# Amethyst (or any) ingest URL to enable delivery.
+AMETHYST_REPORT_WEBHOOK_URL: str = os.getenv("HUNTER_AMETHYST_REPORT_WEBHOOK_URL", "")
+AMETHYST_REPORT_WEBHOOK_TOKEN: str = os.getenv("HUNTER_AMETHYST_REPORT_WEBHOOK_TOKEN", "")
+MORNING_REPORT_HOUR: int = int(os.getenv("HUNTER_MORNING_REPORT_HOUR", "7"))
+MORNING_REPORT_MINUTE: int = int(os.getenv("HUNTER_MORNING_REPORT_MINUTE", "0"))
+
 # ── Facebook Marketplace compliant execution lane ─────────────────────────
 MARKETPLACE_FB_LANE_ENABLED: bool = _get_bool("MARKETPLACE_FB_LANE_ENABLED", False)
 MARKETPLACE_FB_PROVIDER: str = os.getenv("MARKETPLACE_FB_PROVIDER", "manual").lower()
