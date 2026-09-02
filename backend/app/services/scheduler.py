@@ -1,16 +1,27 @@
 """
 APScheduler-based background tasks for Hunter.
 
-Three jobs are registered at startup:
+Jobs registered at startup:
 
-  recycle_cycle_task — runs every RECYCLE_CYCLE_INTERVAL_SECONDS (default 60s);
+  recycle_cycle_task  — runs every RECYCLE_CYCLE_INTERVAL_SECONDS (default 60s);
                        drives the INTRADAY_RECYCLE sell-first/buy-after loop.
                        Only active when STRATEGY_MODE=RECYCLE and ALPACA_ENABLED=True.
 
-  daily_scan_task    — runs every 24 hours; calls the AutoTrader intake pipeline
-                       and logs scan / inserted / updated / skipped / error counts.
+  discovery_scan_task — runs every DISCOVERY_SCAN_INTERVAL_SECONDS (default 3h);
+                       lightweight discovery-only pass across all source
+                       adapters (grants, marketplace deals, gigs, local
+                       business leads, digital product gaps, GitHub bounties,
+                       social listening, affiliate). Added 2026-09-02 because
+                       daily_scan_task's once-per-24h cadence meant every
+                       source only got one shot a day — narrow-window deals
+                       and near-deadline grants could be missed entirely.
 
-  weekly_report_task — runs every 7 days; queries all IncomeSource records,
+  daily_scan_task     — runs every 24 hours; full pipeline — daily advisor
+                       opportunity, trading candidate generation, source
+                       acquisition (redundant with discovery_scan_task but
+                       harmless/deduped), and weekly quota enforcement.
+
+  weekly_report_task  — runs every 7 days; queries all IncomeSource records,
                        sorts by score desc, and writes a JSON summary to
                        HUNTER_REPORTS_PATH. Also includes budget_commander_summary.
 
@@ -145,6 +156,41 @@ def _build_weekly_report(session: Session) -> dict:
     report["legacy_performance"] = timing_report["legacy"]
     report["open_position_snapshot"] = timing_report["open_position_snapshot"]
     return report
+
+
+async def discovery_scan_task() -> None:
+    """
+    Lightweight, frequent discovery-only pass — separate from
+    daily_scan_task's full pipeline (advisor opportunity, trading
+    candidates, quota enforcement).
+
+    daily_scan_task previously carried ALL opportunity discovery on a
+    once-per-24-hours cron. That meant every source adapter (grants,
+    marketplace deals, gigs, local business leads, etc.) only got a
+    single chance per day to surface something — a discounted item with
+    a narrow buying window, or a grant close to its deadline, could be
+    missed entirely between runs. This job just re-runs source
+    acquisition (all adapters, already parallelized and error-isolated
+    in run_source_acquisition) on a much shorter interval. It does NOT
+    duplicate the trading-candidate generation, daily advisor opportunity,
+    or quota checks — those stay on daily_scan_task.
+    """
+    logger.info("discovery_scan_task: starting")
+    from app.services.source_acquisition import run_source_acquisition
+
+    with Session(engine) as session:
+        try:
+            result = run_source_acquisition(session)
+            logger.info(
+                "discovery_scan_task: complete — found=%d inserted=%d updated=%d skipped=%d errors=%d",
+                result.get("found", 0),
+                result.get("inserted", 0),
+                result.get("updated", 0),
+                result.get("skipped", 0),
+                len(result.get("errors", [])),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("discovery_scan_task: failed — %s", exc)
 
 
 async def daily_scan_task() -> None:

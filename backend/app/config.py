@@ -278,7 +278,29 @@ SOURCES_DIGITAL_QUERIES: list[str] = _get_csv(
 )
 
 SOURCES_RFP_ENABLED: bool = _get_bool("HUNTER_SOURCES_RFP_ENABLED", True)
+SOURCES_RFP_MAX_RESULTS: int = int(os.getenv("HUNTER_SOURCES_RFP_MAX_RESULTS", "10"))
+# grants.gov Search2 API is public and does not require a key. Queries are
+# kept broad-but-relevant to EMurph's actual capabilities rather than a
+# single hardcoded keyword, so the discovery net stays wide across the
+# categories he's realistically positioned to pursue or partner on.
+SOURCES_RFP_QUERIES: list[str] = _get_csv(
+    "HUNTER_SOURCES_RFP_QUERIES",
+    "cybersecurity,artificial intelligence,small business innovation,"
+    "workforce development,arts and media,faith-based community,"
+    "STEM education,digital literacy",
+)
+# Fetching per-opportunity award-amount detail costs one extra HTTP call
+# each — cap how many of the top (most recently posted) hits get detail
+# lookups per run to keep each scan fast and light.
+SOURCES_RFP_DETAIL_FETCH_LIMIT: int = int(os.getenv("HUNTER_SOURCES_RFP_DETAIL_FETCH_LIMIT", "6"))
+
 SOURCES_AFFILIATE_ENABLED: bool = _get_bool("HUNTER_SOURCES_AFFILIATE_ENABLED", True)
+
+# How often the lightweight discovery-only scan (all source adapters, no
+# trading candidates / quota checks) re-runs. Default 3 hours — frequent
+# enough to catch narrow-window deals and near-deadline grants without
+# hammering free public APIs (grants.gov, Slickdeals RSS, HN, etc.).
+DISCOVERY_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_DISCOVERY_SCAN_INTERVAL_SECONDS", "10800"))
 
 # ── Facebook Marketplace compliant execution lane ─────────────────────────
 MARKETPLACE_FB_LANE_ENABLED: bool = _get_bool("MARKETPLACE_FB_LANE_ENABLED", False)
