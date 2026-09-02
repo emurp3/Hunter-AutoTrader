@@ -264,6 +264,19 @@ def _persist_results(session: Session, results: list[SourceOpportunity]) -> dict
                 )
                 if sr.priority_band in ("elite", "high"):
                     build_action_plan(record.source_id, session)
+                    # 2026-09-02 — this update path (an existing opportunity
+                    # that got re-scored and crossed into elite/high for the
+                    # first time) never created a candidate strategy, only
+                    # the fresh-insert path below did. That's why 80
+                    # elite/high opportunities could exist with 0 candidate
+                    # strategies to promote from -- most real opportunities
+                    # get touched/re-scored on a later scan, not created and
+                    # scored elite/high in a single pass.
+                    try:
+                        from app.services.strategies import create_strategy_from_opportunity
+                        create_strategy_from_opportunity(record.source_id, session)
+                    except Exception:
+                        pass  # Strategy creation failure must not block the pipeline
             else:
                 skipped += 1
             continue

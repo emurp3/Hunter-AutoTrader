@@ -274,6 +274,21 @@ def _process_event(event: PolicyEvent, session: Session) -> int:
             session.add(source)
             opportunities_created += 1
 
+            # Same elite/high -> candidate strategy link every other
+            # opportunity source gets (see source_acquisition.py). Without
+            # this, policy-derived opportunities (executive actions,
+            # federal register, congressional legislation) could reach
+            # elite/high and just sit there with nothing ever drawing
+            # from the strategy quota's candidate pool.
+            if scoring_result.priority_band in ("elite", "high"):
+                session.commit()
+                session.refresh(source)
+                try:
+                    from app.services.strategies import create_strategy_from_opportunity
+                    create_strategy_from_opportunity(source.source_id, session)
+                except Exception:
+                    pass  # Strategy creation failure must not block the pipeline
+
         except Exception as exc:
             logger.warning("policy_engine: failed to create income source — %s", exc)
 
