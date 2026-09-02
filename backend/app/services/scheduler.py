@@ -16,6 +16,20 @@ Jobs registered at startup:
                        source only got one shot a day — narrow-window deals
                        and near-deadline grants could be missed entirely.
 
+  signal_scan_task    — runs every SIGNAL_SCAN_INTERVAL_SECONDS (default 6h);
+                       runs signal_engine.run_signal_scan() across ALL four
+                       adapters — crypto (CoinGecko), congressional STOCK Act
+                       filings, SEC Form 4, and executive-branch OGE 278T
+                       (Trump/cabinet/VP disclosures). Every signal is logged
+                       as a CopySignal record with a mirror/partial/watchlist/
+                       reject routing decision for review. Unattended REAL
+                       TRADE execution for VIP-watchlist matches
+                       (_execute_vip_micro_invest — $15/trade, $75/day, no
+                       review step, bypasses the budget ledger) stays gated
+                       behind HUNTER_ENABLE_VIP_AUTO_INVEST (default False)
+                       until there's an explicit decision to let Hunter place
+                       real money on a name match with zero human review.
+
   daily_scan_task     — runs every 24 hours; full pipeline — daily advisor
                        opportunity, trading candidate generation, source
                        acquisition (redundant with discovery_scan_task but
@@ -156,6 +170,29 @@ def _build_weekly_report(session: Session) -> dict:
     report["legacy_performance"] = timing_report["legacy"]
     report["open_position_snapshot"] = timing_report["open_position_snapshot"]
     return report
+
+
+async def signal_scan_task() -> None:
+    """
+    Runs the signal engine (crypto momentum + congressional/executive-branch
+    disclosure monitoring). See module docstring for exactly what does and
+    does not auto-execute.
+    """
+    logger.info("signal_scan_task: starting")
+    from app.database.config import engine as _engine
+    from app.services.signal_engine import run_signal_scan
+
+    with Session(_engine) as session:
+        try:
+            result = run_signal_scan(session)
+            logger.info(
+                "signal_scan_task: complete — new=%d skipped=%d errors=%d",
+                result.get("new", 0),
+                result.get("skipped", 0),
+                len(result.get("errors", [])),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("signal_scan_task: failed — %s", exc)
 
 
 async def discovery_scan_task() -> None:

@@ -306,6 +306,16 @@ SOURCES_BOUNTY_MAX_RESULTS: int = int(os.getenv("HUNTER_SOURCES_BOUNTY_MAX_RESUL
 # hammering free public APIs (grants.gov, Slickdeals RSS, HN, etc.).
 DISCOVERY_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_DISCOVERY_SCAN_INTERVAL_SECONDS", "10800"))
 
+# Signal engine (crypto momentum + congressional/executive-branch disclosure
+# monitoring). Monitoring/logging always runs when signal_scan_task is
+# scheduled. Real, unattended Alpaca trade execution for VIP-watchlist
+# name matches ($15/trade, $75/day, no review step — see signal_engine.py
+# _execute_vip_micro_invest) requires this to be explicitly set True. This
+# is a separate, higher-consequence decision from "monitor for signals" and
+# defaults to off.
+SIGNAL_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_SIGNAL_SCAN_INTERVAL_SECONDS", "21600"))
+ENABLE_VIP_AUTO_INVEST: bool = _get_bool("HUNTER_ENABLE_VIP_AUTO_INVEST", False)
+
 # ── Facebook Marketplace compliant execution lane ─────────────────────────
 MARKETPLACE_FB_LANE_ENABLED: bool = _get_bool("MARKETPLACE_FB_LANE_ENABLED", False)
 MARKETPLACE_FB_PROVIDER: str = os.getenv("MARKETPLACE_FB_PROVIDER", "manual").lower()

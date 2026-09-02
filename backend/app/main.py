@@ -48,8 +48,8 @@ from app.routers.policy import router as policy_router
 from app.models.policy_event import PolicyEvent  # noqa: F401 — registers table
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table
-from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task, discovery_scan_task
-from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS
+from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task, discovery_scan_task, signal_scan_task
+from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS, SIGNAL_SCAN_INTERVAL_SECONDS
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_job(daily_scan_task, "cron", hour=9, minute=35, timezone=_SCHEDULER_TZ, id="daily_scan", misfire_grace_time=3600)
     scheduler.add_job(discovery_scan_task, "interval", seconds=DISCOVERY_SCAN_INTERVAL_SECONDS, id="discovery_scan", max_instances=1, misfire_grace_time=600)
+    scheduler.add_job(signal_scan_task, "interval", seconds=SIGNAL_SCAN_INTERVAL_SECONDS, id="signal_scan", max_instances=1, misfire_grace_time=900)
     scheduler.add_job(weekly_report_task, "cron", day_of_week="mon", hour=8, minute=0, timezone=_SCHEDULER_TZ, id="weekly_report", misfire_grace_time=3600)
     if ALPACA_ENABLED and STRATEGY_MODE == "RECYCLE":
         scheduler.add_job(recycle_cycle_task, "interval", seconds=RECYCLE_CYCLE_INTERVAL_SECONDS, id="recycle_cycle", max_instances=1, misfire_grace_time=30)

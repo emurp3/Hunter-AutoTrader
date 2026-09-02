@@ -15,6 +15,7 @@ from app.services.sources.congress_feed import CongressFeedAdapter
 from app.services.sources.sec_edgar import SecEdgarAdapter
 from app.services.sources.crypto_signal import CryptoSignalAdapter
 from app.services.sources.oge_278t import Oge278TAdapter
+from app.config import ENABLE_VIP_AUTO_INVEST
 
 logger = logging.getLogger(__name__)
 
@@ -231,9 +232,20 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
             confidence = score_signal(raw)
             _vip = _match_vip(raw.get("filer_name", ""), raw.get("source", ""))
             if _vip:
-                _vticker = _vip.get("ticker_override") or raw.get("ticker", "")
-                _vresult = _execute_vip_micro_invest(_vticker, raw.get("action", "buy"), _vip["label"])
-                errors.append(f"VIP:{_vip['label']}:{_vresult['status']}")
+                if ENABLE_VIP_AUTO_INVEST:
+                    _vticker = _vip.get("ticker_override") or raw.get("ticker", "")
+                    _vresult = _execute_vip_micro_invest(_vticker, raw.get("action", "buy"), _vip["label"])
+                    errors.append(f"VIP:{_vip['label']}:{_vresult['status']}")
+                else:
+                    # Monitoring stays on; unattended real-money execution on
+                    # a VIP name match requires HUNTER_ENABLE_VIP_AUTO_INVEST=true.
+                    # The signal itself is still logged below via the normal
+                    # decision/CopySignal path, just without placing a trade.
+                    logger.info(
+                        "VIP match logged (auto-invest disabled): %s -- set "
+                        "HUNTER_ENABLE_VIP_AUTO_INVEST=true to enable real execution",
+                        _vip["label"],
+                    )
             if pre_decision and raw.get("asset_type") == "crypto":
                 decision, reason = pre_decision, f"CoinGecko velocity signal: {pre_decision}"
             else:
