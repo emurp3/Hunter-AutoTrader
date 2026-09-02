@@ -1,12 +1,16 @@
 """
 CongressFeedAdapter — Congressional STOCK Act trade disclosures.
 
-Primary source: Politician Trade Tracker API via RapidAPI
-  Host: politician-trade-tracker1.p.rapidapi.com
-  Endpoint: GET /trades/latest
-  Auth: X-RapidAPI-Key header (env: RAPIDAPI_POLITICIAN_KEY)
+Primary source: Tracefour (env: TRACEFOUR_API_KEY) — free tier, no paid
+subscription. Requires a free account/key from https://tracefour.com/settings
+(60 requests/hour). Iterates the same VIP-relevant member list signal_engine.py
+already watches, via GET /v1/congress/{member-slug}.
 
-Fallback: QuiverQuant (env: QUIVER_QUANT_API_KEY)
+Optional paid fallbacks, only used if their keys happen to be set (neither
+is required, neither is recommended given the standing rule not to spend
+more on Hunter than it's generating):
+  - Politician Trade Tracker API via RapidAPI (env: RAPIDAPI_POLITICIAN_KEY)
+  - QuiverQuant (env: QUIVER_QUANT_API_KEY)
 
 Capitol Trades API (capitoltrades.com) went offline May 2026.
 """
@@ -19,6 +23,26 @@ from typing import Any
 import httpx
 
 logger = logging.getLogger(__name__)
+
+TRACEFOUR_API_KEY = os.getenv("TRACEFOUR_API_KEY", "")
+TRACEFOUR_BASE = "https://tracefour.com"
+# Same politicians signal_engine.py's VIP_WATCHLIST already tracks (STOCK Act
+# / "congress" source entries) -- no point pulling a broader feed than the
+# set of names Hunter actually acts on.
+TRACEFOUR_MEMBER_SLUGS = [
+    "nancy-pelosi",
+    "matt-gaetz",
+    "dan-crenshaw",
+    "michael-mccaul",
+    "mitch-mcconnell",
+    "chuck-schumer",
+    "marco-rubio",
+    "elizabeth-warren",
+    "mark-warner",
+    "tommy-tuberville",
+    "josh-hawley",
+    "pat-toomey",
+]
 
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_POLITICIAN_KEY", "")
 RAPIDAPI_HOST = "politician-trade-tracker1.p.rapidapi.com"
@@ -57,6 +81,16 @@ def _parse_trade_date(raw: str) -> datetime | None:
     return None
 
 
+def _parse_iso_date(raw: str) -> datetime | None:
+    """Parse ISO 8601 timestamps (e.g. Tracefour's 'transactionDate'/'filedAt' fields)."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 def _clean_ticker(raw: str) -> str:
     """Strip exchange suffix — 'AMT:US' -> 'AMT'. N/A -> ''."""
     t = (raw or "").split(":")[0].strip()
@@ -70,14 +104,93 @@ class CongressFeedAdapter:
         return "congress"
 
     def fetch_recent(self, days_back: int = 30) -> list[dict[str, Any]]:
+        if TRACEFOUR_API_KEY:
+            return self._fetch_tracefour()
         if RAPIDAPI_KEY:
             return self._fetch_rapidapi()
         if QUIVER_KEY:
             return self._fetch_quiver(days_back)
-        logger.warning("CongressFeed: no API key set. Set RAPIDAPI_POLITICIAN_KEY or QUIVER_QUANT_API_KEY.")
+        logger.warning(
+            "CongressFeed: no API key set. Set TRACEFOUR_API_KEY (free -- see "
+            "https://tracefour.com/settings) or, if already paying for one, "
+            "RAPIDAPI_POLITICIAN_KEY / QUIVER_QUANT_API_KEY."
+        )
         return []
 
-    # ── RapidAPI (primary) ────────────────────────────────────────────────────
+    # ── Tracefour (primary, free) ────────────────────────────────────────────
+
+    def _fetch_tracefour(self) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        headers = {"Authorization": f"Bearer {TRACEFOUR_API_KEY}"}
+        with httpx.Client(timeout=15, headers=headers) as client:
+            for slug in TRACEFOUR_MEMBER_SLUGS:
+                try:
+                    resp = client.get(f"{TRACEFOUR_BASE}/v1/congress/{slug}")
+                    if resp.status_code == 404:
+                        continue  # member has no filings on record, not an error
+                    resp.raise_for_status()
+                    envelope = resp.json()
+                except Exception as exc:
+                    logger.warning("CongressFeed: Tracefour fetch failed for %s: %s", slug, exc)
+                    continue
+
+                trades = envelope.get("data") or []
+                if isinstance(trades, dict):
+                    # Some tracker-style responses nest the list under a key
+                    # (e.g. {"member": {...}, "trades": [...]})
+                    trades = trades.get("trades") or trades.get("transactions") or []
+                for r in trades:
+                    row = self._normalise_tracefour(r, member_slug=slug)
+                    if row:
+                        results.append(row)
+
+        logger.info("CongressFeed: Tracefour returned %d records across %d members", len(results), len(TRACEFOUR_MEMBER_SLUGS))
+        return results
+
+    def _normalise_tracefour(self, r: dict, *, member_slug: str) -> dict | None:
+        try:
+            raw_date = r.get("transactionDate") or r.get("date") or r.get("filedAt") or ""
+            trade_date = _parse_trade_date(raw_date) or _parse_iso_date(raw_date)
+            filer = r.get("member") or r.get("filerName") or member_slug.replace("-", " ").title()
+            ticker = _clean_ticker(r.get("ticker") or r.get("symbol") or "")
+            amount_raw = r.get("amountRange") or r.get("range") or ""
+            lo, hi, mid = _parse_amount(amount_raw)
+            if mid is None:
+                # Tracefour may give a direct value instead of a range.
+                value = r.get("value") or r.get("amount")
+                if value:
+                    lo = hi = mid = float(value)
+            action = str(r.get("type") or r.get("transactionType") or "buy").lower()
+            if action.startswith("p") or "buy" in action:
+                action = "buy"
+            elif action.startswith("s") or "sell" in action:
+                action = "sell"
+            latency_hours = 0.0
+            if trade_date:
+                latency_hours = max(0.0, (datetime.utcnow() - trade_date).total_seconds() / 3600)
+
+            return {
+                "source": "congress",
+                "source_id": f"{filer}|{ticker}|{raw_date}",
+                "filer_name": filer,
+                "filer_type": "politician",
+                "committee": r.get("chamber") or r.get("party") or None,
+                "ticker": ticker,
+                "asset_type": "stock",
+                "action": action if action in ("buy", "sell") else "buy",
+                "amount_low": lo,
+                "amount_high": hi,
+                "amount_midpoint": mid,
+                "trade_date": trade_date,
+                "disclosed_at": trade_date,
+                "latency_hours": latency_hours,
+                "raw_json": str(r)[:400],
+            }
+        except Exception as exc:
+            logger.debug("CongressFeed: Tracefour normalise error: %s", exc)
+            return None
+
+    # ── RapidAPI (optional paid fallback) ────────────────────────────────────
 
     def _fetch_rapidapi(self) -> list[dict[str, Any]]:
         try:
@@ -134,7 +247,7 @@ class CongressFeedAdapter:
             logger.debug("CongressFeed: normalise error: %s", exc)
             return None
 
-    # ── QuiverQuant fallback ──────────────────────────────────────────────────
+    # ── QuiverQuant (optional paid fallback) ─────────────────────────────────
 
     def _fetch_quiver(self, days_back: int) -> list[dict[str, Any]]:
         since = (datetime.utcnow().__class__.utcnow() )
