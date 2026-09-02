@@ -7,6 +7,7 @@ Public data sources only. Compliance-first.
 """
 from __future__ import annotations
 import logging
+import os
 from datetime import datetime
 from sqlmodel import Session, select
 
@@ -124,8 +125,22 @@ VIP_WATCHLIST = {
     "Pat Toomey":       {"label": "Sen. Toomey",           "source": "congress",  "ticker_override": None},
 }
 
-VIP_MICRO_INVEST_AMOUNT = 15.00   # dollars per VIP signal (notional)
+VIP_MICRO_INVEST_AMOUNT = 15.00   # legacy flat amount — superseded by confidence-scaled sizing below, kept only as _execute_vip_micro_invest's default
 VIP_MAX_DAILY_SPEND     = 75.00   # max total per day across all VIP signals
+
+# 2026-09-02 — confidence-scaled sizing, added after finding the flat
+# $15/trade auto-execute had no relationship to signal confidence at all.
+# amount = min(confidence * VIP_AUTO_INVEST_MAX_AMOUNT, VIP_AUTO_INVEST_MAX_AMOUNT)
+# so a low-confidence match sizes small and a high-confidence match sizes up
+# toward the cap. Anything that would size ABOVE the approval threshold does
+# NOT auto-execute — it's logged as pending_approval (CopySignal.decision)
+# plus a review_required alert, and stays that way until acted on manually.
+# This means, deliberately, that ONLY small/low-confidence trades execute
+# unattended right now; the trades big enough to matter require a human
+# look first. Both numbers are meant to be revisited after watching real
+# trigger frequency for a while — not a permanent policy.
+VIP_AUTO_INVEST_MAX_AMOUNT = float(os.getenv("HUNTER_VIP_AUTO_INVEST_MAX_AMOUNT", "10.00"))
+VIP_AUTO_INVEST_APPROVAL_THRESHOLD = float(os.getenv("HUNTER_VIP_AUTO_INVEST_APPROVAL_THRESHOLD", "5.00"))
 
 
 def _match_vip(filer_name: str, source: str) -> dict | None:
@@ -139,10 +154,12 @@ def _match_vip(filer_name: str, source: str) -> dict | None:
     return None
 
 
-def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str) -> dict:
+def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str, amount: float) -> dict:
     """
-    Place a real Alpaca notional micro-buy for a VIP signal.
-    Capped at VIP_MICRO_INVEST_AMOUNT per trade.
+    Place a real Alpaca notional micro-buy for a VIP signal at the given
+    confidence-scaled amount (see VIP_AUTO_INVEST_MAX_AMOUNT /
+    VIP_AUTO_INVEST_APPROVAL_THRESHOLD). Caller is responsible for only
+    invoking this when amount <= VIP_AUTO_INVEST_APPROVAL_THRESHOLD.
     """
     import os
     import logging as _log
@@ -154,9 +171,9 @@ def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str) -> dict:
     alpaca_enabled = os.getenv("ALPACA_ENABLED", "").lower() in ("1", "true", "yes")
     if not alpaca_enabled:
         _logger.info("VIP trigger [dry-run]: would buy $%.2f of %s for %s",
-                     VIP_MICRO_INVEST_AMOUNT, ticker, vip_label)
+                     amount, ticker, vip_label)
         return {"status": "dry_run", "ticker": ticker,
-                "amount": VIP_MICRO_INVEST_AMOUNT, "vip": vip_label}
+                "amount": amount, "vip": vip_label}
 
     try:
         import httpx
@@ -169,7 +186,7 @@ def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str) -> dict:
 
         resp = httpx.post(
             f"{base_url}/v2/orders",
-            json={"symbol": symbol, "notional": str(VIP_MICRO_INVEST_AMOUNT),
+            json={"symbol": symbol, "notional": str(amount),
                   "side": side, "type": "market", "time_in_force": "day"},
             headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key},
             timeout=10,
@@ -178,9 +195,9 @@ def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str) -> dict:
         if resp.status_code in (200, 201):
             order = resp.json()
             _logger.info("VIP MICRO-INVEST OK: $%.2f %s %s for %s | order=%s",
-                         VIP_MICRO_INVEST_AMOUNT, side.upper(), symbol,
+                         amount, side.upper(), symbol,
                          vip_label, order.get("id"))
-            return {"status": "executed", "ticker": symbol, "amount": VIP_MICRO_INVEST_AMOUNT,
+            return {"status": "executed", "ticker": symbol, "amount": amount,
                     "action": side, "vip": vip_label, "alpaca_order_id": order.get("id")}
         else:
             _logger.warning("VIP micro-invest FAILED: %d %s | %s",
@@ -190,6 +207,36 @@ def _execute_vip_micro_invest(ticker: str, action: str, vip_label: str) -> dict:
     except Exception as exc:
         _logger.exception("VIP micro-invest exception for %s: %s", vip_label, exc)
         return {"status": "exception", "error": str(exc), "vip": vip_label}
+
+
+def _flag_vip_needs_approval(session: Session, vip: dict, raw: dict, amount: float, confidence: float) -> None:
+    """
+    Raise a review_required alert for a VIP signal whose confidence-scaled
+    amount exceeds VIP_AUTO_INVEST_APPROVAL_THRESHOLD. Does not execute
+    anything — the CopySignal record itself carries decision=pending_approval
+    as the durable record; this alert is just for visibility.
+    """
+    try:
+        from app.services import alerts as alert_svc
+        from app.models.alert import AlertType, AlertPriority
+
+        ticker = vip.get("ticker_override") or raw.get("ticker", "?")
+        alert_svc.raise_alert(
+            alert_type=AlertType.review_required,
+            title=f"VIP signal needs approval: {vip['label']} — {ticker} (${amount:.2f})",
+            body=(
+                f"{vip['label']} matched a disclosed transaction on {ticker} "
+                f"(confidence={confidence:.2f}). Confidence-scaled amount "
+                f"${amount:.2f} exceeds the ${VIP_AUTO_INVEST_APPROVAL_THRESHOLD:.2f} "
+                f"auto-execute threshold, so no trade was placed. Review via "
+                f"/signals/vip-watchlist or /signals/feed and execute manually "
+                f"if desired."
+            ),
+            session=session,
+            priority=AlertPriority.high,
+        )
+    except Exception:
+        logger.exception("Failed to raise VIP approval alert for %s", vip.get("label"))
 
 
 def get_vip_watchlist() -> list[dict]:
@@ -231,22 +278,38 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
             pre_decision = raw.pop("_pre_decision", None)
             confidence = score_signal(raw)
             _vip = _match_vip(raw.get("filer_name", ""), raw.get("source", ""))
+            _vip_decision_override: tuple[str, str] | None = None
             if _vip:
-                if ENABLE_VIP_AUTO_INVEST:
+                vip_amount = round(min(confidence * VIP_AUTO_INVEST_MAX_AMOUNT, VIP_AUTO_INVEST_MAX_AMOUNT), 2)
+                if vip_amount > VIP_AUTO_INVEST_APPROVAL_THRESHOLD:
+                    # High enough confidence/amount to matter — do NOT
+                    # auto-execute. Log as pending_approval (durable, in the
+                    # CopySignal record itself) and raise a review_required
+                    # alert. Nothing places a trade until someone acts on it.
+                    _flag_vip_needs_approval(session, _vip, raw, vip_amount, confidence)
+                    _vip_decision_override = (
+                        "pending_approval",
+                        f"VIP match ${vip_amount:.2f} (conf={confidence:.2f}) exceeds "
+                        f"${VIP_AUTO_INVEST_APPROVAL_THRESHOLD:.2f} auto-execute threshold — needs review",
+                    )
+                    errors.append(f"VIP:{_vip['label']}:pending_approval(${vip_amount:.2f})")
+                elif ENABLE_VIP_AUTO_INVEST:
                     _vticker = _vip.get("ticker_override") or raw.get("ticker", "")
-                    _vresult = _execute_vip_micro_invest(_vticker, raw.get("action", "buy"), _vip["label"])
-                    errors.append(f"VIP:{_vip['label']}:{_vresult['status']}")
+                    _vresult = _execute_vip_micro_invest(_vticker, raw.get("action", "buy"), _vip["label"], amount=vip_amount)
+                    errors.append(f"VIP:{_vip['label']}:{_vresult['status']}(${vip_amount:.2f})")
                 else:
                     # Monitoring stays on; unattended real-money execution on
                     # a VIP name match requires HUNTER_ENABLE_VIP_AUTO_INVEST=true.
                     # The signal itself is still logged below via the normal
                     # decision/CopySignal path, just without placing a trade.
                     logger.info(
-                        "VIP match logged (auto-invest disabled): %s -- set "
+                        "VIP match logged (auto-invest disabled): %s ($%.2f, conf=%.2f) -- set "
                         "HUNTER_ENABLE_VIP_AUTO_INVEST=true to enable real execution",
-                        _vip["label"],
+                        _vip["label"], vip_amount, confidence,
                     )
-            if pre_decision and raw.get("asset_type") == "crypto":
+            if _vip_decision_override:
+                decision, reason = _vip_decision_override
+            elif pre_decision and raw.get("asset_type") == "crypto":
                 decision, reason = pre_decision, f"CoinGecko velocity signal: {pre_decision}"
             else:
                 decision, reason = route_signal(
