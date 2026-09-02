@@ -177,44 +177,15 @@ def _call_llm(prompt: str) -> dict[str, Any] | None:
 
 
 # ── Opportunity Scoring ────────────────────────────────────────────────────────
-def _compute_hunter_score(factors: dict[str, int]) -> float:
-    """
-    Compute proprietary Hunter Opportunity Score (0-100).
-    Factors each 0-10: revenue_potential, time_sensitivity, market_size,
-    competition_low (higher = less competition = better),
-    capital_required_low (higher = less capital needed = better),
-    skill_match, ease_of_entry, confidence.
-    """
-    weights = {
-        "revenue_potential":   0.25,
-        "time_sensitivity":    0.15,
-        "market_size":         0.10,
-        "competition_low":     0.10,
-        "capital_required_low": 0.10,
-        "skill_match":         0.15,
-        "ease_of_entry":       0.10,
-        "confidence":          0.05,
-    }
-    raw = sum(factors.get(k, 5) * w for k, w in weights.items())
-    return round(min(raw * 10.0, 100.0), 1)
-
-
-def _priority_band(score: float, priority_level: str) -> str:
-    level_map = {
-        "Critical": PriorityBand.critical,
-        "High": PriorityBand.high,
-        "Medium": PriorityBand.medium,
-        "Low": PriorityBand.low,
-    }
-    if priority_level in level_map:
-        return level_map[priority_level]
-    if score >= 75:
-        return PriorityBand.critical
-    if score >= 55:
-        return PriorityBand.high
-    if score >= 35:
-        return PriorityBand.medium
-    return PriorityBand.low
+# 2026-09-02 — the module-specific scoring functions that used to live here
+# (_compute_hunter_score, _priority_band) were removed. They implemented a
+# separate weighting formula incompatible with scoring.py's EV-based engine
+# used everywhere else, and _priority_band had a live bug: it could return
+# PriorityBand.critical, which isn't a valid PriorityBand value
+# (low/medium/high/elite only) -- causing an AttributeError that silently
+# dropped exactly the opportunities the LLM judged most important. See
+# _process_event below, which now calls scoring.score_opportunity()
+# directly, the same as every other opportunity source in the system.
 
 
 # ── Event Processing ───────────────────────────────────────────────────────────
@@ -244,8 +215,6 @@ def _process_event(event: PolicyEvent, session: Session) -> int:
     for opp in analysis.get("opportunities", []):
         try:
             score_factors = opp.get("score_factors", {})
-            hunter_score = _compute_hunter_score(score_factors)
-            priority = _priority_band(hunter_score, opp.get("priority_level", "Medium"))
 
             revenue_low = float(opp.get("revenue_potential_low", 0))
             revenue_high = float(opp.get("revenue_potential_high", 500))
@@ -256,6 +225,7 @@ def _process_event(event: PolicyEvent, session: Session) -> int:
 
             # Build enriched notes
             notes_parts = [
+                f"Title: {opp.get('title', event.title)}",
                 f"Event: {event.title}",
                 f"Source: {event.source_name}",
                 f"What happened: {analysis.get('what_happened', '')}",
@@ -265,19 +235,15 @@ def _process_event(event: PolicyEvent, session: Session) -> int:
                 f"Actions: {'; '.join(actions[:3])}",
                 f"Profile impacts: {json.dumps(analysis.get('profile_impacts', {}))}",
                 f"Policy event ID: {event.id}",
-                f"Hunter Score: {hunter_score}/100",
             ]
 
             source = IncomeSource(
                 source_id=f"p2p_{uuid.uuid4().hex[:12]}",
-                title=opp.get("title", event.title)[:200],
                 description=opp.get("description", "")[:1000],
                 estimated_profit=round(estimated_profit, 2),
                 currency="USD",
                 status=SourceStatus.new,
                 confidence=score_factors.get("confidence", 7) / 10.0,
-                score=hunter_score,
-                priority_band=priority,
                 origin_module="policy_engine",
                 category=opp.get("opportunity_type", "Policy Intelligence")[:100],
                 next_action=next_action[:500],
@@ -285,6 +251,26 @@ def _process_event(event: PolicyEvent, session: Session) -> int:
                 date_found=date.today(),
                 lane="policy",
             )
+
+            # 2026-09-02 — score through the same EV/speed/capability-fit
+            # engine every other opportunity source uses (scoring.py),
+            # instead of this module's own separate LLM-weighted formula.
+            # That old formula (a) never got the EV/speed/capability-fit
+            # improvements applied anywhere else, so policy opportunities
+            # were being ranked on a completely different, incompatible
+            # scale from everything in source_acquisition.py, and (b) had
+            # a live bug: it could return PriorityBand.critical, which
+            # doesn't exist on the PriorityBand enum (low/medium/high/elite
+            # only) -- any opportunity the LLM judged "Critical", or that
+            # scored >=75, would raise AttributeError and silently fail to
+            # save. score_opportunity() has no such band and is the single
+            # scoring authority now.
+            from app.services.scoring import score_opportunity
+            scoring_result = score_opportunity(source, session)
+            source.score = scoring_result.score
+            source.priority_band = scoring_result.priority_band
+            source.score_rationale = scoring_result.rationale
+
             session.add(source)
             opportunities_created += 1
 
@@ -418,7 +404,7 @@ def get_dashboard_metrics(session: Session) -> dict[str, Any]:
     total_opps = len(sources_from_policy)
 
     active_opps = [s for s in sources_from_policy if s.status not in (SourceStatus.rejected, SourceStatus.exhausted)]
-    high_priority = [s for s in active_opps if s.priority_band in (PriorityBand.critical, PriorityBand.high)]
+    high_priority = [s for s in active_opps if s.priority_band in (PriorityBand.elite, PriorityBand.high)]
 
     estimated_monthly_value = sum(s.estimated_profit for s in active_opps)
     avg_score = (sum(s.score or 0 for s in active_opps) / len(active_opps)) if active_opps else 0
