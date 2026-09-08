@@ -207,6 +207,10 @@ class CanonicalOpportunity(SQLModel, table=True):
 
     # Checkpoints / ownership
     required_commander_checkpoints: Optional[str] = Field(default=None)
+    # Commander's own reply to the checkpoint above — via the chat/answer
+    # endpoint, never inferred or written by Hunter or Claude.
+    commander_response: Optional[str] = Field(default=None)
+    commander_responded_at: Optional[datetime] = Field(default=None)
     next_action: Optional[str] = Field(default=None)
     owner: str = Field(default="Hunter")
     due_date: Optional[date] = Field(default=None)

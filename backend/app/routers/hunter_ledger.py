@@ -36,6 +36,45 @@ def list_candidates(disposition: Optional[str] = None, session: Session = Depend
     return rows
 
 
+@router.get("/commander-decisions")
+def list_commander_decisions(session: Session = Depends(get_session)):
+    """Every candidate currently waiting on a Commander checkpoint —
+    the feed the chat widget uses to have Hunter ask first."""
+    rows = session.exec(
+        select(CanonicalOpportunity).where(
+            CanonicalOpportunity.disposition == Disposition.pending_commander.value
+        )
+    ).all()
+    return [
+        {
+            "canonical_opportunity_id": o.canonical_opportunity_id,
+            "lane": o.lane,
+            "factual_mechanism": o.factual_mechanism,
+            "checkpoint": o.required_commander_checkpoints,
+            "commander_response": o.commander_response,
+            "commander_responded_at": o.commander_responded_at,
+        }
+        for o in rows
+        if o.commander_response is None  # already-answered ones drop off the feed
+    ]
+
+
+@router.post("/candidates/{canonical_opportunity_id}/commander-answer")
+def answer_commander_checkpoint(
+    canonical_opportunity_id: str,
+    answer: str,
+    decision: Optional[str] = None,
+    session: Session = Depends(get_session),
+):
+    """Commander's reply to a checkpoint, from the chat widget or the API
+    directly. `decision` is 'approve', 'decline', or omitted (just
+    supplying requested info, e.g. a company name/FEIN)."""
+    try:
+        return acct.record_commander_answer(session, canonical_opportunity_id, answer, decision=decision)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @router.get("/candidates/{canonical_opportunity_id}")
 def get_candidate(canonical_opportunity_id: str, session: Session = Depends(get_session)):
     opp = session.exec(

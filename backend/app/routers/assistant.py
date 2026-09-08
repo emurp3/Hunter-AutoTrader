@@ -121,6 +121,26 @@ def _gather_context(session: Session) -> dict:
         ctx["buying_power"] = "unknown"
         ctx["account_status"] = "unknown"
 
+    try:
+        from app.models.hunter_ledger import CanonicalOpportunity, Disposition
+        pending = session.exec(
+            select(CanonicalOpportunity).where(
+                CanonicalOpportunity.disposition == Disposition.pending_commander.value,
+                CanonicalOpportunity.commander_response.is_(None),
+            )
+        ).all()
+        ctx["commander_decisions"] = [
+            {
+                "id": o.canonical_opportunity_id,
+                "mechanism": o.factual_mechanism,
+                "checkpoint": o.required_commander_checkpoints or "no specific checkpoint recorded",
+            }
+            for o in pending
+        ]
+    except Exception as exc:
+        logger.warning("Failed to fetch pending Commander decisions: %s", exc)
+        ctx["commander_decisions"] = []
+
     ctx.setdefault("advisor_opp_title", "none")
     ctx.setdefault("advisor_opp_ticker", "n/a")
     ctx.setdefault("advisor_opp_lane", "n/a")
@@ -136,6 +156,14 @@ def _build_system_prompt(ctx: dict) -> str:
         for o in ctx.get("top_opps", [])
     ) or "No ranked opportunities available."
 
+    decisions = ctx.get("commander_decisions") or []
+    if decisions:
+        decisions_text = "\n".join(
+            f"- [{d['id']}] {d['mechanism']}\n  Checkpoint: {d['checkpoint']}" for d in decisions
+        )
+    else:
+        decisions_text = "None open right now."
+
     return (
         "You are Hunter's onboard AI advisor. You have real-time access to the following Hunter state:\n\n"
         "ACCOUNT: Cash ${account_cash}, Buying Power ${buying_power}, Status: {account_status}\n"
@@ -146,7 +174,14 @@ def _build_system_prompt(ctx: dict) -> str:
         "SIGNALS: {signals_total} ingested\n"
         "FORGE OPPS: {forge_count} opportunities queued\n"
         "PERFORMANCE: {success_rate}% success rate, {completed} completed, {failed} failed\n\n"
-        "Answer the user's question clearly and actionably. Be direct. If an action is required, "
-        "specify the exact step. Reference specific opportunity names, tickers, and amounts from "
-        "the data above when relevant. Keep responses under 250 words."
-    ).format(opps_text=opps_text, **ctx)
+        "OPEN COMMANDER DECISIONS (opportunities Hunter's research completed but that are "
+        "blocked on YOUR input — credentials, identity, filings, signatures, and similar "
+        "regulated/consequential actions are never yours to supply or approve on Commander's "
+        "behalf):\n{decisions_text}\n\n"
+        "If there are open Commander decisions, lead with them — ask for exactly what's needed, "
+        "referencing the opportunity by name. Never assume an answer, never invent eligibility or "
+        "identity details, and never claim an opportunity executed unless Hunter's own ledger shows "
+        "a real receipt. For everything else: answer the user's question clearly and actionably. Be "
+        "direct. If an action is required, specify the exact step. Reference specific opportunity "
+        "names, tickers, and amounts from the data above when relevant. Keep responses under 250 words."
+    ).format(opps_text=opps_text, decisions_text=decisions_text, **ctx)
