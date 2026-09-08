@@ -1,0 +1,504 @@
+"""
+Execution accounting for the Hunter Implementation Addendum (2026-09-08).
+
+This is the enforcement layer: the only place execution credit, realized
+cash, permanent rejection, and replacement-chain accounting are allowed to
+change. Routers and the quota loop must call through here rather than
+writing to the ledger tables directly, or the invariants below stop
+holding.
+
+Invariants enforced here (see tests/test_hunter_execution_ledger.py):
+  1. A research/scoring/screening action alone can never create an
+     ExecutionRecord — only record_execution() can, and it requires a
+     real external_endpoint + receipt_reference.
+  2. PENDING_COMMANDER never increments the quota — there is no code path
+     from "pending" straight into a counted execution without going
+     through record_execution() with a receipt.
+  3. record_execution() without a valid receipt raises ValueError.
+  4. Realized cash is only ever written by settle_cash(), which requires
+     its own evidence_reference distinct from any projected figure.
+  5. Permanent REJECTED/BLOCKED requires an evidenced rescue history.
+  6. Any BLOCKED/PENDING_COMMANDER disposition opens a replacement chain.
+  7. Every CanonicalOpportunity carries exactly one current disposition
+     (non-nullable column), so it lands in exactly one ledger bucket.
+  8. Daily PASS requires 5 distinct ExecutionRecord rows with 5 distinct
+     receipts on that day.
+  10. Autonomous execution/rescue actions are refused on Sundays.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
+
+from sqlmodel import Session, select
+
+from app.models.hunter_ledger import (
+    CanonicalOpportunity,
+    Disposition,
+    DISPOSITIONS_REQUIRING_REPLACEMENT,
+    DISPOSITIONS_REQUIRING_RESCUE_HISTORY,
+    ExecutionRecord,
+    RescueAttempt,
+    RescueResult,
+    ReplacementChain,
+    ZERO_EXECUTION_DISPOSITIONS,
+)
+
+DAILY_EXECUTION_QUOTA = 5
+WEEKLY_EXECUTION_QUOTA = 25
+CYCLE_EXECUTION_QUOTA = 100
+CYCLE_DAYS = 28
+
+
+class SundayLockout(PermissionError):
+    """Raised when an autonomous action is attempted on a Sunday."""
+
+
+class MissingReceiptError(ValueError):
+    """Raised when an execution is attempted without a valid receipt."""
+
+
+class RescueHistoryRequiredError(ValueError):
+    """Raised when a permanent rejection/block is attempted without an
+    evidenced rescue history."""
+
+
+def assert_autonomous_operations_allowed(on: Optional[date] = None) -> None:
+    """Sunday permits zero autonomous Hunter operations (addendum test
+    invariant). Reporting/reads are unaffected — only call this from
+    write paths that represent autonomous action."""
+    d = on or datetime.now(timezone.utc).date()
+    if d.weekday() == 6:  # Monday=0 ... Sunday=6
+        raise SundayLockout(
+            "Sunday permits zero autonomous Hunter operations. "
+            "This action requires a non-Sunday operating day."
+        )
+
+
+# ── Execution ledger (the only source of quota credit) ────────────────────
+
+
+def record_execution(
+    session: Session,
+    *,
+    canonical_opportunity_id: str,
+    source: str,
+    action_description: str,
+    actions_taken: str,
+    external_endpoint: str,
+    receipt_reference: str,
+    money_spent_committed: float = 0.0,
+    expected_lawful_return: float = 0.0,
+    expected_time_to_cash: Optional[str] = None,
+    follow_up: Optional[str] = None,
+    owner: str = "Hunter",
+    due_date: Optional[date] = None,
+    timestamp: Optional[datetime] = None,
+    enforce_sunday_lockout: bool = True,
+) -> ExecutionRecord:
+    """Record one countable execution. Requires the action to have
+    actually reached an external, verifiable endpoint with a receipt —
+    research, drafts, and approval-ready packets must not call this."""
+    if enforce_sunday_lockout:
+        assert_autonomous_operations_allowed((timestamp or datetime.now(timezone.utc)).date() if timestamp else None)
+
+    if not external_endpoint or not external_endpoint.strip():
+        raise MissingReceiptError(
+            "record_execution() requires a real external_endpoint — "
+            "research or drafts do not count."
+        )
+    if not receipt_reference or not receipt_reference.strip():
+        raise MissingReceiptError(
+            "record_execution() requires a non-empty receipt_reference "
+            "(confirmation number, timestamped submission, sent-message "
+            "record, reachable live URL, filing/order receipt, or "
+            "equivalent proof)."
+        )
+
+    existing = session.exec(
+        select(ExecutionRecord).where(ExecutionRecord.receipt_reference == receipt_reference)
+    ).first()
+    if existing:
+        raise MissingReceiptError(
+            f"receipt_reference '{receipt_reference}' is already recorded "
+            f"(ExecutionRecord id={existing.id}) — duplicate receipts do "
+            "not create additional execution credit."
+        )
+
+    opp = _get_opportunity(session, canonical_opportunity_id)
+
+    record = ExecutionRecord(
+        canonical_opportunity_id=canonical_opportunity_id,
+        source=source,
+        action_description=action_description,
+        actions_taken=actions_taken,
+        external_endpoint=external_endpoint.strip(),
+        receipt_reference=receipt_reference.strip(),
+        money_spent_committed=money_spent_committed,
+        expected_lawful_return=expected_lawful_return,
+        expected_time_to_cash=expected_time_to_cash,
+        follow_up=follow_up,
+        owner=owner,
+        due_date=due_date,
+        timestamp=timestamp or datetime.now(timezone.utc),
+    )
+    session.add(record)
+
+    if opp:
+        opp.disposition = Disposition.executed
+        opp.execution_endpoint = record.external_endpoint
+        opp.external_receipt_ref = record.receipt_reference
+        opp.updated_at = datetime.now(timezone.utc)
+        session.add(opp)
+
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+def settle_cash(
+    session: Session,
+    execution_record_id: int,
+    *,
+    realized_gross_cash: float,
+    evidence_reference: str,
+    settled_expenses: float = 0.0,
+) -> ExecutionRecord:
+    """Attach the actual, evidenced cash outcome to a prior execution.
+    This is the ONLY function permitted to populate realized_gross_cash —
+    it takes its own evidence_reference and never reads expected_lawful_return
+    or any other projected figure as a source of truth."""
+    if not evidence_reference or not evidence_reference.strip():
+        raise MissingReceiptError(
+            "settle_cash() requires an evidence_reference distinct from "
+            "any projected/advertised/hypothetical figure — e.g. a bank "
+            "deposit confirmation, statement line, or payout receipt."
+        )
+
+    record = session.get(ExecutionRecord, execution_record_id)
+    if not record:
+        raise ValueError(f"ExecutionRecord id={execution_record_id} not found")
+
+    record.realized_gross_cash = realized_gross_cash
+    record.settled_expenses = settled_expenses
+    record.net_realized_cash = realized_gross_cash - settled_expenses
+    record.settled_evidence_reference = evidence_reference.strip()
+    record.settled_at = datetime.now(timezone.utc)
+    session.add(record)
+
+    opp = _get_opportunity(session, record.canonical_opportunity_id)
+    if opp:
+        opp.realized_gross_cash = record.realized_gross_cash
+        opp.settled_expenses = record.settled_expenses
+        opp.net_realized_cash = record.net_realized_cash
+        opp.updated_at = datetime.now(timezone.utc)
+        session.add(opp)
+
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+# ── Disposition / screening ────────────────────────────────────────────────
+
+
+def set_disposition(
+    session: Session,
+    canonical_opportunity_id: str,
+    disposition: Disposition | str,
+    *,
+    evidence: Optional[str] = None,
+    duplicate_of: Optional[str] = None,
+) -> CanonicalOpportunity:
+    """Move a candidate to a new disposition, enforcing the rescue-history
+    and replacement-chain rules. Never call this to set EXECUTED directly —
+    that is set only by record_execution()."""
+    disposition = Disposition(disposition)
+    if disposition == Disposition.executed:
+        raise ValueError(
+            "EXECUTED may only be set via record_execution() with a real "
+            "receipt — set_disposition() cannot grant execution credit."
+        )
+
+    opp = _get_opportunity(session, canonical_opportunity_id, required=True)
+
+    if disposition in DISPOSITIONS_REQUIRING_RESCUE_HISTORY:
+        attempts = list(
+            session.exec(
+                select(RescueAttempt).where(
+                    RescueAttempt.canonical_opportunity_id == canonical_opportunity_id
+                )
+            )
+        )
+        if not attempts:
+            raise RescueHistoryRequiredError(
+                f"Cannot set '{disposition.value}' on {canonical_opportunity_id} "
+                "without at least one documented RescueAttempt — feasibility "
+                "analysis alone is diagnostic, not completion."
+            )
+        if disposition == Disposition.rejected and not evidence:
+            raise RescueHistoryRequiredError(
+                "Permanent REJECTED requires an 'evidence' statement showing "
+                "the mechanism is unlawful with no lawful equivalent, every "
+                "successor is closed with no reopening path, Commander is "
+                "factually ineligible with no adjacent route, or bounded "
+                "economics fail after lower-cost alternatives are exhausted."
+            )
+
+    if disposition == Disposition.duplicate and not duplicate_of:
+        raise ValueError("DUPLICATE requires duplicate_of (the canonical opportunity it merges into).")
+
+    opp.disposition = disposition.value
+    if evidence:
+        note = f"[disposition={disposition.value}] {evidence}"
+        opp.next_action = note if not opp.next_action else f"{opp.next_action}\n{note}"
+    if duplicate_of:
+        opp.duplicate_of_canonical_opportunity_id = duplicate_of
+    opp.updated_at = datetime.now(timezone.utc)
+    session.add(opp)
+    session.commit()
+    session.refresh(opp)
+
+    if disposition in DISPOSITIONS_REQUIRING_REPLACEMENT:
+        open_replacement_chain(session, canonical_opportunity_id)
+
+    return opp
+
+
+def open_replacement_chain(
+    session: Session,
+    blocked_canonical_opportunity_id: str,
+    replacement_canonical_opportunity_id: Optional[str] = None,
+) -> ReplacementChain:
+    """Ensure a blocked/pending-Commander candidate has an open parallel
+    replacement chain so the operating day isn't consumed by one blocker.
+    Idempotent — returns the existing open chain if one is already there."""
+    existing = session.exec(
+        select(ReplacementChain).where(
+            ReplacementChain.blocked_canonical_opportunity_id == blocked_canonical_opportunity_id,
+            ReplacementChain.closed_at.is_(None),
+        )
+    ).first()
+    if existing:
+        if replacement_canonical_opportunity_id and not existing.replacement_canonical_opportunity_id:
+            existing.replacement_canonical_opportunity_id = replacement_canonical_opportunity_id
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
+        return existing
+
+    chain = ReplacementChain(
+        blocked_canonical_opportunity_id=blocked_canonical_opportunity_id,
+        replacement_canonical_opportunity_id=replacement_canonical_opportunity_id,
+    )
+    session.add(chain)
+    session.commit()
+    session.refresh(chain)
+    return chain
+
+
+def close_replacement_chain(session: Session, chain_id: int, *, result: str) -> ReplacementChain:
+    chain = session.get(ReplacementChain, chain_id)
+    if not chain:
+        raise ValueError(f"ReplacementChain id={chain_id} not found")
+    chain.closed_at = datetime.now(timezone.utc)
+    chain.result = result
+    session.add(chain)
+    session.commit()
+    session.refresh(chain)
+    return chain
+
+
+def record_rescue_attempt(
+    session: Session,
+    canonical_opportunity_id: str,
+    rescue_type: str,
+    description: str,
+    *,
+    result: str = RescueResult.pending,
+    evidence_reference: Optional[str] = None,
+) -> RescueAttempt:
+    attempt = RescueAttempt(
+        canonical_opportunity_id=canonical_opportunity_id,
+        rescue_type=rescue_type,
+        description=description,
+        result=result,
+        evidence_reference=evidence_reference,
+    )
+    session.add(attempt)
+    session.commit()
+    session.refresh(attempt)
+    return attempt
+
+
+# ── Quota / reconciliation ────────────────────────────────────────────────
+
+
+def get_execution_count(session: Session, day: Optional[date] = None) -> int:
+    """Count DISTINCT execution receipts for the given day (default:
+    today). This is the only function the quota check should read from."""
+    d = day or datetime.now(timezone.utc).date()
+    start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    rows = session.exec(
+        select(ExecutionRecord).where(
+            ExecutionRecord.timestamp >= start,
+            ExecutionRecord.timestamp < end,
+        )
+    ).all()
+    receipts = {r.receipt_reference for r in rows if r.receipt_reference}
+    return len(receipts)
+
+
+def get_weekly_execution_count(session: Session, day: Optional[date] = None) -> int:
+    d = day or datetime.now(timezone.utc).date()
+    week_start = d - timedelta(days=d.weekday())
+    start = datetime.combine(week_start, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=7)
+    rows = session.exec(
+        select(ExecutionRecord).where(
+            ExecutionRecord.timestamp >= start,
+            ExecutionRecord.timestamp < end,
+        )
+    ).all()
+    return len({r.receipt_reference for r in rows if r.receipt_reference})
+
+
+def get_cycle_execution_count(session: Session, day: Optional[date] = None, cycle_start: Optional[date] = None) -> int:
+    d = day or datetime.now(timezone.utc).date()
+    cs = cycle_start or (d - timedelta(days=d.weekday()) - timedelta(weeks=3))
+    start = datetime.combine(cs, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=CYCLE_DAYS)
+    rows = session.exec(
+        select(ExecutionRecord).where(
+            ExecutionRecord.timestamp >= start,
+            ExecutionRecord.timestamp < end,
+        )
+    ).all()
+    return len({r.receipt_reference for r in rows if r.receipt_reference})
+
+
+def get_quota_status(session: Session, day: Optional[date] = None) -> dict:
+    d = day or datetime.now(timezone.utc).date()
+    daily = get_execution_count(session, d)
+    weekly = get_weekly_execution_count(session, d)
+    cycle = get_cycle_execution_count(session, d)
+    distinct_receipts = daily  # get_execution_count already dedupes by receipt
+    verdict = "PASS" if (daily >= DAILY_EXECUTION_QUOTA and distinct_receipts >= DAILY_EXECUTION_QUOTA) else "FAIL"
+    return {
+        "date": d.isoformat(),
+        "daily_verdict": verdict,
+        "execution_count": daily,
+        "execution_quota": DAILY_EXECUTION_QUOTA,
+        "weekly_count": weekly,
+        "weekly_quota": WEEKLY_EXECUTION_QUOTA,
+        "cycle_count": cycle,
+        "cycle_quota": CYCLE_EXECUTION_QUOTA,
+        "net_realized_cash_today": get_net_realized_cash(session, d),
+        "pending_probability_adjusted_value": get_pending_probability_adjusted_value(session),
+    }
+
+
+def get_net_realized_cash(session: Session, day: Optional[date] = None) -> float:
+    """Sum of net_realized_cash for executions SETTLED on the given day —
+    never derived from expected/projected figures."""
+    d = day or datetime.now(timezone.utc).date()
+    start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    rows = session.exec(
+        select(ExecutionRecord).where(
+            ExecutionRecord.settled_at.is_not(None),
+            ExecutionRecord.settled_at >= start,
+            ExecutionRecord.settled_at < end,
+        )
+    ).all()
+    return round(sum(r.net_realized_cash or 0.0 for r in rows), 2)
+
+
+def get_pending_probability_adjusted_value(session: Session) -> float:
+    rows = session.exec(
+        select(CanonicalOpportunity).where(
+            CanonicalOpportunity.disposition.notin_(
+                [Disposition.executed.value, Disposition.rejected.value, Disposition.duplicate.value]
+            )
+        )
+    ).all()
+    return round(sum(r.probability_adjusted_pending_value or 0.0 for r in rows), 2)
+
+
+def reconciliation_ledger(session: Session, day: Optional[date] = None) -> dict:
+    """Balance every screened CanonicalOpportunity into exactly one of the
+    execution ledger or the rejection/bypass ledger — invariant #7.
+
+    The addendum's own vocabulary calls the non-execution bucket the
+    "rejection/bypass ledger" (every viewed-but-unexecuted candidate), but
+    that is a bucket name, not a verdict — most entries in it were never
+    substantively evaluated as bad. `by_disposition` and
+    `research_incomplete` make that distinction explicit so a caller can't
+    misread "not executed" as "Hunter rejected it."
+    """
+    opportunities = session.exec(select(CanonicalOpportunity)).all()
+
+    execution_ledger = []
+    rejection_bypass_ledger = []
+    unresolved = []
+    by_disposition: dict[str, int] = {}
+
+    for opp in opportunities:
+        if opp.disposition is None:
+            unresolved.append(opp.canonical_opportunity_id)
+            continue
+        by_disposition[opp.disposition] = by_disposition.get(opp.disposition, 0) + 1
+        if opp.disposition == Disposition.executed.value:
+            execution_ledger.append(opp.canonical_opportunity_id)
+        else:
+            rejection_bypass_ledger.append(opp.canonical_opportunity_id)
+
+    research_incomplete = sum(
+        by_disposition.get(d.value, 0)
+        for d in (Disposition.pending_research, Disposition.blocked_infrastructure, Disposition.blocked_capability)
+    )
+
+    chains = session.exec(select(ReplacementChain)).all()
+    return {
+        "screened": len(opportunities),
+        "executed": len(execution_ledger),
+        "not_yet_executed": len(rejection_bypass_ledger),
+        "by_disposition": by_disposition,
+        # Research not yet complete (awaiting research, or Hunter's
+        # research couldn't reach the network / has no capability wired
+        # yet) — these are NOT substantive findings about the opportunity
+        # and must not be read as rejections.
+        "research_incomplete": research_incomplete,
+        # Only a REJECTED disposition is a substantive, evidenced,
+        # rescue-history-backed call that the opportunity itself is dead.
+        "substantively_rejected": by_disposition.get(Disposition.rejected.value, 0),
+        "duplicate": by_disposition.get(Disposition.duplicate.value, 0),
+        "blocked_or_pending_commander": sum(
+            by_disposition.get(d.value, 0)
+            for d in (Disposition.blocked, Disposition.pending_commander)
+        ),
+        "deferred": by_disposition.get(Disposition.deferred_for_higher_value.value, 0),
+        "replacement_chains_opened": len(chains),
+        "replacement_chains_closed": sum(1 for c in chains if c.closed_at is not None),
+        "unresolved_follow_ups": unresolved,
+        "execution_ledger_ids": execution_ledger,
+        "rejection_bypass_ledger_ids": rejection_bypass_ledger,
+    }
+
+
+# ── helpers ─────────────────────────────────────────────────────────────
+
+
+def _get_opportunity(
+    session: Session, canonical_opportunity_id: str, *, required: bool = False
+) -> Optional[CanonicalOpportunity]:
+    opp = session.exec(
+        select(CanonicalOpportunity).where(
+            CanonicalOpportunity.canonical_opportunity_id == canonical_opportunity_id
+        )
+    ).first()
+    if required and not opp:
+        raise ValueError(f"CanonicalOpportunity '{canonical_opportunity_id}' not found")
+    return opp
