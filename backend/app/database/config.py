@@ -162,6 +162,14 @@ def _migrate_sqlite_tables() -> None:
                 "required_human_actions": "TEXT",
             },
         )
+        _ensure_columns(
+            conn,
+            "canonicalopportunity",
+            {
+                "commander_response": "TEXT",
+                "commander_responded_at": "TIMESTAMP",
+            },
+        )
         conn.execute(
             """
             UPDATE weeklybudget

@@ -310,6 +310,47 @@ def close_replacement_chain(session: Session, chain_id: int, *, result: str) -> 
     return chain
 
 
+def record_commander_answer(
+    session: Session,
+    canonical_opportunity_id: str,
+    answer: str,
+    *,
+    decision: Optional[str] = None,
+) -> CanonicalOpportunity:
+    """Record Commander's reply to a checkpoint an opportunity is waiting
+    on (the chat/decisions UI). This is the only path that writes
+    commander_response — never inferred from freeform chat text by an LLM.
+
+    `decision` drives what happens next:
+      - "decline" -> REJECTED. Safe to do directly: anything that reached
+        PENDING_COMMANDER already has a logged rescue attempt from the
+        research engine, so the rescue-history invariant holds.
+      - "approve" or omitted (just supplying requested info) -> WATCHLIST:
+        the checkpoint itself is answered, but reaching EXECUTED still
+        needs a real execution capability for this opportunity, which may
+        not exist yet — Commander's answer alone never grants execution
+        credit.
+    """
+    if not answer or not answer.strip():
+        raise ValueError("record_commander_answer() requires non-empty answer text.")
+
+    opp = _get_opportunity(session, canonical_opportunity_id, required=True)
+    opp.commander_response = answer.strip()
+    opp.commander_responded_at = datetime.now(timezone.utc)
+    session.add(opp)
+    session.commit()
+
+    if decision == "decline":
+        return set_disposition(
+            session, canonical_opportunity_id, Disposition.rejected,
+            evidence=f"Commander declined: {answer.strip()}",
+        )
+    return set_disposition(
+        session, canonical_opportunity_id, Disposition.watchlist,
+        evidence=f"Commander responded: {answer.strip()}",
+    )
+
+
 def record_rescue_attempt(
     session: Session,
     canonical_opportunity_id: str,
