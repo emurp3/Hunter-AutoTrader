@@ -154,15 +154,24 @@ def test_google_provider_blocks_when_no_open_intake_signal():
 # ── Engine-level behavior ────────────────────────────────────────────────
 
 
-def test_no_registered_provider_blocks_honestly():
+def test_no_registered_provider_falls_back_to_generic_path_and_blocks_on_capability_gap(monkeypatch):
+    """No dedicated connector must NOT dead-end a candidate — it should
+    fall through to the generic research path, which here has no advisor
+    API key configured (as in this test env), so it fails as an honest
+    capability gap rather than a fabricated pass or a bare 'no provider'
+    stub."""
+    for env_var in ("GROK_API_KEY", "VENICE_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+
     session = _make_session()
     _make_candidate(session, "NO-PROVIDER-CAND")
     result = research_engine.run_research(session, "NO-PROVIDER-CAND")
     assert result.passed is False
-    assert result.disposition_override == Disposition.blocked
+    assert result.disposition_override == Disposition.blocked_capability
+    assert result.network_ok is True  # this is a capability gap, not a network outage
     attempts = session.exec(select(RescueAttempt).where(RescueAttempt.canonical_opportunity_id == "NO-PROVIDER-CAND")).all()
     assert len(attempts) == 1
-    assert "no dedicated research provider" in attempts[0].description.lower()
+    assert "no configured advisor" in attempts[0].description.lower()
 
 
 def test_provider_exception_is_caught_and_logged_not_fabricated():
@@ -179,7 +188,7 @@ def test_provider_exception_is_caught_and_logged_not_fabricated():
         del research_engine.PROVIDER_REGISTRY["BUGGY-CAND"]
 
     assert result.passed is False
-    assert result.disposition_override == Disposition.blocked
+    assert result.disposition_override == Disposition.blocked_capability
     opp = session.exec(select(CanonicalOpportunity).where(CanonicalOpportunity.canonical_opportunity_id == "BUGGY-CAND")).first()
     assert "provider bug" in (opp.evidence_log or "")
 

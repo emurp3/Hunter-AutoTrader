@@ -103,12 +103,17 @@ class LoopResult:
 
 
 def pull_highest_scoring_candidate(session: Session) -> Optional[CanonicalOpportunity]:
-    """Highest-score candidate still open for execution today
-    (SCREENED_ONLY or WATCHLIST — i.e. not yet decided either way)."""
+    """Highest-score candidate still open for execution today — not yet
+    decided either way (PENDING_RESEARCH: awaiting Hunter's research;
+    SCREENED_ONLY/WATCHLIST: researched but not yet resolved)."""
     candidates = session.exec(
         select(CanonicalOpportunity).where(
             CanonicalOpportunity.disposition.in_(
-                [Disposition.screened_only.value, Disposition.watchlist.value]
+                [
+                    Disposition.pending_research.value,
+                    Disposition.screened_only.value,
+                    Disposition.watchlist.value,
+                ]
             )
         )
     ).all()

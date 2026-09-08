@@ -167,7 +167,7 @@ def seed_addendum_candidates(session: Session) -> list[CanonicalOpportunity]:
             legal_risk=spec.get("legal_risk"),
             required_commander_checkpoints=spec.get("required_commander_checkpoints"),
             next_action=spec.get("next_action"),
-            disposition=Disposition.screened_only.value,
+            disposition=Disposition.pending_research.value,
         )
         session.add(opp)
         session.commit()
@@ -211,7 +211,7 @@ def _seed_trademark_rescue_attempt(session: Session) -> None:
     opp = session.exec(
         select(CanonicalOpportunity).where(CanonicalOpportunity.canonical_opportunity_id == _TRADEMARK_ID)
     ).first()
-    if opp and opp.disposition == Disposition.screened_only.value:
+    if opp and opp.disposition in (Disposition.pending_research.value, Disposition.screened_only.value):
         opp.disposition = Disposition.watchlist.value
         session.add(opp)
         session.commit()

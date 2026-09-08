@@ -42,11 +42,19 @@ class Disposition(str, Enum):
     toward the daily/weekly/cycle quota — every other value is zero."""
 
     executed = "EXECUTED"
+    pending_research = "PENDING_RESEARCH"          # created, Hunter has not yet run research on it
     pending_commander = "PENDING_COMMANDER"
     watchlist = "WATCHLIST"
-    rejected = "REJECTED"
+    rejected = "REJECTED"                          # REJECTED implies "after rescue" — enforced below,
+                                                    # never settable without a documented rescue history
     duplicate = "DUPLICATE"
-    blocked = "BLOCKED"
+    blocked = "BLOCKED"                            # a real, substantive finding: route currently closed/
+                                                    # unavailable, reachable and evaluated, not a permanent call
+    blocked_infrastructure = "BLOCKED_INFRASTRUCTURE"  # Hunter's research ran but could not reach the
+                                                        # network at all — says nothing about the opportunity
+    blocked_capability = "BLOCKED_CAPABILITY"      # Hunter has no research capability wired for this
+                                                    # candidate yet (no connector, no LLM key, a provider bug)
+                                                    # — an engineering gap, not a judgment on the opportunity
     expired = "EXPIRED"
     inapplicable = "INAPPLICABLE"
     deferred_for_higher_value = "DEFERRED_FOR_HIGHER_VALUE"
@@ -56,22 +64,41 @@ class Disposition(str, Enum):
 # Dispositions that are final for reconciliation purposes but never carry
 # execution credit.
 ZERO_EXECUTION_DISPOSITIONS = {
+    Disposition.pending_research,
     Disposition.pending_commander,
     Disposition.watchlist,
     Disposition.rejected,
     Disposition.duplicate,
     Disposition.blocked,
+    Disposition.blocked_infrastructure,
+    Disposition.blocked_capability,
     Disposition.expired,
     Disposition.inapplicable,
     Disposition.deferred_for_higher_value,
     Disposition.screened_only,
 }
 
-# A candidate may only be permanently rejected or blocked after a rescue
-# path has actually been pursued and evidenced.
+# Dispositions that represent "Hunter could not complete research" rather
+# than a substantive finding about the opportunity itself. An opportunity
+# in one of these states is still alive — it must stay eligible for the
+# rescue/replacement mechanism and must never be reported as if Hunter
+# judged it bad.
+NON_SUBSTANTIVE_DISPOSITIONS = {
+    Disposition.pending_research,
+    Disposition.blocked_infrastructure,
+    Disposition.blocked_capability,
+}
+
+# A candidate may only be permanently rejected, or marked substantively
+# blocked, after a rescue path has actually been pursued and evidenced.
+# The infra/capability blocks are included too: Hunter's research engine
+# always logs a rescue attempt describing what it tried before landing
+# here, so this stays a real invariant rather than a formality.
 DISPOSITIONS_REQUIRING_RESCUE_HISTORY = {
     Disposition.rejected,
     Disposition.blocked,
+    Disposition.blocked_infrastructure,
+    Disposition.blocked_capability,
 }
 
 # Dispositions that must always open (or already have open) a parallel
@@ -79,6 +106,8 @@ DISPOSITIONS_REQUIRING_RESCUE_HISTORY = {
 DISPOSITIONS_REQUIRING_REPLACEMENT = {
     Disposition.pending_commander,
     Disposition.blocked,
+    Disposition.blocked_infrastructure,
+    Disposition.blocked_capability,
 }
 
 
@@ -169,7 +198,7 @@ class CanonicalOpportunity(SQLModel, table=True):
 
     # Score + disposition
     score: Optional[float] = Field(default=None, index=True)
-    disposition: str = Field(default=Disposition.screened_only, index=True)
+    disposition: str = Field(default=Disposition.pending_research, index=True)
 
     # Hunter's own research findings — appended to by the research engine
     # (app/services/research/), never hand-typed by Claude as if Hunter

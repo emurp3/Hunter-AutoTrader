@@ -73,9 +73,16 @@ def generate_eod_report(session: Session, day: Optional[date] = None) -> dict:
             )
         ).first()
         if opp.disposition == Disposition.rejected.value:
+            # Only a REJECTED disposition is a substantive, evidenced,
+            # rescue-history-backed call — never network/capability gaps.
             status = "permanent"
-        elif opp.disposition in (Disposition.blocked.value, Disposition.pending_commander.value):
+        elif opp.disposition in (Disposition.blocked.value, Disposition.pending_commander.value, Disposition.blocked_capability.value):
             status = "curable"
+        elif opp.disposition == Disposition.blocked_infrastructure.value:
+            # Not even a Hunter-side finding — the network was unreachable.
+            status = "infrastructure_hold"
+        elif opp.disposition == Disposition.pending_research.value:
+            status = "not_yet_researched"
         else:
             status = "temporary"
         rejection_bypass_ledger.append(

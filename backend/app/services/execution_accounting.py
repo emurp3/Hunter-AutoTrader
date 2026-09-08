@@ -429,33 +429,57 @@ def get_pending_probability_adjusted_value(session: Session) -> float:
 
 def reconciliation_ledger(session: Session, day: Optional[date] = None) -> dict:
     """Balance every screened CanonicalOpportunity into exactly one of the
-    execution ledger or the rejection/bypass ledger — invariant #7."""
+    execution ledger or the rejection/bypass ledger — invariant #7.
+
+    The addendum's own vocabulary calls the non-execution bucket the
+    "rejection/bypass ledger" (every viewed-but-unexecuted candidate), but
+    that is a bucket name, not a verdict — most entries in it were never
+    substantively evaluated as bad. `by_disposition` and
+    `research_incomplete` make that distinction explicit so a caller can't
+    misread "not executed" as "Hunter rejected it."
+    """
     opportunities = session.exec(select(CanonicalOpportunity)).all()
 
     execution_ledger = []
     rejection_bypass_ledger = []
     unresolved = []
+    by_disposition: dict[str, int] = {}
 
     for opp in opportunities:
         if opp.disposition is None:
             unresolved.append(opp.canonical_opportunity_id)
             continue
+        by_disposition[opp.disposition] = by_disposition.get(opp.disposition, 0) + 1
         if opp.disposition == Disposition.executed.value:
             execution_ledger.append(opp.canonical_opportunity_id)
         else:
             rejection_bypass_ledger.append(opp.canonical_opportunity_id)
 
+    research_incomplete = sum(
+        by_disposition.get(d.value, 0)
+        for d in (Disposition.pending_research, Disposition.blocked_infrastructure, Disposition.blocked_capability)
+    )
+
     chains = session.exec(select(ReplacementChain)).all()
     return {
         "screened": len(opportunities),
         "executed": len(execution_ledger),
-        "rejected_or_bypassed": len(rejection_bypass_ledger),
-        "duplicate": sum(1 for o in opportunities if o.disposition == Disposition.duplicate.value),
+        "not_yet_executed": len(rejection_bypass_ledger),
+        "by_disposition": by_disposition,
+        # Research not yet complete (awaiting research, or Hunter's
+        # research couldn't reach the network / has no capability wired
+        # yet) — these are NOT substantive findings about the opportunity
+        # and must not be read as rejections.
+        "research_incomplete": research_incomplete,
+        # Only a REJECTED disposition is a substantive, evidenced,
+        # rescue-history-backed call that the opportunity itself is dead.
+        "substantively_rejected": by_disposition.get(Disposition.rejected.value, 0),
+        "duplicate": by_disposition.get(Disposition.duplicate.value, 0),
         "blocked_or_pending_commander": sum(
-            1 for o in opportunities
-            if o.disposition in (Disposition.blocked.value, Disposition.pending_commander.value)
+            by_disposition.get(d.value, 0)
+            for d in (Disposition.blocked, Disposition.pending_commander)
         ),
-        "deferred": sum(1 for o in opportunities if o.disposition == Disposition.deferred_for_higher_value.value),
+        "deferred": by_disposition.get(Disposition.deferred_for_higher_value.value, 0),
         "replacement_chains_opened": len(chains),
         "replacement_chains_closed": sum(1 for c in chains if c.closed_at is not None),
         "unresolved_follow_ups": unresolved,
