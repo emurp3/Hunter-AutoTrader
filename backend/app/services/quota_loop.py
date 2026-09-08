@@ -38,6 +38,13 @@ class PreflightResult:
     applicable: bool
     commander_checkpoint: Optional[str] = None
     notes: str = ""
+    # When preflight fails, route to this disposition instead of the
+    # generic INAPPLICABLE default — e.g. BLOCKED for "couldn't verify
+    # right now" vs. INAPPLICABLE for "confirmed doesn't apply."
+    disposition_override: Optional[Disposition] = None
+    # False only when the research step couldn't reach the network at all
+    # (sandbox/egress policy, DNS, etc.) — distinct from a real finding.
+    network_ok: bool = True
 
     @property
     def passed(self) -> bool:
@@ -135,11 +142,12 @@ def run_quota_protection_loop(
         pre = preflight_fn(candidate)
 
         if not pre.passed:
+            target_disposition = pre.disposition_override or Disposition.inapplicable
             acct.set_disposition(
-                session, cid, Disposition.inapplicable,
+                session, cid, target_disposition,
                 evidence=pre.notes or "failed lawful/current/applicability preflight",
             )
-            result.steps.append(LoopStep(cid, "inapplicable", pre.notes))
+            result.steps.append(LoopStep(cid, target_disposition.value.lower(), pre.notes))
             continue
 
         if pre.commander_checkpoint:

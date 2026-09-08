@@ -171,6 +171,11 @@ class CanonicalOpportunity(SQLModel, table=True):
     score: Optional[float] = Field(default=None, index=True)
     disposition: str = Field(default=Disposition.screened_only, index=True)
 
+    # Hunter's own research findings — appended to by the research engine
+    # (app/services/research/), never hand-typed by Claude as if Hunter
+    # produced it.
+    evidence_log: Optional[str] = Field(default=None)
+
     # Checkpoints / ownership
     required_commander_checkpoints: Optional[str] = Field(default=None)
     next_action: Optional[str] = Field(default=None)

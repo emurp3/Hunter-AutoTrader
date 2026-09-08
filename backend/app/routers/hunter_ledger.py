@@ -18,6 +18,8 @@ from app.models.hunter_ledger import CanonicalOpportunity, Disposition, FormalGa
 from app.services import baseline_manifest, execution_accounting as acct, formal_gates, hunter_eod_report
 from app.services.hunter_addendum_seed import seed_addendum_candidates
 from app.services.quota_loop import run_quota_protection_loop
+from app.services.research import engine as research_engine
+from app.services.research.gate_runner import run_gate_acceptance_test
 
 router = APIRouter(prefix="/hunter-ops", tags=["hunter-ops"])
 
@@ -75,6 +77,25 @@ def add_rescue_attempt(
         session, canonical_opportunity_id, rescue_type, description,
         result=result, evidence_reference=evidence_reference,
     )
+
+
+@router.post("/candidates/{canonical_opportunity_id}/research")
+def run_candidate_research(canonical_opportunity_id: str, session: Session = Depends(get_session)):
+    """Trigger Hunter's own research engine for one candidate — the same
+    step the quota loop runs as its preflight. Not a Claude-authored
+    result; this calls the actual provider connector."""
+    try:
+        result = research_engine.run_research(session, canonical_opportunity_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "canonical_opportunity_id": canonical_opportunity_id,
+        "passed": result.passed,
+        "network_ok": result.network_ok,
+        "commander_checkpoint": result.commander_checkpoint,
+        "disposition_override": result.disposition_override.value if result.disposition_override else None,
+        "notes": result.notes,
+    }
 
 
 @router.post("/candidates/{canonical_opportunity_id}/disposition")
@@ -171,8 +192,13 @@ def get_eod_report(on: Optional[date] = None, session: Session = Depends(get_ses
 
 @router.post("/loop/run")
 def run_loop(on: Optional[date] = None, session: Session = Depends(get_session)):
+    """Run the quota-protection loop with Hunter's own research engine as
+    its preflight step (not a trivial always-pass stub) — this is Hunter
+    running his own preflight, per the addendum's role boundary."""
     try:
-        result = run_quota_protection_loop(session, day=on)
+        result = run_quota_protection_loop(
+            session, day=on, preflight_fn=research_engine.make_research_preflight(session)
+        )
     except acct.SundayLockout as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     return {
@@ -193,6 +219,17 @@ def run_loop(on: Optional[date] = None, session: Session = Depends(get_session))
 @router.get("/gates")
 def list_gates(session: Session = Depends(get_session)):
     return session.exec(select(FormalGate)).all()
+
+
+@router.post("/gates/{gate_id}/run-acceptance-test")
+def run_gate_research(gate_id: str, session: Session = Depends(get_session)):
+    """Runs Hunter's research engine against this gate's linked candidate
+    and derives the gate verdict from what Hunter actually found — the
+    literal acceptance test of Hunter's research capability."""
+    try:
+        return run_gate_acceptance_test(session, gate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/gates/{gate_id}/verdict")
