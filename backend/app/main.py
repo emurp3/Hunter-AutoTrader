@@ -45,6 +45,7 @@ from app.routers.quickcash import router as quickcash_router
 from app.routers.store import router as store_router
 from app.routers.assistant import router as assistant_router
 from app.routers.policy import router as policy_router
+from app.routers.hunter_ledger import router as hunter_ledger_router
 from app.models.policy_event import PolicyEvent  # noqa: F401 — registers table
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table
@@ -139,6 +140,7 @@ app.include_router(quickcash_router)
 app.include_router(store_router)
 app.include_router(assistant_router)
 app.include_router(policy_router)
+app.include_router(hunter_ledger_router)
 
 if _FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
