@@ -490,9 +490,19 @@ def _fill_identity_fields_with_reasoning_fallback(
             client.close()
 
         if not result["success"]:
-            last_step = result["trace"][-1] if result["trace"] else {}
+            # The last trace entry alone only ever said "no progress" —
+            # not useful for diagnosing WHY. Surface every iteration's
+            # actual decision and act_result so the next fix (if any is
+            # even needed) is based on what Hunter's reasoning actually
+            # tried, not another guess.
+            trace_summary = " | ".join(
+                f"iter{step.get('iteration', '?')}: "
+                f"decision={step.get('decision')} act_result={step.get('act_result')} "
+                f"outcome={step.get('outcome')}"
+                for step in result["trace"]
+            )
             raise RetryableExecutionError(
-                exc.reason + f" | reasoning fallback also found no path forward: {last_step}",
+                exc.reason + f" | reasoning fallback also found no path forward. Trace: {trace_summary}",
                 error_text=exc.error_text,
                 page_url=page.url,
                 screenshot_path=exc.screenshot_path,
