@@ -73,6 +73,93 @@ def _bootstrap_intake_after_startup() -> None:
         )
 
 
+def _bootstrap_hunter_ledger_actions_after_startup() -> None:
+    """Carry tonight's two Commander-approved checkpoints through to the
+    executor now that it exists, from Hunter's own runtime — not a manual
+    API call from Claude or Commander. Idempotent per day; safe to run on
+    every deploy/restart.
+
+    1. UCP-01: Commander already supplied the business name via the chat
+       widget — dispatch the search-only portal task.
+    2. GOOGLE-02: Commander's prior answer ("approved, proceed") did not
+       include the personal-data fields the intake actually needs —
+       reopen the checkpoint with the specific ask, per addendum rules
+       (Hunter never submits personal data on Commander's behalf without
+       Commander supplying it)."""
+    try:
+        from datetime import date as _date
+
+        from sqlmodel import select as _select
+
+        from app.database.config import engine
+        from app.models.hunter_ledger import CanonicalOpportunity, Disposition
+        from app.services import execution_accounting as acct
+        from app.services import tasks as task_svc
+        from app.services.research.providers.ga_unclaimed_property import PORTAL_URL
+
+        with Session(engine) as session:
+            try:
+                acct.assert_autonomous_operations_allowed()
+            except acct.SundayLockout:
+                return
+
+            ucp = session.exec(
+                _select(CanonicalOpportunity).where(
+                    CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-01-UCP"
+                )
+            ).first()
+            if ucp and ucp.commander_response and ucp.disposition != Disposition.executed.value:
+                task_svc.dispatch_task(
+                    task_type="government_portal_search",
+                    spec_payload={
+                        "search_url": PORTAL_URL,
+                        "business_name": ucp.commander_response,
+                        "canonical_opportunity_id": ucp.canonical_opportunity_id,
+                    },
+                    session=session,
+                    source_type="canonical_opportunity",
+                    source_id=ucp.canonical_opportunity_id,
+                    priority=10,
+                    idempotency_key=f"gov-search:{ucp.canonical_opportunity_id}:{_date.today().isoformat()}",
+                    max_attempts=2,
+                )
+
+            google = session.exec(
+                _select(CanonicalOpportunity).where(
+                    CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-02-GOOGLE"
+                )
+            ).first()
+            if (
+                google
+                and google.disposition != Disposition.pending_commander.value
+                and google.disposition != Disposition.executed.value
+            ):
+                acct.set_disposition(
+                    session,
+                    google.canonical_opportunity_id,
+                    Disposition.pending_commander,
+                    evidence=(
+                        "Reopened: prior Commander answer approved proceeding but "
+                        "did not supply the personal-data fields the intake form "
+                        "requires."
+                    ),
+                    new_checkpoint=(
+                        "To submit the Google Incognito privacy-lawsuit intake, we "
+                        "need: (1) your full legal name, (2) an email or phone "
+                        "number the law firm can reach you at, and (3) the "
+                        "approximate date range you used Chrome Incognito/private "
+                        "browsing while signed into a Google account. Hunter will "
+                        "not submit the intake without these."
+                    ),
+                )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning(
+            "hunter ledger startup bootstrap failed — %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Keep the critical startup path local and bounded. External opportunity
@@ -95,6 +182,7 @@ async def lifespan(app: FastAPI):
 
     # Do not block ASGI startup/health on opportunity intake or its providers.
     asyncio.create_task(asyncio.to_thread(_bootstrap_intake_after_startup))
+    asyncio.create_task(asyncio.to_thread(_bootstrap_hunter_ledger_actions_after_startup))
     yield
     scheduler.shutdown(wait=False)
 
