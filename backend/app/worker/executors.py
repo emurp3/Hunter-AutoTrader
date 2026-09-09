@@ -349,6 +349,36 @@ def _try_fill_selectors(page, selectors: list[str], value: str) -> bool:
     return False
 
 
+def _describe_visible_form_fields(page, limit: int = 20) -> str:
+    """Diagnostic only — never includes field VALUES, only structure
+    (tag/type/name/id/placeholder/aria-label), so it's safe to put in a
+    log line. Selector hints have twice guessed wrong at what a real
+    intake page's name field looks like; rather than guess a third time,
+    an abort now reports what's actually on the page so the next fix is
+    based on real data."""
+    try:
+        fields = page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll('input, select, textarea'))
+                .filter(el => el.offsetParent !== null)
+                .slice(0, %d)
+                .map(el => {
+                    const attrs = [];
+                    if (el.name) attrs.push(`name=${el.name}`);
+                    if (el.id) attrs.push(`id=${el.id}`);
+                    if (el.placeholder) attrs.push(`placeholder=${el.placeholder}`);
+                    const aria = el.getAttribute('aria-label');
+                    if (aria) attrs.push(`aria-label=${aria}`);
+                    return `${el.tagName.toLowerCase()}[type=${el.type || ''}](${attrs.join(',')})`;
+                })
+            """
+            % limit
+        )
+        return "; ".join(fields)[:800]
+    except Exception:  # noqa: BLE001
+        return "(could not enumerate visible form fields)"
+
+
 def _fill_identity_fields_or_abort(
     page, task_id: str, identity_fields: dict[str, str], *, artifact_prefix: str
 ) -> list[str]:
@@ -387,10 +417,12 @@ def _fill_identity_fields_or_abort(
 
         screenshot_path = str(_artifact_dir(task_id) / f"{artifact_prefix}-missing-field.png")
         page.screenshot(path=screenshot_path, full_page=True)
+        visible_fields = _describe_visible_form_fields(page)
         raise RetryableExecutionError(
             f"Could not locate a form field for required identity field '{field_name}' — "
-            "aborting the entire submission rather than filing it incomplete or misattributed",
-            error_text=f"missing field: {field_name}",
+            "aborting the entire submission rather than filing it incomplete or misattributed. "
+            f"Visible form fields on this page: {visible_fields}",
+            error_text=f"missing field: {field_name} | visible fields: {visible_fields}",
             page_url=page.url,
             screenshot_path=screenshot_path,
         )

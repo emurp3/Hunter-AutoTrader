@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.worker.executors import RetryableExecutionError, _fill_identity_fields_or_abort
+from app.worker.executors import (
+    RetryableExecutionError,
+    _describe_visible_form_fields,
+    _fill_identity_fields_or_abort,
+)
 
 _FULL_NAME_SELECTOR = 'input[name*="fullname" i]'
 _FIRST_NAME_SELECTOR = 'input[name*="firstname" i]'
@@ -67,6 +71,9 @@ class _FakePage:
     def screenshot(self, path: str, full_page: bool = True) -> None:
         self.screenshots.append(path)
 
+    def evaluate(self, _js: str):
+        return ["input[type=text](name=case_notes,id=notes)"]
+
 
 def test_falls_back_to_first_last_name_when_no_combined_field_exists():
     page = _FakePage({_FIRST_NAME_SELECTOR: "x", _LAST_NAME_SELECTOR: "x"})
@@ -97,10 +104,16 @@ def test_uses_combined_field_directly_when_present_no_fallback_needed():
 def test_aborts_when_neither_combined_nor_split_fields_exist():
     page = _FakePage({})
 
-    with pytest.raises(RetryableExecutionError, match="full_name"):
+    with pytest.raises(RetryableExecutionError) as exc_info:
         _fill_identity_fields_or_abort(
             page, "task-3", {"full_name": "Eddie Murphy Jr."}, artifact_prefix="intake"
         )
+
+    assert "full_name" in str(exc_info.value)
+    # The abort reports what's actually on the page — real data for the
+    # next fix, not another blind selector guess.
+    assert "case_notes" in str(exc_info.value)
+    assert exc_info.value.error_text is not None and "case_notes" in exc_info.value.error_text
 
 
 def test_aborts_when_only_first_name_field_exists_not_last():
@@ -122,3 +135,21 @@ def test_single_word_name_does_not_attempt_split_fallback():
         _fill_identity_fields_or_abort(
             page, "task-5", {"full_name": "Cher"}, artifact_prefix="intake"
         )
+
+
+def test_describe_visible_form_fields_returns_page_evaluate_result():
+    page = _FakePage({})
+
+    description = _describe_visible_form_fields(page)
+
+    assert "case_notes" in description
+
+
+def test_describe_visible_form_fields_never_raises_if_evaluate_fails():
+    class _BrokenPage:
+        def evaluate(self, _js: str):
+            raise RuntimeError("page crashed")
+
+    description = _describe_visible_form_fields(_BrokenPage())
+
+    assert "could not enumerate" in description
