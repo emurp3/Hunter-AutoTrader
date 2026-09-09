@@ -196,6 +196,13 @@ def _execute_marketplace_listing(task: dict[str, Any], spec: dict[str, Any], wor
         browser = playwright.chromium.launch(
             headless=os.getenv("HUNTER_PLAYWRIGHT_HEADLESS", "true").lower() != "false",
             args=["--disable-dev-shm-usage", "--no-sandbox"],
+            # Force the regular Chromium binary. Since Playwright ~1.49,
+            # headless launches default to a separate "headless shell"
+            # binary that this deploy's build step does not install
+            # (build command only runs `playwright install chromium`) —
+            # without this, launch() fails with "Executable doesn't
+            # exist ... chromium_headless_shell".
+            channel="chromium",
         )
         context = browser.new_context()
         page = context.new_page()
@@ -308,6 +315,13 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
         browser = playwright.chromium.launch(
             headless=os.getenv("HUNTER_PLAYWRIGHT_HEADLESS", "true").lower() != "false",
             args=["--disable-dev-shm-usage", "--no-sandbox"],
+            # Force the regular Chromium binary. Since Playwright ~1.49,
+            # headless launches default to a separate "headless shell"
+            # binary that this deploy's build step does not install
+            # (build command only runs `playwright install chromium`) —
+            # without this, launch() fails with "Executable doesn't
+            # exist ... chromium_headless_shell".
+            channel="chromium",
         )
         context = browser.new_context()
         page = context.new_page()
