@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -141,6 +142,37 @@ def _gather_context(session: Session) -> dict:
         logger.warning("Failed to fetch pending Commander decisions: %s", exc)
         ctx["commander_decisions"] = []
 
+    try:
+        from app.services import execution_accounting as acct
+        ctx["quota"] = acct.get_quota_status(session)
+    except Exception as exc:
+        logger.warning("Failed to fetch quota status: %s", exc)
+        ctx["quota"] = None
+
+    try:
+        from app.models.hunter_ledger import CanonicalOpportunity, ZERO_EXECUTION_DISPOSITIONS
+        active = session.exec(
+            select(CanonicalOpportunity)
+            .where(CanonicalOpportunity.disposition.in_([d.value for d in ZERO_EXECUTION_DISPOSITIONS]))
+            .order_by(CanonicalOpportunity.score.desc())
+            .limit(10)
+        ).all()
+        ctx["ledger_queue"] = [
+            {
+                "id": o.canonical_opportunity_id,
+                "lane": o.lane,
+                "disposition": o.disposition,
+                "mechanism": o.factual_mechanism,
+                "next_action": o.next_action or "none recorded",
+            }
+            for o in active
+        ]
+    except Exception as exc:
+        logger.warning("Failed to fetch ledger queue: %s", exc)
+        ctx["ledger_queue"] = []
+
+    ctx["current_datetime_utc"] = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M UTC")
+
     ctx.setdefault("advisor_opp_title", "none")
     ctx.setdefault("advisor_opp_ticker", "n/a")
     ctx.setdefault("advisor_opp_lane", "n/a")
@@ -164,8 +196,38 @@ def _build_system_prompt(ctx: dict) -> str:
     else:
         decisions_text = "None open right now."
 
+    queue = ctx.get("ledger_queue") or []
+    if queue:
+        queue_text = "\n".join(
+            f"- [{q['id']}] ({q['disposition']}) {q['mechanism']} | Next: {q['next_action']}" for q in queue
+        )
+    else:
+        queue_text = "No active execution-ledger candidates right now."
+
+    quota = ctx.get("quota")
+    if quota:
+        quota_text = (
+            f"{quota['execution_count']}/{quota['execution_quota']} today (verdict: {quota['daily_verdict']}), "
+            f"{quota['weekly_count']}/{quota['weekly_quota']} this week"
+        )
+    else:
+        quota_text = "unavailable"
+
     return (
-        "You are Hunter's onboard AI advisor. You have real-time access to the following Hunter state:\n\n"
+        "You are Hunter AI, Hunter's Commander-facing conversational interface. You are not a "
+        "generic assistant — you speak from Hunter's live operational state below, supplied fresh "
+        "on every message. Do not describe yourself by a specific model name or training-data "
+        "cutoff date; that information is not reliably known to you and stating it wrong actively "
+        "misleads the Commander. If asked what you're based on, say you're Hunter's operational "
+        "interface and that model detail is an implementation detail Commander can ask Claude "
+        "about directly.\n\n"
+        "CURRENT DATE/TIME: {current_datetime_utc}\n\n"
+        "Your own training data has a cutoff and is NOT authoritative for anything current — "
+        "today's date, current officeholders, current events, prices, or any other fact that "
+        "changes over time. For questions like that, do not answer from memory: say plainly that "
+        "it is outside your current operational context and, if it materially affects an "
+        "opportunity, that Hunter's research engine (not this chat) is the correct path to look it "
+        "up. Only state current-events facts you can see explicitly in the Hunter state below.\n\n"
         "ACCOUNT: Cash ${account_cash}, Buying Power ${buying_power}, Status: {account_status}\n"
         "CAPITAL STATE: Available ${available_capital}, Committed ${committed}\n\n"
         "TOP OPPORTUNITIES (ranked):\n{opps_text}\n\n"
@@ -174,6 +236,10 @@ def _build_system_prompt(ctx: dict) -> str:
         "SIGNALS: {signals_total} ingested\n"
         "FORGE OPPS: {forge_count} opportunities queued\n"
         "PERFORMANCE: {success_rate}% success rate, {completed} completed, {failed} failed\n\n"
+        "EXECUTIONS (addendum ledger, receipt-gated — never count research, approvals, or "
+        "deployments as an execution): {quota_text}\n\n"
+        "ACTIVE EXECUTION-LEDGER QUEUE (candidates not yet executed, highest score first):\n"
+        "{queue_text}\n\n"
         "OPEN COMMANDER DECISIONS (opportunities Hunter's research completed but that are "
         "blocked on YOUR input — credentials, identity, filings, signatures, and similar "
         "regulated/consequential actions are never yours to supply or approve on Commander's "
@@ -181,7 +247,8 @@ def _build_system_prompt(ctx: dict) -> str:
         "If there are open Commander decisions, lead with them — ask for exactly what's needed, "
         "referencing the opportunity by name. Never assume an answer, never invent eligibility or "
         "identity details, and never claim an opportunity executed unless Hunter's own ledger shows "
-        "a real receipt. For everything else: answer the user's question clearly and actionably. Be "
-        "direct. If an action is required, specify the exact step. Reference specific opportunity "
-        "names, tickers, and amounts from the data above when relevant. Keep responses under 250 words."
-    ).format(opps_text=opps_text, decisions_text=decisions_text, **ctx)
+        "a real receipt (see EXECUTIONS above). For everything else: answer the user's question "
+        "clearly and actionably from the state above. Be direct. If an action is required, specify "
+        "the exact step. Reference specific opportunity names, tickers, and amounts from the data "
+        "above when relevant. Keep responses under 250 words."
+    ).format(opps_text=opps_text, decisions_text=decisions_text, queue_text=queue_text, quota_text=quota_text, **ctx)
