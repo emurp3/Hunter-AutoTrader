@@ -349,34 +349,46 @@ def _try_fill_selectors(page, selectors: list[str], value: str) -> bool:
     return False
 
 
+_FIELD_SCAN_JS = """
+    () => Array.from(document.querySelectorAll('input, select, textarea'))
+        .filter(el => el.offsetParent !== null)
+        .slice(0, %d)
+        .map(el => {
+            const attrs = [];
+            if (el.name) attrs.push(`name=${el.name}`);
+            if (el.id) attrs.push(`id=${el.id}`);
+            if (el.placeholder) attrs.push(`placeholder=${el.placeholder}`);
+            const aria = el.getAttribute('aria-label');
+            if (aria) attrs.push(`aria-label=${aria}`);
+            return `${el.tagName.toLowerCase()}[type=${el.type || ''}](${attrs.join(',')})`;
+        })
+"""
+
+
 def _describe_visible_form_fields(page, limit: int = 20) -> str:
     """Diagnostic only — never includes field VALUES, only structure
     (tag/type/name/id/placeholder/aria-label), so it's safe to put in a
     log line. Selector hints have twice guessed wrong at what a real
     intake page's name field looks like; rather than guess a third time,
     an abort now reports what's actually on the page so the next fix is
-    based on real data."""
-    try:
-        fields = page.evaluate(
-            """
-            () => Array.from(document.querySelectorAll('input, select, textarea'))
-                .filter(el => el.offsetParent !== null)
-                .slice(0, %d)
-                .map(el => {
-                    const attrs = [];
-                    if (el.name) attrs.push(`name=${el.name}`);
-                    if (el.id) attrs.push(`id=${el.id}`);
-                    if (el.placeholder) attrs.push(`placeholder=${el.placeholder}`);
-                    const aria = el.getAttribute('aria-label');
-                    if (aria) attrs.push(`aria-label=${aria}`);
-                    return `${el.tagName.toLowerCase()}[type=${el.type || ''}](${attrs.join(',')})`;
-                })
-            """
-            % limit
-        )
-        return "; ".join(fields)[:800]
-    except Exception:  # noqa: BLE001
-        return "(could not enumerate visible form fields)"
+    based on real data. Scans every frame, not just the main document —
+    Playwright drives the browser via CDP so it can read cross-origin
+    iframe content directly (a lead-capture form embedded via an
+    external widget, e.g. HubSpot, would otherwise be invisible to a
+    plain document.querySelectorAll on the top-level page)."""
+    frames = getattr(page, "frames", None) or [page]
+    parts: list[str] = []
+    for frame in frames:
+        try:
+            fields = frame.evaluate(_FIELD_SCAN_JS % limit)
+        except Exception:  # noqa: BLE001
+            continue
+        if fields:
+            frame_url = getattr(frame, "url", "")
+            parts.append(f"[frame={frame_url}] " + "; ".join(fields))
+    if not parts:
+        return "(no visible form fields found in any frame)"
+    return " || ".join(parts)[:1200]
 
 
 def _fill_identity_fields_or_abort(
@@ -700,6 +712,14 @@ def _execute_intake_form_submission(task: dict[str, Any], spec: dict[str, Any]) 
         try:
             page.goto(intake_url, wait_until="domcontentloaded", timeout=60000)
             page_url = page.url
+            # Marketing/law-firm intake pages are frequently JS-heavy (lazy-
+            # loaded lead forms, third-party embeds) — domcontentloaded fires
+            # before those finish. Give the form a real chance to render
+            # before checking for it, rather than a flat short wait.
+            try:
+                page.wait_for_selector("input, select, textarea", timeout=8000)
+            except PlaywrightTimeoutError:
+                pass
             page.wait_for_timeout(2000)
 
             if _has_anti_bot_challenge(page):

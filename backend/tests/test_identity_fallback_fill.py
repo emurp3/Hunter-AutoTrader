@@ -152,4 +152,32 @@ def test_describe_visible_form_fields_never_raises_if_evaluate_fails():
 
     description = _describe_visible_form_fields(_BrokenPage())
 
-    assert "could not enumerate" in description
+    assert "no visible form fields found" in description
+
+
+def test_describe_visible_form_fields_reports_fields_found_in_an_iframe():
+    """A lead-capture form embedded via an external widget (HubSpot,
+    Gravity Forms iframe embeds, etc.) lives in a child frame — Playwright
+    drives the browser via CDP, so it can read that frame's DOM directly
+    even across origins, unlike a plain document.querySelectorAll on the
+    top-level page."""
+
+    class _MainFrame:
+        url = "https://potterhandy.com/google-privacy-violations-lawsuit/"
+
+        def evaluate(self, _js: str):
+            return []  # nothing on the top-level page itself
+
+    class _EmbeddedFormFrame:
+        url = "https://forms.hubspot.com/embed/12345"
+
+        def evaluate(self, _js: str):
+            return ["input[type=text](name=firstname,id=firstname-abc)"]
+
+    class _PageWithIframe:
+        frames = [_MainFrame(), _EmbeddedFormFrame()]
+
+    description = _describe_visible_form_fields(_PageWithIframe())
+
+    assert "forms.hubspot.com" in description
+    assert "firstname" in description
