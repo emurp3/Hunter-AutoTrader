@@ -16,11 +16,13 @@ call itself, execution accounting, or trading behavior.
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from app.integration.brokerage.base import AccountInfo
 from app.models.hunter_ledger import CanonicalOpportunity, Disposition
 from app.routers.assistant import _build_system_prompt, _gather_context
 
@@ -114,3 +116,41 @@ def test_gather_context_never_raises_even_if_quota_lookup_fails(monkeypatch):
     assert ctx["quota"] is None
     prompt = _build_system_prompt(ctx)  # must still render
     assert "unavailable" in prompt
+
+
+# ── Alpaca account-balance fix ──────────────────────────────────────────
+# Production defect: this block imported a nonexistent AlpacaClient /
+# .get_account() (neither ever existed in this codebase), so it always
+# raised and silently fell back to "unknown" — with no log line, unlike
+# every other context-fetch block here. Fixed to use the same
+# get_alpaca_adapter().get_balance() pattern already used everywhere else
+# in the app (execution.py, position_lifecycle.py, recycle_engine.py,
+# budget.py). Read-only: no order placement, no risk-control code touched.
+
+
+def test_account_balance_populated_from_real_adapter_call():
+    session = _make_session()
+    fake_account = AccountInfo(
+        account_id="acct-1", cash=1234.56, portfolio_value=5000.0,
+        buying_power=2500.0, status="ACTIVE",
+    )
+    with patch(
+        "app.integration.brokerage.alpaca.get_alpaca_adapter",
+        return_value=type("A", (), {"get_balance": lambda self: fake_account})(),
+    ):
+        ctx = _gather_context(session)
+    assert ctx["account_cash"] == "1234.56"
+    assert ctx["buying_power"] == "2500.0"
+    assert ctx["account_status"] == "ACTIVE"
+
+
+def test_account_balance_falls_back_to_unknown_and_logs_on_failure(caplog):
+    session = _make_session()
+    with patch(
+        "app.integration.brokerage.alpaca.get_alpaca_adapter",
+        side_effect=RuntimeError("simulated Alpaca outage"),
+    ):
+        with caplog.at_level("WARNING"):
+            ctx = _gather_context(session)
+    assert ctx["account_cash"] == "unknown"
+    assert any("Failed to fetch Alpaca account balance" in r.message for r in caplog.records)

@@ -5,11 +5,22 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from app.auth.jwt import require_admin
 from app.database.config import get_session
 from app.models.income_source import IncomeSource
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/identity/status")
+def identity_status(_user=Depends(require_admin)):
+    """Which identity fields (DOB, SSN, address, etc.) are on file — names
+    only, never values. The values themselves live only in this service's
+    environment variables (see app/services/commander_identity.py) and are
+    never returned by any endpoint in this app."""
+    from app.services import commander_identity
+    return commander_identity.get_identity_field_presence()
 
 
 class ChatRequest(BaseModel):
@@ -111,13 +122,13 @@ def _gather_context(session: Session) -> dict:
         ctx["failed"] = 0
 
     try:
-        from app.integration.brokerage.alpaca import AlpacaClient
-        client = AlpacaClient()
-        acct = client.get_account()
-        ctx["account_cash"] = str(getattr(acct, "cash", None) or getattr(acct, "buying_power", "unknown"))
-        ctx["buying_power"] = str(getattr(acct, "buying_power", "unknown"))
-        ctx["account_status"] = str(getattr(acct, "status", "unknown"))
-    except Exception:
+        from app.integration.brokerage.alpaca import get_alpaca_adapter
+        acct = get_alpaca_adapter().get_balance()
+        ctx["account_cash"] = str(acct.cash)
+        ctx["buying_power"] = str(acct.buying_power)
+        ctx["account_status"] = str(acct.status)
+    except Exception as exc:
+        logger.warning("Failed to fetch Alpaca account balance: %s", exc)
         ctx["account_cash"] = "unknown"
         ctx["buying_power"] = "unknown"
         ctx["account_status"] = "unknown"
@@ -180,6 +191,13 @@ def _gather_context(session: Session) -> dict:
         ctx["capability_profile"] = None
         ctx["document_count"] = 0
 
+    try:
+        from app.services import commander_identity
+        ctx["identity_fields_present"] = commander_identity.get_identity_field_presence()
+    except Exception as exc:
+        logger.warning("Failed to fetch identity field presence: %s", exc)
+        ctx["identity_fields_present"] = {}
+
     ctx["current_datetime_utc"] = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M UTC")
 
     ctx.setdefault("advisor_opp_title", "none")
@@ -222,6 +240,10 @@ def _build_system_prompt(ctx: dict) -> str:
     else:
         quota_text = "unavailable"
 
+    identity_present = ctx.get("identity_fields_present") or {}
+    on_file = [field for field, present in identity_present.items() if present]
+    identity_text = ", ".join(on_file) if on_file else "none on file"
+
     prompt = (
         "You are Hunter AI, Hunter's Commander-facing conversational interface. You are not a "
         "generic assistant — you speak from Hunter's live operational state below, supplied fresh "
@@ -236,6 +258,11 @@ def _build_system_prompt(ctx: dict) -> str:
         "profiles) through the document-upload feature; {document_count} on file right now. "
         "Point to Hunter's own capability first, and only fall back to outside suggestions when "
         "nothing in Hunter's system actually covers the request.\n\n"
+        "COMMANDER IDENTITY FIELDS ON FILE (names only — you are never shown the actual values, "
+        "so never state, guess, or fabricate one; you can only confirm which fields exist): "
+        "{identity_text}. These are stored outside this conversation entirely and are only ever "
+        "read by a specific, separately Commander-approved step at the point an application "
+        "actually needs them — never by you, never for display.\n\n"
         "CURRENT DATE/TIME: {current_datetime_utc}\n\n"
         "Your own training data has a cutoff and is NOT authoritative for anything current — "
         "today's date, current officeholders, current events, prices, or any other fact that "
@@ -268,7 +295,7 @@ def _build_system_prompt(ctx: dict) -> str:
         "above when relevant. Keep responses under 250 words."
     ).format(
         opps_text=opps_text, decisions_text=decisions_text, queue_text=queue_text,
-        quota_text=quota_text, **ctx,
+        quota_text=quota_text, identity_text=identity_text, **ctx,
     )
 
     capability_profile = ctx.get("capability_profile")
