@@ -463,6 +463,49 @@ def _fill_identity_fields_or_abort(
     return filled
 
 
+def _fill_identity_fields_with_reasoning_fallback(
+    page, task_id: str, identity_fields: dict[str, str], *, artifact_prefix: str, objective: str
+) -> list[str]:
+    """Deterministic fill stays the fast path — cheap, free, tried first,
+    every time. Only when it can't locate a required field does this
+    reach for Hunter's OBSERVE->REASON->ACT->VERIFY fallback (see
+    app/worker/execution_reasoning.py) to navigate toward a page where
+    the deterministic fill can succeed — e.g. clicking through from a
+    marketing landing page to the real intake form — then retries the
+    same cheap deterministic fill. If no advisor is configured, or the
+    reasoning loop can't find a path either, this raises the exact same
+    error the deterministic-only path always has — no new failure mode,
+    just an added chance to succeed first."""
+    try:
+        return _fill_identity_fields_or_abort(page, task_id, identity_fields, artifact_prefix=artifact_prefix)
+    except RetryableExecutionError as exc:
+        from app.worker.execution_reasoning import run_observe_reason_act_verify
+
+        client = httpx.Client(timeout=25)
+        try:
+            result = run_observe_reason_act_verify(
+                page, objective=objective, identity_fields=identity_fields, client=client
+            )
+        finally:
+            client.close()
+
+        if not result["success"]:
+            last_step = result["trace"][-1] if result["trace"] else {}
+            raise RetryableExecutionError(
+                exc.reason + f" | reasoning fallback also found no path forward: {last_step}",
+                error_text=exc.error_text,
+                page_url=page.url,
+                screenshot_path=exc.screenshot_path,
+            ) from exc
+
+        # The reasoning loop navigated somewhere it believes is the real
+        # form — retry the same cheap deterministic fill now that we may
+        # be on the right page. If it still can't find the fields here,
+        # this raises plainly rather than looping the reasoning fallback
+        # again (bounded to one reasoning pass per fill attempt).
+        return _fill_identity_fields_or_abort(page, task_id, identity_fields, artifact_prefix=artifact_prefix)
+
+
 def _assert_ssn_use_explicitly_approved(spec: dict[str, Any], identity_fields: dict[str, str]) -> None:
     """Commander's rule (2026-09-09): name, DOB, address, and email may be
     used autonomously; SSN requires Commander's explicit consent for that
@@ -644,8 +687,9 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
                     screenshot_path=screenshot_path,
                 )
 
-            fields_filled = _fill_identity_fields_or_abort(
-                page, task_id, identity_fields, artifact_prefix="gov-portal-claim"
+            fields_filled = _fill_identity_fields_with_reasoning_fallback(
+                page, task_id, identity_fields, artifact_prefix="gov-portal-claim",
+                objective=f"Reach and use the claim-filing form for {business_name} on this government unclaimed-property portal.",
             )
 
             submit_button = page.locator(
@@ -755,7 +799,10 @@ def _execute_intake_form_submission(task: dict[str, Any], spec: dict[str, Any]) 
                     screenshot_path=screenshot_path,
                 )
 
-            fields_filled = _fill_identity_fields_or_abort(page, task_id, identity_fields, artifact_prefix="intake")
+            fields_filled = _fill_identity_fields_with_reasoning_fallback(
+                page, task_id, identity_fields, artifact_prefix="intake",
+                objective=f"Find and reach the actual case-intake form on this page (starting at {intake_url}) so Commander's stored details can be entered.",
+            )
 
             submit_button = page.locator(
                 'button:has-text("Submit"), button:has-text("Send"), '
