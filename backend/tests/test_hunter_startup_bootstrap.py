@@ -173,3 +173,191 @@ def test_bootstrap_is_a_safe_noop_when_neither_candidate_exists(monkeypatch):
 
     with Session(engine) as session:
         assert session.exec(select(Task)).all() == []
+
+
+# ── Autonomous submission once Commander's identity fields are on file ─────
+# Correction (2026-09-09): the standing rule is narrow — Hunter never
+# supplies/invents identity data on Commander's behalf. It is NOT "wait
+# for a new approval workflow before submitting anything." Once Commander
+# has answered a checkpoint AND the structured identity fields exist,
+# Hunter dispatches the real submission itself, no second gate.
+
+
+def _clear_identity_env(monkeypatch):
+    from app.services.commander_identity import FIELD_ENV_VARS
+    for env_var in FIELD_ENV_VARS.values():
+        monkeypatch.delenv(env_var, raising=False)
+
+
+def test_ucp_dispatch_includes_no_identity_fields_when_none_on_file(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    engine = _make_engine()
+    _seed(engine)
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        task = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-01-UCP")).first()
+        spec = task.spec_payload
+        spec = json.loads(spec) if isinstance(spec, str) else spec
+        assert spec["identity_fields"] == {}
+
+
+def test_ucp_dispatch_includes_identity_fields_once_on_file(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_CITY", "Macon")
+    engine = _make_engine()
+    _seed(engine)
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        task = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-01-UCP")).first()
+        spec = task.spec_payload
+        spec = json.loads(spec) if isinstance(spec, str) else spec
+        assert spec["identity_fields"]["full_name"] == "Eddie Murphy Jr."
+        assert spec["identity_fields"]["city"] == "Macon"
+        assert "ssn" not in spec["identity_fields"]  # never included unless actually set
+
+
+def test_google_no_intake_dispatch_while_awaiting_answer(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    _seed(engine, google_disposition=Disposition.pending_commander.value)  # reopened, not yet answered
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        tasks = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).all()
+        assert tasks == []  # no answer yet — nothing to submit
+
+
+def test_google_dispatches_intake_submission_once_answered_and_identity_on_file(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-08-02-GOOGLE",
+                lane="legal_recovery",
+                factual_mechanism="Google Incognito lawsuit intake",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+            )
+        )
+        session.commit()
+
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        task = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).first()
+        assert task is not None
+        assert task.task_type == "intake_form_submission"
+        spec = task.spec_payload
+        spec = json.loads(spec) if isinstance(spec, str) else spec
+        assert spec["identity_fields"]["full_name"] == "Eddie Murphy Jr."
+        assert spec["identity_fields"]["email"] == "eddie@example.com"
+        assert "potterhandy.com" in spec["intake_url"]
+
+
+def test_google_no_intake_dispatch_when_answered_but_no_structured_identity_yet(monkeypatch):
+    _clear_identity_env(monkeypatch)  # answered in chat, but no env vars set yet
+    engine = _make_engine()
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-08-02-GOOGLE",
+                lane="legal_recovery",
+                factual_mechanism="Google Incognito lawsuit intake",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+            )
+        )
+        session.commit()
+
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        tasks = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).all()
+        assert tasks == []
+
+
+def test_ucp_dispatch_never_autonomously_includes_ssn(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_SSN", "123-45-6789")
+    engine = _make_engine()
+    _seed(engine)
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        task = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-01-UCP")).first()
+        spec = task.spec_payload
+        spec = json.loads(spec) if isinstance(spec, str) else spec
+        # SSN is set and available, but the autonomous dispatch path must
+        # never request it — Commander's explicit per-submission consent
+        # is required for SSN, so it's not part of this dispatch at all.
+        assert "ssn" not in spec["identity_fields"]
+
+
+def test_google_intake_dispatch_never_autonomously_includes_ssn(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    monkeypatch.setenv("HUNTER_COMMANDER_SSN", "123-45-6789")
+    engine = _make_engine()
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-08-02-GOOGLE",
+                lane="legal_recovery",
+                factual_mechanism="Google Incognito lawsuit intake",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+            )
+        )
+        session.commit()
+
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        task = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).first()
+        spec = task.spec_payload
+        spec = json.loads(spec) if isinstance(spec, str) else spec
+        assert "ssn" not in spec["identity_fields"]
+
+
+def test_google_intake_dispatch_is_idempotent(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-08-02-GOOGLE",
+                lane="legal_recovery",
+                factual_mechanism="Google Incognito lawsuit intake",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+            )
+        )
+        session.commit()
+
+    _run_bootstrap(engine, monkeypatch)
+    _run_bootstrap(engine, monkeypatch)
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        tasks = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).all()
+        assert len(tasks) == 1

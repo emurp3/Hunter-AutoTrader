@@ -722,34 +722,69 @@ def _close_ledger_loop(
         return
 
     if task.task_type == "government_portal_search" and outcome.get("search_performed") and page_url:
+        claim_filed = bool(outcome.get("claim_filed"))
+        if claim_filed:
+            action_description = (
+                f"Filed unclaimed-property claim for '{outcome.get('business_name_searched')}' "
+                f"using Commander's stored identity fields ({', '.join(outcome.get('fields_filled') or [])})"
+            )
+            follow_up = "Claim filed — awaiting the agency's own processing/confirmation; no further Hunter action needed unless the agency responds with a request."
+        else:
+            action_description = (
+                f"Searched government unclaimed-property portal for "
+                f"'{outcome.get('business_name_searched')}'"
+            )
+            follow_up = (
+                "Review result_excerpt in the task outcome. If it indicates a real "
+                "match, Hunter files the claim automatically once Commander's identity "
+                "fields are on file — this search result alone does not need a separate "
+                "Commander decision."
+            )
         try:
             acct.record_execution(
                 session,
                 canonical_opportunity_id=cid,
                 source=opp.source_provenance,
-                action_description=(
-                    f"Searched government unclaimed-property portal for "
-                    f"'{outcome.get('business_name_searched')}'"
-                ),
+                action_description=action_description,
                 actions_taken=(
-                    (task.outcome_notes or "Automated Playwright search, no claim filed.")
+                    (task.outcome_notes or "Automated Playwright run.")
                     + (f" screenshot={screenshot_path}" if screenshot_path else "")
                 ),
                 external_endpoint=page_url,
                 receipt_reference=f"task:{task.task_id}",
                 money_spent_committed=0.0,
                 expected_lawful_return=opp.probability_adjusted_pending_value or 0.0,
-                follow_up=(
-                    "Review result_excerpt in the task outcome. If it indicates a real "
-                    "match, that is a new Commander decision (file a claim) — not "
-                    "something Hunter proceeds on unilaterally."
-                ),
+                follow_up=follow_up,
                 owner="Hunter",
             )
         except (acct.MissingReceiptError, acct.SundayLockout):
             # A structural accounting guard tripped — do not silently drop
             # this; leave the candidate as-is for a human/engineering look
             # rather than fabricate an execution.
+            pass
+
+    elif task.task_type == "intake_form_submission" and outcome.get("submitted") and page_url:
+        try:
+            acct.record_execution(
+                session,
+                canonical_opportunity_id=cid,
+                source=opp.source_provenance,
+                action_description=(
+                    f"Submitted intake form using Commander's stored identity fields "
+                    f"({', '.join(outcome.get('fields_filled') or [])})"
+                ),
+                actions_taken=(
+                    (task.outcome_notes or "Automated Playwright form submission.")
+                    + (f" screenshot={screenshot_path}" if screenshot_path else "")
+                ),
+                external_endpoint=page_url,
+                receipt_reference=f"task:{task.task_id}",
+                money_spent_committed=0.0,
+                expected_lawful_return=opp.probability_adjusted_pending_value or 0.0,
+                follow_up="Intake submitted — awaiting the recipient's own response; no further Hunter action needed unless they follow up.",
+                owner="Hunter",
+            )
+        except (acct.MissingReceiptError, acct.SundayLockout):
             pass
 
 

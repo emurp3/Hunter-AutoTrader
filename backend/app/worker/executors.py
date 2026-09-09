@@ -82,6 +82,8 @@ def execute_task(task: dict[str, Any], worker_id: str) -> WorkerResult:
         return _execute_marketplace_listing(task, spec, worker_id)
     if task_type == "government_portal_search":
         return _execute_government_portal_search(task, spec)
+    if task_type == "intake_form_submission":
+        return _execute_intake_form_submission(task, spec)
     raise WorkerExecutionError(
         f"Unsupported task_type: {task_type}",
         escalation_type="unrecoverable_failure",
@@ -281,14 +283,115 @@ def _execute_marketplace_listing(task: dict[str, Any], spec: dict[str, Any], wor
             browser.close()
 
 
+# Selector hints per identity field, shared by every executor that fills
+# a form with Commander's stored identity data. Deliberately conservative:
+# _fill_identity_fields_or_abort aborts the ENTIRE submission rather than
+# guess when a field can't be confidently located — this is a data-
+# integrity control (never file a claim/application with a missing or
+# misattributed field), not a policy gate.
+_IDENTITY_FIELD_SELECTOR_HINTS: dict[str, list[str]] = {
+    "full_name": [
+        'input[name*="fullname" i]', 'input[name*="full_name" i]', 'input[id*="fullname" i]',
+        'input[placeholder*="full name" i]', 'input[placeholder*="your name" i]',
+        'input[name="name"]', 'input[id="name"]',
+    ],
+    "email": ['input[type="email"]', 'input[name*="email" i]', 'input[id*="email" i]'],
+    "phone": ['input[type="tel"]', 'input[name*="phone" i]', 'input[id*="phone" i]'],
+    "dob": [
+        'input[name*="dob" i]', 'input[name*="birthdate" i]', 'input[name*="date_of_birth" i]',
+        'input[id*="dob" i]', 'input[type="date"]',
+    ],
+    "ssn": ['input[name*="ssn" i]', 'input[name*="social" i]', 'input[id*="ssn" i]'],
+    "address_line1": [
+        'input[name*="address1" i]', 'input[name*="addressline1" i]', 'input[name*="street" i]',
+        'input[id*="address1" i]', 'input[autocomplete="address-line1"]',
+    ],
+    "address_line2": [
+        'input[name*="address2" i]', 'input[name*="addressline2" i]',
+        'input[id*="address2" i]', 'input[autocomplete="address-line2"]',
+    ],
+    "city": ['input[name*="city" i]', 'input[id*="city" i]', 'input[autocomplete="address-level2"]'],
+    "state": [
+        'select[name*="state" i]', 'input[name*="state" i]', 'select[id*="state" i]',
+        'select[autocomplete="address-level1"]',
+    ],
+    "zip": [
+        'input[name*="zip" i]', 'input[name*="postal" i]', 'input[id*="zip" i]',
+        'input[autocomplete="postal-code"]',
+    ],
+}
+
+
+def _fill_identity_fields_or_abort(
+    page, task_id: str, identity_fields: dict[str, str], *, artifact_prefix: str
+) -> list[str]:
+    """Fills every provided identity field (name -> real value, sourced
+    only from Commander's own stored data — never invented here). If any
+    field's input can't be confidently located, aborts the WHOLE
+    submission rather than filing an incomplete or misattributed
+    claim/application. Returns the list of field NAMES filled — never
+    values, so the caller can safely record what happened without ever
+    logging or persisting the actual data."""
+    filled: list[str] = []
+    for field_name, value in identity_fields.items():
+        selectors = _IDENTITY_FIELD_SELECTOR_HINTS.get(field_name)
+        if not selectors:
+            raise RetryableExecutionError(
+                f"No selector pattern known for identity field '{field_name}' — aborting rather than guessing",
+                error_text=f"unknown identity field: {field_name}",
+                page_url=page.url,
+            )
+        located = False
+        for selector in selectors:
+            locator = page.locator(selector)
+            if locator.count() > 0 and locator.first.is_visible():
+                tag = locator.first.evaluate("el => el.tagName.toLowerCase()")
+                if tag == "select":
+                    locator.first.select_option(label=value)
+                else:
+                    locator.first.fill(value)
+                located = True
+                filled.append(field_name)
+                break
+        if not located:
+            screenshot_path = str(_artifact_dir(task_id) / f"{artifact_prefix}-missing-field.png")
+            page.screenshot(path=screenshot_path, full_page=True)
+            raise RetryableExecutionError(
+                f"Could not locate a form field for required identity field '{field_name}' — "
+                "aborting the entire submission rather than filing it incomplete or misattributed",
+                error_text=f"missing field: {field_name}",
+                page_url=page.url,
+                screenshot_path=screenshot_path,
+            )
+    return filled
+
+
+def _assert_ssn_use_explicitly_approved(spec: dict[str, Any], identity_fields: dict[str, str]) -> None:
+    """Commander's rule (2026-09-09): name, DOB, address, and email may be
+    used autonomously; SSN requires Commander's explicit consent for that
+    specific submission every time. This is a hard, code-level check —
+    not a convention the dispatcher is trusted to honor — so a future
+    dispatch mistake can't silently slip an SSN through. Refuses (does
+    not retry) unless spec["ssn_explicitly_approved"] is True."""
+    if "ssn" in identity_fields and not spec.get("ssn_explicitly_approved"):
+        raise WorkerExecutionError(
+            "SSN present in identity_fields without explicit per-submission Commander "
+            "consent — refusing rather than submitting it",
+            escalation_type="commander_boundary",
+            error_text="ssn_explicitly_approved must be true for this specific task to include ssn",
+        )
+
+
 def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]) -> WorkerResult:
     """
-    Minimum-scope executor: search a public government lookup portal for
-    a Commander-supplied business name. This is deliberately search-only
-    — it never fills a claim/payment/registration form and never submits
-    anything beyond the search query itself. A real match still requires
-    a separate Commander-approved filing step, tracked as its own
-    checkpoint — this executor's job ends at the search results.
+    Search a public government lookup portal for a Commander-supplied
+    business name. Search-only by default. If spec["identity_fields"] is
+    supplied (populated only from Commander's own stored identity data —
+    see app/services/commander_identity.py — never invented), and a
+    matching record's claim link is found on the results page, continues
+    in the same session to fill and submit the claim; any required field
+    that can't be confidently located aborts the whole submission rather
+    than guessing (see _fill_identity_fields_or_abort).
     """
     task_id = task.get("task_id")
     search_url = spec.get("search_url")
@@ -364,27 +467,201 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             page.screenshot(path=screenshot_path, full_page=True)
             result_text = page.locator("body").inner_text()
 
+            identity_fields: dict[str, str] = spec.get("identity_fields") or {}
+            _assert_ssn_use_explicitly_approved(spec, identity_fields)
+            if not identity_fields:
+                outcome = {
+                    "search_performed": True,
+                    "business_name_searched": business_name,
+                    "claim_filed": False,
+                    "result_excerpt": result_text[:1000],
+                }
+                return WorkerResult(
+                    outcome=outcome,
+                    notes=(
+                        "Hosted HVA searched the government unclaimed-property portal for the "
+                        "Commander-supplied business name. Search only — no identity fields "
+                        "were on file yet, so no claim was attempted."
+                    ),
+                    engine="playwright",
+                    page_url=page_url,
+                    screenshot_path=screenshot_path,
+                    trace_reference=str(trace_path),
+                )
+
+            claim_trigger = page.locator(
+                'a:has-text("File a Claim"), a:has-text("File Claim"), a:has-text("Start Claim"), '
+                'button:has-text("File a Claim"), button:has-text("Start Claim"), a:has-text("Claim")'
+            )
+            if claim_trigger.count() == 0 or not claim_trigger.first.is_visible():
+                # Honest, legitimate outcome — no claimable record found on this
+                # search. Not a failure: nothing to file.
+                outcome = {
+                    "search_performed": True,
+                    "business_name_searched": business_name,
+                    "claim_filed": False,
+                    "claim_available": False,
+                    "result_excerpt": result_text[:1000],
+                }
+                return WorkerResult(
+                    outcome=outcome,
+                    notes="Hosted HVA searched the portal; no claimable matching record was found.",
+                    engine="playwright",
+                    page_url=page_url,
+                    screenshot_path=screenshot_path,
+                    trace_reference=str(trace_path),
+                )
+
+            claim_trigger.first.click()
+            page.wait_for_timeout(2000)
+            page_url = page.url
+
+            if _has_anti_bot_challenge(page):
+                screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-claim.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                raise WorkerExecutionError(
+                    "Anti-bot control appeared on the claim-filing page",
+                    escalation_type="commander_boundary",
+                    error_text="CAPTCHA/anti-bot indicator found before claim submission",
+                    page_url=page.url,
+                    screenshot_path=screenshot_path,
+                )
+
+            fields_filled = _fill_identity_fields_or_abort(
+                page, task_id, identity_fields, artifact_prefix="gov-portal-claim"
+            )
+
+            submit_button = page.locator(
+                'button:has-text("Submit"), input[type="submit"][value*="Submit" i], button[type="submit"]'
+            )
+            if submit_button.count() == 0 or not submit_button.first.is_visible():
+                raise RetryableExecutionError(
+                    "Could not locate a final submit control for the claim — aborting rather than guessing",
+                    page_url=page.url,
+                )
+            submit_button.first.click()
+            page.wait_for_timeout(3000)
+            confirmation_url = page.url
+            confirmation_screenshot = str(_artifact_dir(task_id) / "gov-portal-claim-confirmation.png")
+            page.screenshot(path=confirmation_screenshot, full_page=True)
+
             outcome = {
                 "search_performed": True,
                 "business_name_searched": business_name,
-                "claim_filed": False,
-                "result_excerpt": result_text[:1000],
+                "claim_filed": True,
+                "fields_filled": fields_filled,  # field NAMES only, never values
             }
             return WorkerResult(
                 outcome=outcome,
                 notes=(
-                    "Hosted HVA searched the government unclaimed-property portal for the "
-                    "Commander-supplied business name. Search only — no claim was filed; "
-                    "filing requires a separate Commander-approved step."
+                    "Hosted HVA found a matching unclaimed-property record and filed the claim "
+                    "using Commander's stored identity fields."
                 ),
                 engine="playwright",
-                page_url=page_url,
-                screenshot_path=screenshot_path,
+                page_url=confirmation_url,
+                screenshot_path=confirmation_screenshot,
                 trace_reference=str(trace_path),
             )
         except PlaywrightTimeoutError as exc:
             raise RetryableExecutionError(
                 "Government portal search timed out",
+                error_text=str(exc),
+                page_url=page_url,
+                screenshot_path=screenshot_path,
+                trace_reference=str(trace_path),
+            ) from exc
+        finally:
+            try:
+                context.tracing.stop(path=str(trace_path))
+                trace_reference = str(trace_path)
+            except Exception:
+                trace_reference = trace_reference or None
+            context.close()
+            browser.close()
+
+
+def _execute_intake_form_submission(task: dict[str, Any], spec: dict[str, Any]) -> WorkerResult:
+    """
+    Navigates directly to an intake/signup form (e.g. a law firm's case
+    intake page) and fills + submits it using Commander's stored
+    identity fields (spec["identity_fields"], sourced only from
+    app/services/commander_identity.py — never invented). Same
+    fail-closed rule as claim submission: any required field that can't
+    be confidently located aborts the whole submission rather than
+    filing it incomplete or misattributed.
+    """
+    task_id = task.get("task_id")
+    intake_url = spec.get("intake_url")
+    identity_fields: dict[str, str] = spec.get("identity_fields") or {}
+    if not intake_url or not identity_fields:
+        raise WorkerExecutionError(
+            "Missing intake_url or identity_fields in task spec",
+            escalation_type="unrecoverable_failure",
+            error_text=f"spec keys={list(spec.keys())}",
+        )
+    _assert_ssn_use_explicitly_approved(spec, identity_fields)
+
+    screenshot_path: str | None = None
+    page_url: str | None = None
+    trace_reference: str | None = None
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=os.getenv("HUNTER_PLAYWRIGHT_HEADLESS", "true").lower() != "false",
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
+        )
+        context = browser.new_context()
+        page = context.new_page()
+        trace_path = _artifact_dir(task_id) / "intake-trace.zip"
+        context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        try:
+            page.goto(intake_url, wait_until="domcontentloaded", timeout=60000)
+            page_url = page.url
+            page.wait_for_timeout(2000)
+
+            if _has_anti_bot_challenge(page):
+                screenshot_path = str(_artifact_dir(task_id) / "intake-antibot.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                raise WorkerExecutionError(
+                    "Anti-bot control detected on intake form — Hunter does not bypass these",
+                    escalation_type="commander_boundary",
+                    error_text="CAPTCHA/anti-bot indicator found before submission",
+                    page_url=page.url,
+                    screenshot_path=screenshot_path,
+                )
+
+            fields_filled = _fill_identity_fields_or_abort(page, task_id, identity_fields, artifact_prefix="intake")
+
+            submit_button = page.locator(
+                'button:has-text("Submit"), button:has-text("Send"), '
+                'input[type="submit"], button[type="submit"]'
+            )
+            if submit_button.count() == 0 or not submit_button.first.is_visible():
+                raise RetryableExecutionError(
+                    "Could not locate a submit control for the intake form — aborting rather than guessing",
+                    page_url=page.url,
+                )
+            submit_button.first.click()
+            page.wait_for_timeout(3000)
+            confirmation_url = page.url
+            confirmation_screenshot = str(_artifact_dir(task_id) / "intake-confirmation.png")
+            page.screenshot(path=confirmation_screenshot, full_page=True)
+
+            outcome = {
+                "submitted": True,
+                "fields_filled": fields_filled,  # field NAMES only, never values
+            }
+            return WorkerResult(
+                outcome=outcome,
+                notes="Hosted HVA submitted the intake form using Commander's stored identity fields.",
+                engine="playwright",
+                page_url=confirmation_url,
+                screenshot_path=confirmation_screenshot,
+                trace_reference=str(trace_path),
+            )
+        except PlaywrightTimeoutError as exc:
+            raise RetryableExecutionError(
+                "Intake form submission timed out",
                 error_text=str(exc),
                 page_url=page_url,
                 screenshot_path=screenshot_path,

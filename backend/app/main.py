@@ -76,18 +76,23 @@ def _bootstrap_intake_after_startup() -> None:
 
 
 def _bootstrap_hunter_ledger_actions_after_startup() -> None:
-    """Carry tonight's two Commander-approved checkpoints through to the
-    executor now that it exists, from Hunter's own runtime — not a manual
-    API call from Claude or Commander. Idempotent per day; safe to run on
-    every deploy/restart.
+    """Carry Commander-approved checkpoints through to the furthest
+    lawful, externally effective endpoint from Hunter's own runtime —
+    not a manual API call from Claude or Commander. Idempotent per day;
+    safe to run on every deploy/restart.
 
-    1. UCP-01: Commander already supplied the business name via the chat
-       widget — dispatch the search-only portal task.
-    2. GOOGLE-02: Commander's prior answer ("approved, proceed") did not
-       include the personal-data fields the intake actually needs —
-       reopen the checkpoint with the specific ask, per addendum rules
-       (Hunter never submits personal data on Commander's behalf without
-       Commander supplying it)."""
+    1. UCP-01: dispatches a portal search using Commander's supplied
+       business name. Once Commander's identity fields are on file
+       (app/services/commander_identity.py), the same task continues
+       past the search into filing the claim if a matching record is
+       found — no separate approval round; see
+       app/worker/executors.py::_execute_government_portal_search.
+    2. GOOGLE-02: reopens the checkpoint with the specific personal-data
+       ask if Commander's prior answer didn't supply it. Once Commander
+       has answered AND the structured identity fields (name + email or
+       phone) are on file, dispatches the intake-form submission
+       directly — Hunter never invents identity data, but once
+       Commander has supplied it, submission is autonomous."""
     try:
         from datetime import date as _date
 
@@ -95,9 +100,19 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
 
         from app.database.config import engine
         from app.models.hunter_ledger import CanonicalOpportunity, Disposition
+        from app.services import commander_identity
         from app.services import execution_accounting as acct
         from app.services import tasks as task_svc
         from app.services.research.providers.ga_unclaimed_property import PORTAL_URL
+        from app.services.research.providers.google_incognito import INTAKE_URL
+
+        def _available_identity_fields(fields: list[str]) -> dict[str, str]:
+            out: dict[str, str] = {}
+            for f in fields:
+                v = commander_identity.get_identity_field(f)
+                if v:
+                    out[f] = v
+            return out
 
         with Session(engine) as session:
             try:
@@ -111,12 +126,16 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                 )
             ).first()
             if ucp and ucp.commander_response and ucp.disposition != Disposition.executed.value:
+                identity_fields = _available_identity_fields(
+                    ["full_name", "address_line1", "address_line2", "city", "state", "zip"]
+                )
                 task_svc.dispatch_task(
                     task_type="government_portal_search",
                     spec_payload={
                         "search_url": PORTAL_URL,
                         "business_name": ucp.commander_response,
                         "canonical_opportunity_id": ucp.canonical_opportunity_id,
+                        "identity_fields": identity_fields,
                     },
                     session=session,
                     source_type="canonical_opportunity",
@@ -131,29 +150,51 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                     CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-02-GOOGLE"
                 )
             ).first()
-            if (
-                google
-                and google.disposition != Disposition.pending_commander.value
-                and google.disposition != Disposition.executed.value
-            ):
-                acct.set_disposition(
-                    session,
-                    google.canonical_opportunity_id,
-                    Disposition.pending_commander,
-                    evidence=(
-                        "Reopened: prior Commander answer approved proceeding but "
-                        "did not supply the personal-data fields the intake form "
-                        "requires."
-                    ),
-                    new_checkpoint=(
-                        "To submit the Google Incognito privacy-lawsuit intake, we "
-                        "need: (1) your full legal name, (2) an email or phone "
-                        "number the law firm can reach you at, and (3) the "
-                        "approximate date range you used Chrome Incognito/private "
-                        "browsing while signed into a Google account. Hunter will "
-                        "not submit the intake without these."
-                    ),
-                )
+            if google and google.disposition != Disposition.executed.value:
+                if google.disposition != Disposition.pending_commander.value:
+                    # Never reopened yet (or was reopened and already
+                    # resolved past pending_commander some other way) —
+                    # reopen with the specific ask. Runs exactly once:
+                    # after this, disposition stays pending_commander
+                    # until Commander answers, so this branch won't
+                    # re-fire and clobber a real answer.
+                    acct.set_disposition(
+                        session,
+                        google.canonical_opportunity_id,
+                        Disposition.pending_commander,
+                        evidence=(
+                            "Reopened: prior Commander answer approved proceeding but "
+                            "did not supply the personal-data fields the intake form "
+                            "requires."
+                        ),
+                        new_checkpoint=(
+                            "To submit the Google Incognito privacy-lawsuit intake, we "
+                            "need: (1) your full legal name, (2) an email or phone "
+                            "number the law firm can reach you at, and (3) the "
+                            "approximate date range you used Chrome Incognito/private "
+                            "browsing while signed into a Google account. Hunter will "
+                            "not submit the intake without these."
+                        ),
+                    )
+                elif google.commander_response:
+                    identity_fields = _available_identity_fields(["full_name", "email", "phone"])
+                    if identity_fields.get("full_name") and (
+                        identity_fields.get("email") or identity_fields.get("phone")
+                    ):
+                        task_svc.dispatch_task(
+                            task_type="intake_form_submission",
+                            spec_payload={
+                                "intake_url": INTAKE_URL,
+                                "canonical_opportunity_id": google.canonical_opportunity_id,
+                                "identity_fields": identity_fields,
+                            },
+                            session=session,
+                            source_type="canonical_opportunity",
+                            source_id=google.canonical_opportunity_id,
+                            priority=10,
+                            idempotency_key=f"intake-submit:{google.canonical_opportunity_id}:{_date.today().isoformat()}",
+                            max_attempts=2,
+                        )
     except Exception as exc:  # noqa: BLE001
         _startup_logger.warning(
             "hunter ledger startup bootstrap failed — %s: %s",
