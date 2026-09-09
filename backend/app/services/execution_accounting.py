@@ -275,6 +275,24 @@ def set_disposition(
     if disposition in DISPOSITIONS_REQUIRING_REPLACEMENT:
         open_replacement_chain(session, canonical_opportunity_id)
 
+    if disposition == Disposition.pending_commander and opp.commander_response is None:
+        # Commander has no way to know a checkpoint is waiting unless
+        # something outside the chat widget tells them — notify now,
+        # same channel already used for high/critical alerts.
+        try:
+            from app.services import alerts as alert_svc
+            alert_svc.raise_alert(
+                alert_type="review_required",
+                title=f"Hunter needs your input — {canonical_opportunity_id}",
+                body=(opp.required_commander_checkpoints or "Open the Hunter AI chat for details.")[:300],
+                session=session,
+                priority="high",
+                source_id=canonical_opportunity_id,
+            )
+        except Exception:  # noqa: BLE001
+            # Never let a notification failure block the disposition change.
+            pass
+
     return opp
 
 
