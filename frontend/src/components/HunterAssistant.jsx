@@ -44,7 +44,7 @@ export default function HunterAssistant() {
 
   const answerDecision = useCallback((decisionId, answerText, decisionType) => {
     setMsgs(prev => prev.map(m => (
-      m.role === 'decision' && m.decision.id === decisionId
+      m.role === 'decision' && m.decision.canonical_opportunity_id === decisionId
         ? { ...m, submitting: true }
         : m
     )))
@@ -60,14 +60,14 @@ export default function HunterAssistant() {
       })
       .then(() => {
         setMsgs(prev => [
-          ...prev.filter(m => !(m.role === 'decision' && m.decision.id === decisionId)),
+          ...prev.filter(m => !(m.role === 'decision' && m.decision.canonical_opportunity_id === decisionId)),
           { role: 'user', content: answerText },
           { role: 'assistant', content: 'Got it — recorded. I’ll pick this back up from there.' },
         ])
       })
       .catch(() => {
         setMsgs(prev => prev.map(m => (
-          m.role === 'decision' && m.decision.id === decisionId
+          m.role === 'decision' && m.decision.canonical_opportunity_id === decisionId
             ? { ...m, submitting: false, error: 'Could not save that — try again.' }
             : m
         )))
@@ -230,7 +230,7 @@ function DecisionCard({ decision, submitting, error, onAnswer }) {
         color:'#e8e8e8', fontSize:13, lineHeight:1.5,
       }}>
         <div style={{ fontWeight:700, color:'#ffb700', marginBottom:4 }}>
-          Needs you — {decision.id}
+          Needs you — {decision.canonical_opportunity_id}
         </div>
         <div style={{ marginBottom:6 }}>{decision.mechanism}</div>
         <div style={{ color:'#c9a84c', marginBottom:8 }}>{decision.checkpoint}</div>
@@ -250,7 +250,7 @@ function DecisionCard({ decision, submitting, error, onAnswer }) {
             }}
           />
           <button
-            onClick={() => text.trim() && onAnswer(decision.id, text.trim(), null)}
+            onClick={() => text.trim() && onAnswer(decision.canonical_opportunity_id, text.trim(), null)}
             disabled={submitting || !text.trim()}
             style={{
               background: submitting || !text.trim() ? '#333' : 'rgba(0,212,255,0.2)',
@@ -262,7 +262,7 @@ function DecisionCard({ decision, submitting, error, onAnswer }) {
 
         <div style={{ display:'flex', gap:6 }}>
           <button
-            onClick={() => onAnswer(decision.id, 'Approved — proceed.', 'approve')}
+            onClick={() => onAnswer(decision.canonical_opportunity_id, 'Approved — proceed.', 'approve')}
             disabled={submitting}
             style={{
               flex:1, background:'rgba(80,200,120,0.15)', border:'1px solid rgba(80,200,120,0.4)',
@@ -271,7 +271,7 @@ function DecisionCard({ decision, submitting, error, onAnswer }) {
             }}
           >Approve</button>
           <button
-            onClick={() => onAnswer(decision.id, 'Declined.', 'decline')}
+            onClick={() => onAnswer(decision.canonical_opportunity_id, 'Declined.', 'decline')}
             disabled={submitting}
             style={{
               flex:1, background:'rgba(255,107,107,0.12)', border:'1px solid rgba(255,107,107,0.35)',
