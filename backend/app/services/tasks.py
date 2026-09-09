@@ -276,7 +276,93 @@ def escalate_task(
         priority=AlertPriority.high,
         source_id=task.source_id,
     )
+
+    if task.source_type == "canonical_opportunity" and escalation_type == EscalationType.commander_boundary:
+        _open_manual_action_checkpoint(task, reason, page_url, session)
+
     return task
+
+
+_MANUAL_ACTION_TAG = "[MANUAL-ACTION-NEEDED]"
+
+
+def _open_manual_action_checkpoint(task: Task, reason: str, page_url: Optional[str], session: Session) -> None:
+    """A task hit something only a human can clear (anti-bot/CAPTCHA,
+    login wall, etc.) — surface it as a Commander decision card in the
+    Hunter AI chat (the same checkpoint mechanism already used for
+    research asks), tagged so the startup bootstrap can find it and
+    retry the task automatically once Commander responds. This is not a
+    literal browser-session handoff (Hunter's automation and Commander's
+    own browser share no state) — it's Commander acknowledging the
+    obstacle is cleared (they solved it themselves, or there's nothing
+    further to find) and Hunter re-attempting the same task from a
+    fresh session."""
+    if not task.source_id:
+        return
+    try:
+        from app.models.hunter_ledger import Disposition
+        from app.services import execution_accounting as acct
+
+        checkpoint = (
+            f"{_MANUAL_ACTION_TAG} Hunter hit something it can't get past on its own: {reason}"
+            + (f" (page: {page_url})" if page_url else "")
+            + " — Hunter's automated browser and your own browser don't share any session, so "
+            "solving this yourself in your own browser won't let Hunter pick up where it left "
+            "off. Reply here once you've either resolved it yourself or want Hunter to try "
+            "again, and Hunter will make a fresh automated attempt at the same task."
+        )
+        acct.set_disposition(session, task.source_id, Disposition.pending_commander, new_checkpoint=checkpoint)
+    except Exception:  # noqa: BLE001
+        # Never let a notification/checkpoint failure block the escalation
+        # itself — the task is already correctly marked escalated either way.
+        pass
+
+
+def resume_manual_action_tasks(session: Session) -> list[Task]:
+    """Commander's to-do list for tasks that hit something only a human
+    can clear: any candidate carrying a _MANUAL_ACTION_TAG checkpoint
+    that Commander has now answered gets the same task re-dispatched —
+    same task_type, same spec_payload — for a fresh automated attempt.
+    Not a literal browser-session handoff (impossible — see the
+    checkpoint text) but Commander's real acknowledgment that Hunter
+    should try again. Generic: works for any escalated canonical
+    opportunity, not just today's two. Idempotent per answer via
+    commander_responded_at in the idempotency key."""
+    from app.models.hunter_ledger import CanonicalOpportunity, Disposition
+
+    resumed: list[Task] = []
+    candidates = session.exec(
+        select(CanonicalOpportunity).where(
+            CanonicalOpportunity.disposition == Disposition.pending_commander.value,
+            CanonicalOpportunity.commander_response.is_not(None),
+        )
+    ).all()
+    for opp in candidates:
+        checkpoint = opp.required_commander_checkpoints or ""
+        if _MANUAL_ACTION_TAG not in checkpoint:
+            continue
+
+        last_escalated = session.exec(
+            select(Task)
+            .where(Task.source_id == opp.canonical_opportunity_id, Task.status == TaskStatus.escalated)
+            .order_by(Task.escalated_at.desc())
+        ).first()
+        if not last_escalated:
+            continue
+
+        answered_at = opp.commander_responded_at.isoformat() if opp.commander_responded_at else "unknown"
+        task = dispatch_task(
+            task_type=last_escalated.task_type,
+            spec_payload=json.loads(last_escalated.spec_payload) if last_escalated.spec_payload else {},
+            session=session,
+            source_type="canonical_opportunity",
+            source_id=opp.canonical_opportunity_id,
+            priority=last_escalated.priority,
+            idempotency_key=f"resume:{opp.canonical_opportunity_id}:{answered_at}",
+            max_attempts=last_escalated.max_attempts,
+        )
+        resumed.append(task)
+    return resumed
 
 
 # ── Fail ──────────────────────────────────────────────────────────────────────

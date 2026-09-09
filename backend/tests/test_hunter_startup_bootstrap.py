@@ -392,3 +392,83 @@ def test_google_intake_dispatch_is_idempotent(monkeypatch):
     with Session(engine) as session:
         tasks = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).all()
         assert len(tasks) == 1
+
+
+def test_resume_manual_action_bootstrap_redispatches_after_commander_answer(monkeypatch):
+    """The 'third option' bootstrap: a candidate escalated with a
+    [MANUAL-ACTION-NEEDED] checkpoint, once Commander answers it, gets
+    its escalated task re-dispatched on the next boot — from Hunter's own
+    runtime, exactly like the other bootstrap steps."""
+    from datetime import datetime, timezone
+    from app.models.task import EscalationType, TaskStatus
+
+    engine = _make_engine()
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-09-CAPTCHA",
+                lane="compliance_recovery",
+                factual_mechanism="GA unclaimed property",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response="resolved it myself, try again",
+                commander_responded_at=datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc),
+                required_commander_checkpoints="[MANUAL-ACTION-NEEDED] hit a CAPTCHA",
+            )
+        )
+        session.add(
+            Task(
+                task_id="original-captcha-task",
+                task_type="government_portal_search",
+                source_type="canonical_opportunity",
+                source_id="HUNTER-CAND-2026-09-09-CAPTCHA",
+                spec_payload=json.dumps({"search_url": "https://example.gov"}),
+                status=TaskStatus.escalated,
+                escalation_type=EscalationType.commander_boundary,
+                escalated_at=datetime(2026, 9, 9, 11, 0, tzinfo=timezone.utc),
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(db_config, "engine", engine)
+    from app.main import _bootstrap_resume_manual_action_tasks_after_startup
+
+    _bootstrap_resume_manual_action_tasks_after_startup()
+
+    with Session(engine) as session:
+        tasks = session.exec(
+            select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-09-CAPTCHA")
+        ).all()
+        assert len(tasks) == 2
+        new_task = [t for t in tasks if t.task_id != "original-captcha-task"][0]
+        assert new_task.status == TaskStatus.dispatched
+
+
+def test_resume_manual_action_bootstrap_is_a_noop_when_nothing_answered(monkeypatch):
+    engine = _make_engine()
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-09-CAPTCHA",
+                lane="compliance_recovery",
+                factual_mechanism="GA unclaimed property",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response=None,
+                required_commander_checkpoints="[MANUAL-ACTION-NEEDED] hit a CAPTCHA",
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(db_config, "engine", engine)
+    from app.main import _bootstrap_resume_manual_action_tasks_after_startup
+
+    _bootstrap_resume_manual_action_tasks_after_startup()
+
+    with Session(engine) as session:
+        tasks = session.exec(
+            select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-09-CAPTCHA")
+        ).all()
+        assert tasks == []

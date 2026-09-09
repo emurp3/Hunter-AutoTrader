@@ -231,6 +231,35 @@ def _bootstrap_commander_documents_after_startup() -> None:
         )
 
 
+def _bootstrap_resume_manual_action_tasks_after_startup() -> None:
+    """Commander's to-do-list resume step: any canonical opportunity that
+    hit something only a human can clear (e.g. a CAPTCHA) is parked as a
+    PENDING_COMMANDER checkpoint tagged [MANUAL-ACTION-NEEDED] by
+    tasks.escalate_task(). Once Commander answers it, this re-dispatches
+    the same task for a fresh automated attempt. Runs on every
+    boot/restart — a no-op once all answered checkpoints have already
+    been resumed, since dispatch_task's idempotency key is keyed on the
+    answer timestamp."""
+    try:
+        from app.database.config import engine
+        from app.services import tasks as task_svc
+
+        with Session(engine) as session:
+            resumed = task_svc.resume_manual_action_tasks(session)
+            if resumed:
+                _startup_logger.info(
+                    "resumed %d manual-action task(s) following Commander answers: %s",
+                    len(resumed),
+                    [t.source_id for t in resumed],
+                )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning(
+            "manual-action resume startup bootstrap failed — %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Keep the critical startup path local and bounded. External opportunity
@@ -255,6 +284,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(asyncio.to_thread(_bootstrap_intake_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_hunter_ledger_actions_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_commander_documents_after_startup))
+    asyncio.create_task(asyncio.to_thread(_bootstrap_resume_manual_action_tasks_after_startup))
     yield
     scheduler.shutdown(wait=False)
 
