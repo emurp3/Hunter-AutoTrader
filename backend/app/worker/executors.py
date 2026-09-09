@@ -80,6 +80,8 @@ def execute_task(task: dict[str, Any], worker_id: str) -> WorkerResult:
         return _execute_service_outreach(task, spec)
     if task_type == "marketplace_listing":
         return _execute_marketplace_listing(task, spec, worker_id)
+    if task_type == "government_portal_search":
+        return _execute_government_portal_search(task, spec)
     raise WorkerExecutionError(
         f"Unsupported task_type: {task_type}",
         escalation_type="unrecoverable_failure",
@@ -279,29 +281,167 @@ def _execute_marketplace_listing(task: dict[str, Any], spec: dict[str, Any], wor
             browser.close()
 
 
-def _fill_if_visible(page, selectors: list[str], value: str) -> None:
+def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]) -> WorkerResult:
+    """
+    Minimum-scope executor: search a public government lookup portal for
+    a Commander-supplied business name. This is deliberately search-only
+    — it never fills a claim/payment/registration form and never submits
+    anything beyond the search query itself. A real match still requires
+    a separate Commander-approved filing step, tracked as its own
+    checkpoint — this executor's job ends at the search results.
+    """
+    task_id = task.get("task_id")
+    search_url = spec.get("search_url")
+    business_name = spec.get("business_name")
+    if not search_url or not business_name:
+        raise WorkerExecutionError(
+            "Missing search_url or business_name in task spec",
+            escalation_type="unrecoverable_failure",
+            error_text=f"spec={spec}",
+        )
+
+    screenshot_path: str | None = None
+    page_url: str | None = None
+    trace_reference: str | None = None
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=os.getenv("HUNTER_PLAYWRIGHT_HEADLESS", "true").lower() != "false",
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
+        )
+        context = browser.new_context()
+        page = context.new_page()
+        trace_path = _artifact_dir(task_id) / "gov-portal-trace.zip"
+        context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        try:
+            page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+            page_url = page.url
+            page.wait_for_timeout(2000)
+
+            if _has_anti_bot_challenge(page):
+                screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                raise WorkerExecutionError(
+                    "Anti-bot control detected on government portal — Hunter does not bypass these",
+                    escalation_type="commander_boundary",
+                    error_text="CAPTCHA/anti-bot indicator found before search",
+                    page_url=page.url,
+                    screenshot_path=screenshot_path,
+                )
+
+            _fill_if_visible(
+                page,
+                [
+                    'input[name*="BusinessName" i]', 'input[id*="BusinessName" i]',
+                    'input[name*="EntityName" i]', 'input[id*="EntityName" i]',
+                    'input[placeholder*="Business" i]', 'input[placeholder*="Company" i]',
+                    'input[name*="LastName" i]', 'input[id*="LastName" i]',
+                    'input[placeholder*="Name" i]',
+                ],
+                business_name,
+                field_description="Business/entity name search field",
+            )
+            _click_if_visible(
+                page,
+                ['button:has-text("Search")', 'input[type="submit"][value*="Search" i]', 'button[type="submit"]'],
+                field_description="Search submit button",
+            )
+            page.wait_for_timeout(4000)
+            page_url = page.url
+
+            if _has_anti_bot_challenge(page):
+                screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-postsearch.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                raise WorkerExecutionError(
+                    "Anti-bot control appeared after search submission",
+                    escalation_type="commander_boundary",
+                    error_text="CAPTCHA/anti-bot indicator found on results page",
+                    page_url=page.url,
+                    screenshot_path=screenshot_path,
+                )
+
+            screenshot_path = str(_artifact_dir(task_id) / "gov-portal-results.png")
+            page.screenshot(path=screenshot_path, full_page=True)
+            result_text = page.locator("body").inner_text()
+
+            outcome = {
+                "search_performed": True,
+                "business_name_searched": business_name,
+                "claim_filed": False,
+                "result_excerpt": result_text[:1000],
+            }
+            return WorkerResult(
+                outcome=outcome,
+                notes=(
+                    "Hosted HVA searched the government unclaimed-property portal for the "
+                    "Commander-supplied business name. Search only — no claim was filed; "
+                    "filing requires a separate Commander-approved step."
+                ),
+                engine="playwright",
+                page_url=page_url,
+                screenshot_path=screenshot_path,
+                trace_reference=str(trace_path),
+            )
+        except PlaywrightTimeoutError as exc:
+            raise RetryableExecutionError(
+                "Government portal search timed out",
+                error_text=str(exc),
+                page_url=page_url,
+                screenshot_path=screenshot_path,
+                trace_reference=str(trace_path),
+            ) from exc
+        finally:
+            try:
+                context.tracing.stop(path=str(trace_path))
+                trace_reference = str(trace_path)
+            except Exception:
+                trace_reference = trace_reference or None
+            context.close()
+            browser.close()
+
+
+def _fill_if_visible(page, selectors: list[str], value: str, *, field_description: str = "Required form field") -> None:
     for selector in selectors:
         locator = page.locator(selector)
         if locator.count() > 0 and locator.first.is_visible():
             locator.first.fill(value)
             return
     raise RetryableExecutionError(
-        "Required Facebook login field not visible",
+        f"{field_description} not visible",
         error_text=f"Could not find any selector from: {selectors}",
         page_url=page.url,
     )
 
 
-def _click_if_visible(page, selectors: list[str]) -> None:
+def _click_if_visible(page, selectors: list[str], *, field_description: str = "Required button") -> None:
     for selector in selectors:
         locator = page.locator(selector)
         if locator.count() > 0 and locator.first.is_visible():
             locator.first.click()
             return
     raise RetryableExecutionError(
-        "Required Facebook login button not visible",
+        f"{field_description} not visible",
         error_text=f"Could not find any selector from: {selectors}",
         page_url=page.url,
+    )
+
+
+def _has_anti_bot_challenge(page) -> bool:
+    """Conservative CAPTCHA/anti-bot detector. Hunter does not attempt to
+    solve or bypass these — if found, the task escalates instead."""
+    for selector in (
+        'iframe[src*="recaptcha" i]', '.g-recaptcha', 'iframe[src*="hcaptcha" i]',
+        '[class*="hcaptcha" i]', 'iframe[title*="captcha" i]', '[id*="captcha" i]',
+    ):
+        try:
+            if page.locator(selector).count() > 0:
+                return True
+        except Exception:
+            continue
+    body = page.content().lower()
+    return any(
+        token in body
+        for token in ("verify you are human", "i'm not a robot", "captcha", "bot detection", "access denied")
     )
 
 

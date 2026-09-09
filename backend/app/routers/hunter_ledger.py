@@ -137,18 +137,58 @@ def run_candidate_research(canonical_opportunity_id: str, session: Session = Dep
     }
 
 
+@router.post("/candidates/{canonical_opportunity_id}/dispatch-portal-search")
+def dispatch_portal_search(
+    canonical_opportunity_id: str,
+    search_url: str,
+    business_name: str,
+    session: Session = Depends(get_session),
+):
+    """Dispatch a search-only worker task against a public portal. This is
+    the minimum executor: search only, never a claim/payment/registration
+    submission. The already-running hunter-hva-worker claims and runs it;
+    on completion with a real page reached, the ledger records EXECUTED
+    with that page as the receipt — see tasks.py's _close_ledger_loop."""
+    opp = session.exec(
+        select(CanonicalOpportunity).where(
+            CanonicalOpportunity.canonical_opportunity_id == canonical_opportunity_id
+        )
+    ).first()
+    if not opp:
+        raise HTTPException(status_code=404, detail="Canonical opportunity not found")
+
+    from app.services import tasks as task_svc
+
+    task = task_svc.dispatch_task(
+        task_type="government_portal_search",
+        spec_payload={
+            "search_url": search_url,
+            "business_name": business_name,
+            "canonical_opportunity_id": canonical_opportunity_id,
+        },
+        session=session,
+        source_type="canonical_opportunity",
+        source_id=canonical_opportunity_id,
+        priority=10,
+        idempotency_key=f"gov-search:{canonical_opportunity_id}:{business_name}",
+        max_attempts=2,
+    )
+    return task
+
+
 @router.post("/candidates/{canonical_opportunity_id}/disposition")
 def update_disposition(
     canonical_opportunity_id: str,
     disposition: str,
     evidence: Optional[str] = None,
     duplicate_of: Optional[str] = None,
+    new_checkpoint: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     try:
         return acct.set_disposition(
             session, canonical_opportunity_id, disposition,
-            evidence=evidence, duplicate_of=duplicate_of,
+            evidence=evidence, duplicate_of=duplicate_of, new_checkpoint=new_checkpoint,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
