@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -19,6 +20,28 @@ logging.basicConfig(
 logger = logging.getLogger("hunter.worker")
 
 _STOP = False
+
+
+def _ensure_playwright_browsers_installed() -> None:
+    """The build step only installs the regular Chromium binary
+    (`playwright install chromium`), but Playwright's default headless
+    launch requires a separate "headless shell" binary that isn't
+    fetched by that command — this service has no persistent disk, so
+    the gap reappears on every deploy/restart. Install it here, once
+    per boot, before the worker starts claiming tasks. A failure here
+    must not crash the worker: task execution already fails safely
+    (escalates) if the browser is genuinely still missing."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        logger.info("playwright browser install check complete")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("playwright browser install check failed — %s: %s", type(exc).__name__, exc)
 
 
 def _handle_signal(signum, frame) -> None:  # type: ignore[no-untyped-def]
@@ -145,6 +168,7 @@ def main() -> int:
 
     worker_id = os.getenv("HUNTER_WORKER_ID", "hosted-hva-worker-1")
     poll_interval = max(5, int(os.getenv("HUNTER_POLL_INTERVAL_SECONDS", "10")))
+    _ensure_playwright_browsers_installed()
     client = HunterWorkerClient()
     logger.info("starting hosted HVA worker as %s", worker_id)
     try:
