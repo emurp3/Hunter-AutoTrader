@@ -81,12 +81,13 @@ def test_fast_path_succeeds_without_ever_invoking_the_llm(monkeypatch):
     mock_reasoning_loop = MagicMock()
     monkeypatch.setattr(reasoning_mod, "run_observe_reason_act_verify", mock_reasoning_loop)
 
-    filled = _fill_identity_fields_with_reasoning_fallback(
+    filled, active_page = _fill_identity_fields_with_reasoning_fallback(
         page, "task-1", {"full_name": "Eddie Murphy Jr."},
         artifact_prefix="intake", objective="find the form",
     )
 
     assert filled == ["full_name"]
+    assert active_page is page
     mock_reasoning_loop.assert_not_called()
 
 
@@ -104,12 +105,13 @@ def test_fallback_invoked_on_deterministic_failure_and_retry_succeeds(monkeypatc
 
     monkeypatch.setattr(reasoning_mod, "run_observe_reason_act_verify", _fake_loop)
 
-    filled = _fill_identity_fields_with_reasoning_fallback(
+    filled, active_page = _fill_identity_fields_with_reasoning_fallback(
         page, "task-2", {"full_name": "Eddie Murphy Jr."},
         artifact_prefix="intake", objective="find the form",
     )
 
     assert filled == ["full_name"]
+    assert active_page is page
 
 
 def test_fallback_failure_raises_original_style_error_with_trace(monkeypatch):

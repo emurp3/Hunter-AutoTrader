@@ -237,16 +237,39 @@ def act_on_decision(page, decision: dict[str, Any], identity_fields: dict[str, s
     if locator.count() == 0:
         return {"progressed": False, "error": f"ref {ref} not found on the page"}
 
+    new_page = None
     try:
         if action == "click":
+            # A link to a genuinely different destination (e.g. a
+            # marketing site handing off to a separate intake platform on
+            # another domain) very commonly opens in a new tab rather
+            # than navigating the current one — check for that before
+            # assuming the click was a same-page navigation.
+            context_pages_before = None
+            try:
+                context_pages_before = list(page.context.pages)
+            except Exception:  # noqa: BLE001
+                context_pages_before = None
+
             locator.first.click(timeout=10000)
+
+            if context_pages_before is not None:
+                page.wait_for_timeout(1500)
+                try:
+                    current_pages = list(page.context.pages)
+                except Exception:  # noqa: BLE001
+                    current_pages = context_pages_before
+                if len(current_pages) > len(context_pages_before):
+                    new_page = current_pages[-1]
+
             # A click may trigger real navigation on a slow real-world
             # site — give it a real chance to land before VERIFY samples
             # the page again, rather than a flat short wait that can
             # mistake "still loading" for "no progress" and abandon a
             # route that was actually working.
+            target_page = new_page or page
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=8000)
+                target_page.wait_for_load_state("domcontentloaded", timeout=8000)
             except Exception:  # noqa: BLE001
                 pass
         elif action in ("select", "fill"):
@@ -265,7 +288,10 @@ def act_on_decision(page, decision: dict[str, Any], identity_fields: dict[str, s
         return {"progressed": False, "error": f"action failed: {exc}"}
 
     page.wait_for_timeout(1200)
-    return {"progressed": True}
+    result: dict[str, Any] = {"progressed": True}
+    if new_page is not None:
+        result["new_page"] = new_page
+    return result
 
 
 def run_observe_reason_act_verify(
@@ -284,27 +310,33 @@ def run_observe_reason_act_verify(
     This function NEVER marks an execution successful on Commander's
     behalf — it only ever returns whether further deterministic action
     is warranted; the caller's own deterministic fill/submit/confirm
-    path remains the sole source of truth."""
+    path remains the sole source of truth. The returned "page" is the
+    page the loop ended on — a click that opened a new tab (e.g. a
+    marketing site handing off to a separate intake platform) switches
+    the working page for the rest of the loop, and the caller must
+    continue operating on whatever page comes back here, not its
+    original reference."""
     trace: list[dict[str, Any]] = []
     if not any_advisor_configured():
         trace.append({"outcome": "no_advisor_configured"})
-        return {"success": False, "trace": trace}
+        return {"success": False, "trace": trace, "page": page}
 
+    current_page = page
     seen_fingerprints: set[str] = set()
     checkpoint = f"reach a point where these fields can be filled: {sorted(identity_fields.keys())}"
 
     for i in range(max_iterations):
-        observation = observe_page_state(page, objective=objective, checkpoint=checkpoint)
+        observation = observe_page_state(current_page, objective=objective, checkpoint=checkpoint)
         fp = _fingerprint(observation)
         if fp in seen_fingerprints:
             trace.append({"iteration": i, "outcome": "no_progress_repeated_state"})
-            return {"success": False, "trace": trace}
+            return {"success": False, "trace": trace, "page": current_page}
         seen_fingerprints.add(fp)
 
         decision = reason_next_action(observation, client=client, history=trace)
         if not decision:
             trace.append({"iteration": i, "outcome": "no_advisor_response"})
-            return {"success": False, "trace": trace}
+            return {"success": False, "trace": trace, "page": current_page}
 
         step: dict[str, Any] = {
             "iteration": i,
@@ -315,16 +347,23 @@ def run_observe_reason_act_verify(
         if decision.get("action") == "give_up":
             step["outcome"] = "llm_gave_up"
             trace.append(step)
-            return {"success": False, "trace": trace}
+            return {"success": False, "trace": trace, "page": current_page}
 
         if decision.get("action") == "handoff_to_identity_fill":
             step["outcome"] = "handoff_to_identity_fill"
             trace.append(step)
-            return {"success": True, "trace": trace}
+            return {"success": True, "trace": trace, "page": current_page}
 
-        act_result = act_on_decision(page, decision, identity_fields)
+        act_result = act_on_decision(current_page, decision, identity_fields)
+        new_page = act_result.pop("new_page", None)
         step["act_result"] = act_result
         trace.append(step)
+        if new_page is not None:
+            current_page = new_page
+            # A new tab is unrelated DOM state to whatever the old tab
+            # showed — don't let an old fingerprint falsely flag it as
+            # "already seen".
+            seen_fingerprints.clear()
 
     trace.append({"outcome": "max_iterations_reached"})
-    return {"success": False, "trace": trace}
+    return {"success": False, "trace": trace, "page": current_page}

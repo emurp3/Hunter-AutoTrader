@@ -55,6 +55,14 @@ class _FakeLocator:
         self.el["filled"] = value
 
 
+class _FakeContext:
+    """Stands in for Playwright's BrowserContext — just enough for
+    act_on_decision's new-tab detection (`len(page.context.pages)`)."""
+
+    def __init__(self, pages: list):
+        self.pages = pages
+
+
 class _FakePage:
     """A single-frame fake page whose 'DOM' is a plain list of element
     dicts the test controls directly, plus click_effects that let a test
@@ -70,6 +78,7 @@ class _FakePage:
         self.frames = [self]
         self.click_effects: dict[str, callable] = {}
         self.wait_calls = 0
+        self.context = _FakeContext([self])
 
     def evaluate(self, js: str):
         if "data-hunter-ref" in js:
@@ -152,6 +161,36 @@ def test_act_click_resolves_ref_and_invokes_click_effect():
 
     assert result["progressed"] is True
     assert clicked["happened"] is True
+
+
+def test_act_click_that_opens_a_new_tab_is_detected_and_returned():
+    """Live tonight: a link to a genuinely different domain (a marketing
+    site handing off to a separate intake platform) opened in a new tab,
+    which the code wasn't watching for — it kept observing the original,
+    now-irrelevant tab. act_on_decision must detect a new page appearing
+    in the browser context after a click and hand it back."""
+    main_page = _FakePage([{"ref": "0", "tag": "a", "text": "Start Questionnaire", "attrs": {}}], url="https://x.com", title="X")
+    new_tab = _FakePage([], url="https://intake.example.com", title="Intake")
+
+    def _open_new_tab(p: _FakePage) -> None:
+        p.context.pages.append(new_tab)
+
+    main_page.click_effects["0"] = _open_new_tab
+
+    result = act_on_decision(main_page, {"action": "click", "ref": "f0_0"}, identity_fields={})
+
+    assert result["progressed"] is True
+    assert result["new_page"] is new_tab
+
+
+def test_act_click_with_no_new_tab_does_not_report_one():
+    page = _FakePage([{"ref": "0", "tag": "a", "text": "Contact Us", "attrs": {}}], url="https://x.com", title="X")
+    page.click_effects["0"] = lambda p: None  # ordinary same-tab click, nothing opens
+
+    result = act_on_decision(page, {"action": "click", "ref": "f0_0"}, identity_fields={})
+
+    assert result["progressed"] is True
+    assert "new_page" not in result
 
 
 def test_act_give_up_never_touches_the_page():
@@ -300,6 +339,44 @@ def test_max_iterations_reached_bounds_the_loop(monkeypatch):
 
     assert result["success"] is False
     assert result["trace"][-1]["outcome"] == "max_iterations_reached"
+
+
+def test_click_opening_a_new_tab_switches_the_loops_working_page(monkeypatch):
+    """The exact real scenario found live tonight: the LLM correctly
+    identifies that the intake form lives on a completely different
+    domain and clicks the link — but that link opens a new tab. The loop
+    must switch to observing/acting on the new tab, not keep re-checking
+    the original page (which would look like 'no progress' forever)."""
+    monkeypatch.setattr(reasoning_mod, "any_advisor_configured", lambda: True)
+
+    responses = iter([
+        {"action": "click", "ref": "f0_0", "value": None,
+         "reasoning": "The only path to the intake questionnaire is the link to the separate intake platform."},
+        {"action": "handoff_to_identity_fill", "ref": None, "value": None,
+         "reasoning": "The real form is now visible on this new tab."},
+    ])
+    monkeypatch.setattr(reasoning_mod, "call_llm_json", lambda *a, **k: next(responses))
+
+    main_page = _FakePage(
+        [{"ref": "0", "tag": "a", "text": "Start Your Claim", "attrs": {"href": "https://intake-platform.example.com"}}],
+        url="https://marketing-site.example.com/lawsuit", title="Marketing Page",
+    )
+    new_tab = _FakePage(
+        [{"ref": "0", "tag": "input", "text": "", "attrs": {"name": "fullname", "type": "text"}}],
+        url="https://intake-platform.example.com/form", title="Case Intake",
+    )
+    main_page.click_effects["0"] = lambda p: p.context.pages.append(new_tab)
+
+    result = run_observe_reason_act_verify(
+        main_page, objective="reach the intake form", identity_fields={"full_name": "Eddie Murphy Jr."},
+        client=MagicMock(),
+    )
+
+    assert result["success"] is True
+    assert result["trace"][-1]["outcome"] == "handoff_to_identity_fill"
+    # The loop's working page switched to the new tab — the caller must
+    # continue on this page, not the original marketing page.
+    assert result["page"] is new_tab
 
 
 # ---------------------------------------------------------------------
