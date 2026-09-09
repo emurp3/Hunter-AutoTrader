@@ -294,6 +294,18 @@ _IDENTITY_FIELD_SELECTOR_HINTS: dict[str, list[str]] = {
         'input[name*="fullname" i]', 'input[name*="full_name" i]', 'input[id*="fullname" i]',
         'input[placeholder*="full name" i]', 'input[placeholder*="your name" i]',
         'input[name="name"]', 'input[id="name"]',
+        'input[aria-label*="full name" i]', 'input[aria-label*="your name" i]',
+        'input[name*="claimantname" i]', 'input[id*="claimantname" i]',
+    ],
+    "first_name": [
+        'input[name*="firstname" i]', 'input[name*="first_name" i]', 'input[id*="firstname" i]',
+        'input[placeholder*="first name" i]', 'input[autocomplete="given-name"]',
+        'input[aria-label*="first name" i]', 'input[name="fname"]',
+    ],
+    "last_name": [
+        'input[name*="lastname" i]', 'input[name*="last_name" i]', 'input[id*="lastname" i]',
+        'input[placeholder*="last name" i]', 'input[autocomplete="family-name"]',
+        'input[aria-label*="last name" i]', 'input[name="lname"]',
     ],
     "email": ['input[type="email"]', 'input[name*="email" i]', 'input[id*="email" i]'],
     "phone": ['input[type="tel"]', 'input[name*="phone" i]', 'input[id*="phone" i]'],
@@ -322,6 +334,21 @@ _IDENTITY_FIELD_SELECTOR_HINTS: dict[str, list[str]] = {
 }
 
 
+def _try_fill_selectors(page, selectors: list[str], value: str) -> bool:
+    """Try each selector in order; fill (or select_option, for a <select>)
+    the first visible match. Returns whether anything was filled."""
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count() > 0 and locator.first.is_visible():
+            tag = locator.first.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "select":
+                locator.first.select_option(label=value)
+            else:
+                locator.first.fill(value)
+            return True
+    return False
+
+
 def _fill_identity_fields_or_abort(
     page, task_id: str, identity_fields: dict[str, str], *, artifact_prefix: str
 ) -> list[str]:
@@ -341,28 +368,32 @@ def _fill_identity_fields_or_abort(
                 error_text=f"unknown identity field: {field_name}",
                 page_url=page.url,
             )
-        located = False
-        for selector in selectors:
-            locator = page.locator(selector)
-            if locator.count() > 0 and locator.first.is_visible():
-                tag = locator.first.evaluate("el => el.tagName.toLowerCase()")
-                if tag == "select":
-                    locator.first.select_option(label=value)
-                else:
-                    locator.first.fill(value)
-                located = True
+        located = _try_fill_selectors(page, selectors, value)
+        if located:
+            filled.append(field_name)
+            continue
+
+        if field_name == "full_name" and " " in value.strip():
+            # Many intake forms split the name into two fields rather than
+            # one combined "full name" input — fall back to first/last
+            # before giving up.
+            first, _, last = value.strip().partition(" ")
+            if (
+                _try_fill_selectors(page, _IDENTITY_FIELD_SELECTOR_HINTS["first_name"], first)
+                and _try_fill_selectors(page, _IDENTITY_FIELD_SELECTOR_HINTS["last_name"], last)
+            ):
                 filled.append(field_name)
-                break
-        if not located:
-            screenshot_path = str(_artifact_dir(task_id) / f"{artifact_prefix}-missing-field.png")
-            page.screenshot(path=screenshot_path, full_page=True)
-            raise RetryableExecutionError(
-                f"Could not locate a form field for required identity field '{field_name}' — "
-                "aborting the entire submission rather than filing it incomplete or misattributed",
-                error_text=f"missing field: {field_name}",
-                page_url=page.url,
-                screenshot_path=screenshot_path,
-            )
+                continue
+
+        screenshot_path = str(_artifact_dir(task_id) / f"{artifact_prefix}-missing-field.png")
+        page.screenshot(path=screenshot_path, full_page=True)
+        raise RetryableExecutionError(
+            f"Could not locate a form field for required identity field '{field_name}' — "
+            "aborting the entire submission rather than filing it incomplete or misattributed",
+            error_text=f"missing field: {field_name}",
+            page_url=page.url,
+            screenshot_path=screenshot_path,
+        )
     return filled
 
 
