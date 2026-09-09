@@ -210,10 +210,16 @@ def set_disposition(
     *,
     evidence: Optional[str] = None,
     duplicate_of: Optional[str] = None,
+    new_checkpoint: Optional[str] = None,
 ) -> CanonicalOpportunity:
     """Move a candidate to a new disposition, enforcing the rescue-history
     and replacement-chain rules. Never call this to set EXECUTED directly —
-    that is set only by record_execution()."""
+    that is set only by record_execution().
+
+    `new_checkpoint`, when moving to PENDING_COMMANDER, replaces
+    required_commander_checkpoints with the specific ask for this round —
+    e.g. re-opening a candidate that was already answered once, now
+    needing a different piece of information."""
     disposition = Disposition(disposition)
     if disposition == Disposition.executed:
         raise ValueError(
@@ -255,6 +261,12 @@ def set_disposition(
         opp.next_action = note if not opp.next_action else f"{opp.next_action}\n{note}"
     if duplicate_of:
         opp.duplicate_of_canonical_opportunity_id = duplicate_of
+    if disposition == Disposition.pending_commander and new_checkpoint:
+        opp.required_commander_checkpoints = new_checkpoint
+        # This is a fresh ask — clear any prior answer so the decisions
+        # feed (which filters on commander_response is None) surfaces it.
+        opp.commander_response = None
+        opp.commander_responded_at = None
     opp.updated_at = datetime.now(timezone.utc)
     session.add(opp)
     session.commit()

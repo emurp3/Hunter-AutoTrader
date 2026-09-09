@@ -208,7 +208,10 @@ def complete_task(
             metadata={"task_id": task_id, "outcome": outcome},
         )
 
-    _close_loop(task, outcome, session)
+    if task.source_type == "canonical_opportunity":
+        _close_ledger_loop(task, outcome, session, page_url=page_url, screenshot_path=screenshot_path)
+    else:
+        _close_loop(task, outcome, session)
     return task
 
 
@@ -690,6 +693,64 @@ def _close_loop(task: Task, outcome: dict[str, Any], session: Session) -> None:
         priority=AlertPriority.medium,
         source_id=task.source_id,
     )
+
+
+def _close_ledger_loop(
+    task: Task,
+    outcome: dict[str, Any],
+    session: Session,
+    *,
+    page_url: Optional[str] = None,
+    screenshot_path: Optional[str] = None,
+) -> None:
+    """Close the loop for a Hunter execution-ledger task (source_type=
+    canonical_opportunity) — the only path that turns a completed worker
+    task into a real EXECUTED credit. Requires a real external_endpoint
+    (page_url); a completed task with no real URL reached (e.g. a
+    reconnaissance-only run) is never recorded as an execution."""
+    from app.models.hunter_ledger import CanonicalOpportunity
+    from app.services import execution_accounting as acct
+
+    cid = task.source_id
+    if not cid:
+        return
+
+    opp = session.exec(
+        select(CanonicalOpportunity).where(CanonicalOpportunity.canonical_opportunity_id == cid)
+    ).first()
+    if not opp:
+        return
+
+    if task.task_type == "government_portal_search" and outcome.get("search_performed") and page_url:
+        try:
+            acct.record_execution(
+                session,
+                canonical_opportunity_id=cid,
+                source=opp.source_provenance,
+                action_description=(
+                    f"Searched government unclaimed-property portal for "
+                    f"'{outcome.get('business_name_searched')}'"
+                ),
+                actions_taken=(
+                    (task.outcome_notes or "Automated Playwright search, no claim filed.")
+                    + (f" screenshot={screenshot_path}" if screenshot_path else "")
+                ),
+                external_endpoint=page_url,
+                receipt_reference=f"task:{task.task_id}",
+                money_spent_committed=0.0,
+                expected_lawful_return=opp.probability_adjusted_pending_value or 0.0,
+                follow_up=(
+                    "Review result_excerpt in the task outcome. If it indicates a real "
+                    "match, that is a new Commander decision (file a claim) — not "
+                    "something Hunter proceeds on unilaterally."
+                ),
+                owner="Hunter",
+            )
+        except (acct.MissingReceiptError, acct.SundayLockout):
+            # A structural accounting guard tripped — do not silently drop
+            # this; leave the candidate as-is for a human/engineering look
+            # rather than fabricate an execution.
+            pass
 
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
