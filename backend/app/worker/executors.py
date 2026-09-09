@@ -432,15 +432,35 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
                     screenshot_path=screenshot_path,
                 )
 
+            _search_field_selectors = [
+                'input[name*="BusinessName" i]', 'input[id*="BusinessName" i]',
+                'input[name*="EntityName" i]', 'input[id*="EntityName" i]',
+                'input[placeholder*="Business" i]', 'input[placeholder*="Company" i]',
+                'input[name*="LastName" i]', 'input[id*="LastName" i]',
+                'input[placeholder*="Name" i]',
+            ]
+            if not _any_visible(page, _search_field_selectors):
+                # PORTAL_URL is the site's homepage, not a search page —
+                # most claimant portals put the actual search form behind
+                # a "Search for Property" style link rather than on the
+                # landing page. Try navigating to it before giving up;
+                # this only affects a search query, never identity data,
+                # so a wrong guess here is harmless (no results, not a
+                # data-integrity risk).
+                nav_link = page.locator(
+                    'a:has-text("Search for Property"), a:has-text("Claimant Search"), '
+                    'a:has-text("Property Search"), a:has-text("Start a Search"), '
+                    'a:has-text("Search"), button:has-text("Search for Property"), '
+                    'button:has-text("Claimant Search"), button:has-text("Search")'
+                )
+                if nav_link.count() > 0 and nav_link.first.is_visible():
+                    nav_link.first.click()
+                    page.wait_for_timeout(2000)
+                    page_url = page.url
+
             _fill_if_visible(
                 page,
-                [
-                    'input[name*="BusinessName" i]', 'input[id*="BusinessName" i]',
-                    'input[name*="EntityName" i]', 'input[id*="EntityName" i]',
-                    'input[placeholder*="Business" i]', 'input[placeholder*="Company" i]',
-                    'input[name*="LastName" i]', 'input[id*="LastName" i]',
-                    'input[placeholder*="Name" i]',
-                ],
+                _search_field_selectors,
                 business_name,
                 field_description="Business/entity name search field",
             )
@@ -675,6 +695,14 @@ def _execute_intake_form_submission(task: dict[str, Any], spec: dict[str, Any]) 
                 trace_reference = trace_reference or None
             context.close()
             browser.close()
+
+
+def _any_visible(page, selectors: list[str]) -> bool:
+    for selector in selectors:
+        locator = page.locator(selector)
+        if locator.count() > 0 and locator.first.is_visible():
+            return True
+    return False
 
 
 def _fill_if_visible(page, selectors: list[str], value: str, *, field_description: str = "Required form field") -> None:
