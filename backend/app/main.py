@@ -150,14 +150,19 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                     CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-02-GOOGLE"
                 )
             ).first()
+            _google_specific_ask_marker = "full legal name"
             if google and google.disposition != Disposition.executed.value:
-                if google.disposition != Disposition.pending_commander.value:
-                    # Never reopened yet (or was reopened and already
-                    # resolved past pending_commander some other way) —
-                    # reopen with the specific ask. Runs exactly once:
-                    # after this, disposition stays pending_commander
-                    # until Commander answers, so this branch won't
-                    # re-fire and clobber a real answer.
+                already_reopened_with_specific_ask = _google_specific_ask_marker in (
+                    google.required_commander_checkpoints or ""
+                )
+                if not already_reopened_with_specific_ask:
+                    # Never reopened with the specific ask yet — reopen it.
+                    # Gated on the CHECKPOINT TEXT itself, not disposition,
+                    # because answering a checkpoint (record_commander_answer)
+                    # moves disposition to WATCHLIST, not back to
+                    # PENDING_COMMANDER — checking disposition here would
+                    # make this branch re-fire on every later run and wipe
+                    # out a real answer with the same "need your info" ask.
                     acct.set_disposition(
                         session,
                         google.canonical_opportunity_id,

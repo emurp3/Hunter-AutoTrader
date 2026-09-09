@@ -33,7 +33,14 @@ def _make_engine():
     return engine
 
 
-def _seed(engine, *, ucp_commander_response="Murphy Enterprises LLC", google_disposition=Disposition.watchlist.value):
+def _seed(
+    engine,
+    *,
+    ucp_commander_response="Murphy Enterprises LLC",
+    google_disposition=Disposition.watchlist.value,
+    google_already_reopened=False,
+    google_commander_response=None,
+):
     with Session(engine) as session:
         session.add(
             CanonicalOpportunity(
@@ -54,7 +61,11 @@ def _seed(engine, *, ucp_commander_response="Murphy Enterprises LLC", google_dis
                 source_provenance="seed",
                 freshness_date=date(2026, 9, 8),
                 disposition=google_disposition,
-                commander_response="Approved — proceed." if google_disposition != Disposition.pending_commander.value else None,
+                commander_response=google_commander_response,
+                required_commander_checkpoints=(
+                    "Need your full legal name, an email or phone, and dates of use."
+                    if google_already_reopened else None
+                ),
             )
         )
         session.commit()
@@ -149,9 +160,20 @@ def test_google_checkpoint_reopened_with_specific_personal_data_ask(monkeypatch)
         assert google.commander_response is None
 
 
-def test_google_reopen_does_not_repeat_once_pending_commander(monkeypatch):
+def test_google_reopen_does_not_repeat_once_already_reopened(monkeypatch):
+    """Regression test for a real bug found live: answering a checkpoint
+    moves disposition to WATCHLIST (via record_commander_answer), not
+    back to PENDING_COMMANDER — so the reopen check must key off the
+    checkpoint TEXT already containing the specific ask, not off
+    disposition, or a later run re-reopens and wipes out a real answer
+    Commander just gave."""
     engine = _make_engine()
-    _seed(engine, google_disposition=Disposition.pending_commander.value)
+    _seed(
+        engine,
+        google_disposition=Disposition.watchlist.value,
+        google_already_reopened=True,
+        google_commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+    )
     _run_bootstrap(engine, monkeypatch)
 
     with Session(engine) as session:
@@ -160,8 +182,9 @@ def test_google_reopen_does_not_repeat_once_pending_commander(monkeypatch):
                 CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-02-GOOGLE"
             )
         ).first()
-        # Untouched — no [disposition=...] note appended by a redundant reopen.
+        # Untouched — no redundant reopen wiping out the real answer.
         assert not (google.next_action or "").count("[disposition=pending_commander]") > 0
+        assert google.commander_response == "Eddie Murphy Jr., eddie@example.com, 2019-2023"
 
 
 def test_bootstrap_is_a_safe_noop_when_neither_candidate_exists(monkeypatch):
@@ -224,7 +247,11 @@ def test_google_no_intake_dispatch_while_awaiting_answer(monkeypatch):
     monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
     monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
     engine = _make_engine()
-    _seed(engine, google_disposition=Disposition.pending_commander.value)  # reopened, not yet answered
+    _seed(
+        engine,
+        google_disposition=Disposition.pending_commander.value,
+        google_already_reopened=True,
+    )  # reopened, not yet answered
     _run_bootstrap(engine, monkeypatch)
 
     with Session(engine) as session:
@@ -247,6 +274,7 @@ def test_google_dispatches_intake_submission_once_answered_and_identity_on_file(
                 freshness_date=date(2026, 9, 8),
                 disposition=Disposition.pending_commander.value,
                 commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+                required_commander_checkpoints="Need your full legal name, email, and dates.",
             )
         )
         session.commit()
@@ -277,6 +305,7 @@ def test_google_no_intake_dispatch_when_answered_but_no_structured_identity_yet(
                 freshness_date=date(2026, 9, 8),
                 disposition=Disposition.pending_commander.value,
                 commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+                required_commander_checkpoints="Need your full legal name, email, and dates.",
             )
         )
         session.commit()
@@ -322,6 +351,7 @@ def test_google_intake_dispatch_never_autonomously_includes_ssn(monkeypatch):
                 freshness_date=date(2026, 9, 8),
                 disposition=Disposition.pending_commander.value,
                 commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+                required_commander_checkpoints="Need your full legal name, email, and dates.",
             )
         )
         session.commit()
@@ -350,6 +380,7 @@ def test_google_intake_dispatch_is_idempotent(monkeypatch):
                 freshness_date=date(2026, 9, 8),
                 disposition=Disposition.pending_commander.value,
                 commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+                required_commander_checkpoints="Need your full legal name, email, and dates.",
             )
         )
         session.commit()
