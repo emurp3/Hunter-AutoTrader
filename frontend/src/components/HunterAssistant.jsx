@@ -11,7 +11,9 @@ export default function HunterAssistant() {
   const [loading, setLoading] = useState(false)
   const [snapshot, setSnap]   = useState(null)
   const [decisionsLoaded, setDecisionsLoaded] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const bottomRef             = useRef(null)
+  const fileInputRef          = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -103,6 +105,37 @@ export default function HunterAssistant() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
   }
 
+  async function handleFileSelected(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file later
+    if (!file || uploading) return
+    setUploading(true)
+    setMsgs(prev => [...prev, { role: 'user', content: `Uploading ${file.name}…` }])
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('document_type', 'resume')
+      const res = await fetch('/api/assistant/documents', {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(detail?.detail || `upload failed (${res.status})`)
+      }
+      const data = await res.json()
+      setMsgs(prev => [...prev, {
+        role: 'assistant',
+        content: `Got "${data.filename}" on file (${data.extracted_chars.toLocaleString()} characters). I'll use it when weighing opportunity fit — I won't submit anything using it without checking with you first.`,
+      }])
+    } catch (err) {
+      setMsgs(prev => [...prev, { role: 'assistant', content: `Couldn't store that file — ${err.message}` }])
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const btnDisabled = loading || !input.trim()
 
   return (
@@ -189,6 +222,23 @@ export default function HunterAssistant() {
             padding:'10px 12px', borderTop:'1px solid rgba(201,168,76,0.3)',
             display:'flex', gap:8, background:'rgba(0,0,0,0.3)',
           }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".docx,.pdf,.txt,.md"
+              onChange={handleFileSelected}
+              style={{ display:'none' }}
+            />
+            <button
+              onClick={() => !uploading && fileInputRef.current?.click()}
+              disabled={uploading}
+              title="Upload a document (resume, capability profile, etc.)"
+              style={{
+                background:'rgba(255,255,255,0.07)', border:'1px solid rgba(201,168,76,0.3)',
+                borderRadius:10, padding:'8px 12px', color: uploading ? '#666' : '#c9a84c',
+                cursor: uploading ? 'default' : 'pointer', fontSize:15,
+              }}
+            >📎</button>
             <input
               value={input}
               onChange={e => setInput(e.target.value)}

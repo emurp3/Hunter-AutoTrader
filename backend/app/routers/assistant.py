@@ -171,6 +171,15 @@ def _gather_context(session: Session) -> dict:
         logger.warning("Failed to fetch ledger queue: %s", exc)
         ctx["ledger_queue"] = []
 
+    try:
+        from app.services import commander_documents as docs_svc
+        ctx["capability_profile"] = docs_svc.get_capability_profile_text(session)
+        ctx["document_count"] = len(docs_svc.list_documents(session))
+    except Exception as exc:
+        logger.warning("Failed to fetch commander documents: %s", exc)
+        ctx["capability_profile"] = None
+        ctx["document_count"] = 0
+
     ctx["current_datetime_utc"] = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M UTC")
 
     ctx.setdefault("advisor_opp_title", "none")
@@ -213,7 +222,7 @@ def _build_system_prompt(ctx: dict) -> str:
     else:
         quota_text = "unavailable"
 
-    return (
+    prompt = (
         "You are Hunter AI, Hunter's Commander-facing conversational interface. You are not a "
         "generic assistant — you speak from Hunter's live operational state below, supplied fresh "
         "on every message. Do not describe yourself by a specific model name or training-data "
@@ -221,6 +230,12 @@ def _build_system_prompt(ctx: dict) -> str:
         "misleads the Commander. If asked what you're based on, say you're Hunter's operational "
         "interface and that model detail is an implementation detail Commander can ask Claude "
         "about directly.\n\n"
+        "When Commander asks for something you don't have a direct tool for, don't deflect to "
+        "generic outside advice (e.g. \"try a job site\") before checking whether Hunter itself "
+        "already has a path — Commander can upload reference documents (resumes, capability "
+        "profiles) through the document-upload feature; {document_count} on file right now. "
+        "Point to Hunter's own capability first, and only fall back to outside suggestions when "
+        "nothing in Hunter's system actually covers the request.\n\n"
         "CURRENT DATE/TIME: {current_datetime_utc}\n\n"
         "Your own training data has a cutoff and is NOT authoritative for anything current — "
         "today's date, current officeholders, current events, prices, or any other fact that "
@@ -251,4 +266,21 @@ def _build_system_prompt(ctx: dict) -> str:
         "clearly and actionably from the state above. Be direct. If an action is required, specify "
         "the exact step. Reference specific opportunity names, tickers, and amounts from the data "
         "above when relevant. Keep responses under 250 words."
-    ).format(opps_text=opps_text, decisions_text=decisions_text, queue_text=queue_text, quota_text=quota_text, **ctx)
+    ).format(
+        opps_text=opps_text, decisions_text=decisions_text, queue_text=queue_text,
+        quota_text=quota_text, **ctx,
+    )
+
+    capability_profile = ctx.get("capability_profile")
+    if capability_profile:
+        # Appended after .format() rather than interpolated into the
+        # template — this document is long, free-form Commander-authored
+        # text and must not be parsed as a format string (a stray { or }
+        # in it would otherwise raise).
+        prompt += (
+            "\n\nCOMMANDER'S CAPABILITY & EXPERIENCE PROFILE (authoritative — use this, and only "
+            "this, to reason about opportunity fit; never invent a credential, license, or "
+            "qualification beyond what it states):\n" + capability_profile
+        )
+
+    return prompt

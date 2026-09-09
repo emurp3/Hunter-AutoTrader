@@ -49,6 +49,7 @@ def create_db_and_tables() -> None:
     import app.models.copy_signal         # noqa: F401  — Signal Copy Engine
     import app.models.forge               # noqa: F401  — Opportunity Forge Engine
     import app.models.hunter_ledger       # noqa: F401  — Hunter Implementation Addendum execution ledger
+    import app.models.commander_document  # noqa: F401  — Commander-supplied reference documents
     SQLModel.metadata.create_all(engine)
     _migrate_sqlite_tables()
 

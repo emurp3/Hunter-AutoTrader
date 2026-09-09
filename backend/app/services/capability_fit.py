@@ -68,6 +68,34 @@ CAPABILITY_TAGS: dict[str, list[str]] = {
         "google business profile", "local seo", "small business consulting",
         "local listing",
     ],
+    # Added from Commander's capability/experience profile (2026-09).
+    "healthcare_it_and_government_health_tech": [
+        "healthcare it", "electronic health record", "ehr modernization",
+        "cerner", "oracle health", "clinical informatics", "health it modernization",
+        "veterans health", "va health", "healthcare interoperability",
+    ],
+    "grants_fellowships_and_innovation_funding": [
+        "grant funding", "fellowship", "sbir", "sttr", "accelerator program",
+        "startup accelerator", "innovation challenge", "pitch competition",
+        "cloud credits", "compute credits", "founder program", "pilot program",
+    ],
+    "ai_safety_and_agent_governance": [
+        "ai safety", "responsible ai", "trustworthy ai", "ai governance",
+        "autonomous agent security", "agent governance", "ai red team",
+        "ai policy", "algorithmic accountability",
+    ],
+    "generative_film_and_video_production": [
+        "film grant", "filmmaking", "generative video", "ai filmmaking",
+        "screenplay", "film production", "video generation",
+    ],
+    "faith_based_and_community_grants": [
+        "faith-based", "church grant", "ministry grant", "community grant",
+        "nonprofit technology", "gospel music",
+    ],
+    "doctoral_and_academic_research": [
+        "doctoral research", "dissertation", "research fellowship",
+        "academic research grant", "research methodology",
+    ],
 }
 
 

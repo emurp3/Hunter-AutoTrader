@@ -46,9 +46,11 @@ from app.routers.store import router as store_router
 from app.routers.assistant import router as assistant_router
 from app.routers.policy import router as policy_router
 from app.routers.hunter_ledger import router as hunter_ledger_router
+from app.routers.commander_documents import router as commander_documents_router
 from app.models.policy_event import PolicyEvent  # noqa: F401 — registers table
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table
+from app.models.commander_document import CommanderDocument  # noqa: F401 — registers table
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task, discovery_scan_task, signal_scan_task, morning_report_task
 from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS, SIGNAL_SCAN_INTERVAL_SECONDS, MORNING_REPORT_HOUR, MORNING_REPORT_MINUTE
 
@@ -160,6 +162,29 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
         )
 
 
+def _bootstrap_commander_documents_after_startup() -> None:
+    """Seed Commander's capability/experience profile as a
+    CommanderDocument on first boot, from Hunter's own runtime — the same
+    idempotent seed pattern as the ledger bootstrap above. Safe to run on
+    every deploy/restart; a no-op once the document exists."""
+    try:
+        from app.database.config import engine
+        from app.services import commander_documents as docs_svc
+
+        with Session(engine) as session:
+            seeded = docs_svc.seed_capability_profile(session)
+            if seeded:
+                _startup_logger.info(
+                    "seeded Commander capability profile document_id=%s", seeded.document_id
+                )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning(
+            "commander documents startup bootstrap failed — %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Keep the critical startup path local and bounded. External opportunity
@@ -183,6 +208,7 @@ async def lifespan(app: FastAPI):
     # Do not block ASGI startup/health on opportunity intake or its providers.
     asyncio.create_task(asyncio.to_thread(_bootstrap_intake_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_hunter_ledger_actions_after_startup))
+    asyncio.create_task(asyncio.to_thread(_bootstrap_commander_documents_after_startup))
     yield
     scheduler.shutdown(wait=False)
 
@@ -229,6 +255,7 @@ app.include_router(store_router)
 app.include_router(assistant_router)
 app.include_router(policy_router)
 app.include_router(hunter_ledger_router)
+app.include_router(commander_documents_router)
 
 if _FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")

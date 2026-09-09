@@ -14,3 +14,6 @@ pytrends>=4.9.2
 openai
 beautifulsoup4
 lxml
+python-docx
+pypdf
+python-multipart
