@@ -155,6 +155,41 @@ def test_describe_visible_form_fields_never_raises_if_evaluate_fails():
     assert "no visible form fields found" in description
 
 
+def test_describe_visible_form_fields_reports_page_context_when_nothing_found():
+    """Live tonight: even with the frame scan and a longer wait, nothing
+    was found in any frame — meaning the page itself may never have
+    rendered normally for an automated browser (bot-blocked, redirected,
+    a JS-disabled shell). When every frame comes back empty, report page
+    title/URL/frame count and a short snippet of whatever public copy IS
+    on the page, so the next diagnosis has real signal instead of a bare
+    "nothing found"."""
+
+    class _EmptyFrame:
+        url = "https://potterhandy.com/google-privacy-violations-lawsuit/"
+
+        def evaluate(self, js: str):
+            if "innerText" in js:
+                return "Just a moment... Please enable JavaScript and cookies to continue"
+            return []
+
+    class _EmptyPage:
+        frames = [_EmptyFrame()]
+        url = "https://potterhandy.com/google-privacy-violations-lawsuit/"
+
+        def title(self):
+            return "Just a moment..."
+
+        def evaluate(self, js: str):
+            return self.frames[0].evaluate(js)
+
+    description = _describe_visible_form_fields(_EmptyPage())
+
+    assert "no visible form fields found" in description
+    assert "title='Just a moment...'" in description
+    assert "Please enable JavaScript" in description
+    assert "potterhandy.com" in description
+
+
 def test_describe_visible_form_fields_reports_fields_found_in_an_iframe():
     """A lead-capture form embedded via an external widget (HubSpot,
     Gravity Forms iframe embeds, etc.) lives in a child frame — Playwright

@@ -386,9 +386,31 @@ def _describe_visible_form_fields(page, limit: int = 20) -> str:
         if fields:
             frame_url = getattr(frame, "url", "")
             parts.append(f"[frame={frame_url}] " + "; ".join(fields))
-    if not parts:
-        return "(no visible form fields found in any frame)"
-    return " || ".join(parts)[:1200]
+    if parts:
+        return " || ".join(parts)[:1200]
+
+    # Genuinely nothing found anywhere, even after waiting for a field to
+    # appear. Twice-guessed selectors and a missing iframe weren't it —
+    # the next real possibility is the page itself never rendered
+    # normally for an automated browser (a bot-block page, a redirect, a
+    # "please enable JavaScript" shell). Report page context — title,
+    # frame count, and a short snippet of public marketing copy already
+    # on the page — never anything Commander-identifying, since nothing
+    # of his has been entered yet at this point in the flow.
+    context_bits = [f"url={getattr(page, 'url', '')}", f"frame_count={len(frames)}"]
+    try:
+        title = page.title()
+        if title:
+            context_bits.append(f"title={title!r}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        snippet = page.evaluate("() => document.body ? document.body.innerText.slice(0, 200) : '(no body)'")
+        if snippet:
+            context_bits.append(f"body_snippet={snippet!r}")
+    except Exception:  # noqa: BLE001
+        pass
+    return "(no visible form fields found in any frame) [" + ", ".join(context_bits) + "]"
 
 
 def _fill_identity_fields_or_abort(
