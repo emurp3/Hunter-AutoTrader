@@ -240,6 +240,15 @@ def act_on_decision(page, decision: dict[str, Any], identity_fields: dict[str, s
     try:
         if action == "click":
             locator.first.click(timeout=10000)
+            # A click may trigger real navigation on a slow real-world
+            # site — give it a real chance to land before VERIFY samples
+            # the page again, rather than a flat short wait that can
+            # mistake "still loading" for "no progress" and abandon a
+            # route that was actually working.
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=8000)
+            except Exception:  # noqa: BLE001
+                pass
         elif action in ("select", "fill"):
             value = decision.get("value")
             if _looks_like_identity_value(value, identity_fields):
