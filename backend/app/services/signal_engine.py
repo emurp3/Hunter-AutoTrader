@@ -16,7 +16,7 @@ from app.services.sources.congress_feed import CongressFeedAdapter
 from app.services.sources.sec_edgar import SecEdgarAdapter
 from app.services.sources.crypto_signal import CryptoSignalAdapter
 from app.services.sources.oge_278t import Oge278TAdapter
-from app.config import ENABLE_VIP_AUTO_INVEST
+from app.config import ENABLE_VIP_AUTO_INVEST, ENABLE_CRYPTO_AUTO_INVEST
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +282,62 @@ def _record_vip_allocation(session: Session, vip: dict, raw: dict, exec_result: 
         logger.exception("Failed to record VIP allocation for %s", vip.get("label"))
 
 
+def _execute_crypto_auto_invest(ticker: str, action: str) -> dict:
+    """
+    Place a real Alpaca crypto order for a high-confidence ("mirror")
+    crypto signal via the existing crypto_engine.place_crypto_order() —
+    same function already reachable through POST /signals/crypto-buy,
+    just invoked unattended now. Uses that function's own default sizing
+    (CRYPTO_MICRO_INVEST) and its existing hard 15% portfolio-cap wall —
+    no new amount or cap introduced here. Caller must only invoke this
+    when ENABLE_CRYPTO_AUTO_INVEST is True.
+    """
+    from app.services.crypto_engine import place_crypto_order
+
+    if not ticker or ticker.upper() in ("N/A", ""):
+        return {"status": "skip", "reason": "no_ticker"}
+    side = "buy" if (action or "buy").lower() != "sell" else "sell"
+    try:
+        return place_crypto_order(ticker, side=side)
+    except Exception as exc:
+        logger.exception("Crypto auto-invest exception for %s: %s", ticker, exc)
+        return {"status": "exception", "error": str(exc), "symbol": ticker}
+
+
+def _record_crypto_allocation(session: Session, raw: dict, exec_result: dict, confidence: float) -> None:
+    """Same visibility rationale as _record_vip_allocation — a real,
+    executed crypto trade must show up in /budget/allocations, not just
+    be absorbed into the aggregate broker-reconciled cash number."""
+    try:
+        from app.models.budget import BudgetAllocation, AllocationCategory, AllocationStatus
+        from app.services.budget import get_open_budget
+
+        budget = get_open_budget(session)
+        if not budget:
+            logger.warning("Crypto allocation not recorded — no open budget cycle")
+            return
+
+        symbol = exec_result.get("symbol", raw.get("ticker", "?"))
+        allocation = BudgetAllocation(
+            weekly_budget_id=budget.id,
+            allocation_name=f"Crypto auto-invest: {symbol}",
+            category=AllocationCategory.trading,
+            amount_allocated=exec_result.get("notional", 0.0),
+            rationale=(
+                f"CoinGecko velocity mirror signal (confidence={confidence:.2f}). "
+                f"Alpaca order {exec_result.get('order_id', 'n/a')}."
+            ),
+            source_id=str(raw.get("source_id", "")) or None,
+            approval_required=False,  # executed under the standing crypto auto-invest policy
+            approved_by_commander=True,
+            status=AllocationStatus.active,
+        )
+        session.add(allocation)
+        session.commit()
+    except Exception:
+        logger.exception("Failed to record crypto allocation for %s", raw.get("ticker"))
+
+
 def get_vip_watchlist() -> list[dict]:
     """Return the full VIP watchlist for the /signals/vip-watchlist endpoint."""
     return [
@@ -356,6 +412,20 @@ def run_signal_scan(session: Session, days_back: int = 30) -> dict:
                 decision, reason = _vip_decision_override
             elif pre_decision and raw.get("asset_type") == "crypto":
                 decision, reason = pre_decision, f"CoinGecko velocity signal: {pre_decision}"
+                if pre_decision == "mirror":
+                    if ENABLE_CRYPTO_AUTO_INVEST:
+                        _cresult = _execute_crypto_auto_invest(raw.get("ticker", ""), raw.get("action", "buy"))
+                        errors.append(f"CRYPTO:{raw.get('ticker','?')}:{_cresult.get('status')}")
+                        if _cresult.get("status") == "executed":
+                            _record_crypto_allocation(session, raw, _cresult, confidence)
+                    else:
+                        # Monitoring/logging stays on; unattended real-money
+                        # crypto execution requires HUNTER_ENABLE_CRYPTO_AUTO_INVEST=true.
+                        logger.info(
+                            "Crypto mirror signal logged (auto-invest disabled): %s -- set "
+                            "HUNTER_ENABLE_CRYPTO_AUTO_INVEST=true to enable real execution",
+                            raw.get("ticker", "?"),
+                        )
             else:
                 decision, reason = route_signal(
                 confidence, raw.get("latency_hours"), raw.get("amount_midpoint"))

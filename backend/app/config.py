@@ -333,6 +333,17 @@ TASK_RETRY_SWEEP_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_TASK_RETRY_SWEEP_
 SIGNAL_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_SIGNAL_SCAN_INTERVAL_SECONDS", "21600"))
 ENABLE_VIP_AUTO_INVEST: bool = _get_bool("HUNTER_ENABLE_VIP_AUTO_INVEST", False)
 
+# Crypto auto-execution — Commander, 2026-09-10: crypto_engine.place_crypto_order()
+# is real, live-money Alpaca code (hard 15% portfolio cap already enforced
+# inside it — CRYPTO_ALLOCATION_CAP) but was never wired into any
+# scheduled/unattended path, only reachable via an authenticated API call
+# (POST /signals/crypto-buy). This flag is the unattended-activation
+# decision point, same shape as ENABLE_VIP_AUTO_INVEST: default OFF.
+# Sizing is deliberately NOT a new number — it reuses CRYPTO_MICRO_INVEST
+# (place_crypto_order()'s own default notional) and the existing hard cap;
+# no new approved per-trade limit is introduced here.
+ENABLE_CRYPTO_AUTO_INVEST: bool = _get_bool("HUNTER_ENABLE_CRYPTO_AUTO_INVEST", False)
+
 # Morning brief — Hunter proactively pushes a condensed status digest here
 # every morning (see morning_report_task in scheduler.py) rather than
 # waiting to be asked. Empty by default: the brief still builds and is
