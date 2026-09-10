@@ -446,6 +446,26 @@ def _log_production_inventory_diagnostics() -> None:
                     last_attempt.engine if last_attempt else None,
                     (t.outcome_notes or "")[:120],
                 )
+
+            # RECYCLE's OWN local tracking (Commander, 2026-09-10 — the
+            # correction: broker history must be checked directly rather
+            # than inferred from ActionPacket/ProviderExecution being
+            # empty). recycle_engine.execute_entries() places real Alpaca
+            # orders via get_alpaca_adapter().place_order() DIRECTLY — an
+            # entirely separate path from auto_place_trade_for_source()'s
+            # ActionPacket/ProviderExecution flow — and records its own
+            # activity via position_lifecycle_svc.record_entry_submission
+            # into PositionLifecycle, not those tables. This is very
+            # likely where the real, broker-confirmed fills actually
+            # live locally.
+            from app.models.position_lifecycle import PositionLifecycle
+
+            pl_total = session.exec(select(func.count()).select_from(PositionLifecycle)).one()
+            pl_by_status = dict(session.exec(select(PositionLifecycle.status, func.count()).group_by(PositionLifecycle.status)).all())
+            _startup_logger.info(
+                "INVENTORY_DIAG PositionLifecycle total=%d by_status=%s",
+                pl_total, pl_by_status,
+            )
     except Exception as exc:  # noqa: BLE001
         _startup_logger.warning("inventory diagnostics failed — %s: %s", type(exc).__name__, exc)
 
