@@ -286,8 +286,11 @@ def _log_production_inventory_diagnostics() -> None:
     from sqlmodel import select
 
     from app.database.config import DATABASE_URL, engine
+    from app.models.action_packet import ActionPacket
+    from app.models.execution_outcome import ExecutionOutcome
     from app.models.hunter_ledger import CanonicalOpportunity, Disposition, ExecutionRecord
     from app.models.income_source import IncomeSource
+    from app.models.provider_execution import ProviderExecution
     from app.models.task import Task
 
     try:
@@ -340,6 +343,48 @@ def _log_production_inventory_diagnostics() -> None:
             _startup_logger.info(
                 "INVENTORY_DIAG Task total=%d by_task_type=%s by_status=%s",
                 task_total, by_task_type, by_task_status,
+            )
+
+            # Track 5 (Commander, 2026-09-10): historical impact of the
+            # action_packet_id=None bug fixed in 70ce052. Every
+            # ExecutionOutcome(...) construction was one transaction with
+            # its ActionPacket's execution_state update — a NOT NULL
+            # violation there rolled back the WHOLE transaction, so an
+            # affected packet's execution_state would still show
+            # active/in_progress (never advanced to completed/failed),
+            # not "completed with a missing outcome." ProviderExecution
+            # is the real broker-order-truth table, written independently
+            # via the broker API call itself — unaffected by this bug.
+            ap_total = session.exec(select(func.count()).select_from(ActionPacket)).one()
+            ap_by_state = dict(session.exec(select(ActionPacket.execution_state, func.count()).group_by(ActionPacket.execution_state)).all())
+            _startup_logger.info("INVENTORY_DIAG ActionPacket total=%d by_execution_state=%s", ap_total, ap_by_state)
+
+            eo_total = session.exec(select(func.count()).select_from(ExecutionOutcome)).one()
+            _startup_logger.info("INVENTORY_DIAG ExecutionOutcome total=%d", eo_total)
+
+            pe_total = session.exec(select(func.count()).select_from(ProviderExecution)).one()
+            pe_by_status = dict(session.exec(select(ProviderExecution.execution_status, func.count()).group_by(ProviderExecution.execution_status)).all())
+            _startup_logger.info("INVENTORY_DIAG ProviderExecution total=%d by_execution_status=%s", pe_total, pe_by_status)
+
+            # Packets with a real broker order (ProviderExecution exists)
+            # whose own execution_state never reached a terminal value —
+            # these are the ones potentially orphaned by the bug: broker
+            # order occurred, but Hunter's own reconciliation kept failing
+            # to record it, so it would be re-attempted on every future
+            # reconciliation cycle rather than being corrupted or
+            # double-counted (the rollback is all-or-nothing).
+            provider_packet_ids = set(session.exec(select(ProviderExecution.packet_id)).all())
+            stuck_states = {"active", "in_progress", "planned"}
+            stuck_packet_ids = set(
+                session.exec(
+                    select(ActionPacket.id).where(ActionPacket.execution_state.in_(stuck_states))
+                ).all()
+            )
+            orphaned = provider_packet_ids & stuck_packet_ids
+            _startup_logger.info(
+                "INVENTORY_DIAG reconciliation_check packets_with_broker_order=%d packets_stuck_non_terminal=%d "
+                "potentially_orphaned_by_action_packet_id_bug=%d",
+                len(provider_packet_ids), len(stuck_packet_ids), len(orphaned),
             )
 
             # Bridge check: CanonicalOpportunity and IncomeSource are
