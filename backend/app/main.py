@@ -1,4 +1,5 @@
 import asyncio
+import os
 import logging
 
 # Root logger has no handler by default under uvicorn — without this, every
@@ -260,6 +261,101 @@ def _bootstrap_resume_manual_action_tasks_after_startup() -> None:
         )
 
 
+def _log_production_inventory_diagnostics() -> None:
+    """
+    Commander's Track 1 (2026-09-10): resolve the "authoritative production
+    inventory" access gap. Preference order was (1) Render shell/SSH — not
+    available in this engineering session (no ssh binary, and this
+    sandbox's egress is HTTPS-proxy-only, confirmed by a direct test);
+    (2) an existing authenticated admin inspection mechanism — none
+    exists and this sandbox has no HTTPS egress to the live site either;
+    so this is (3): a narrowly scoped, read-only diagnostic that runs
+    through the application's own existing DB connection and reports
+    only AGGREGATE COUNTS via the application log (never row content,
+    descriptions, contact info, or credentials) — read via Render's log
+    API, not a new HTTP endpoint (none is added).
+
+    Deliberately placed on the WEB service's own bootstrap, not the
+    worker's: render.yaml shows only the web service has the persistent
+    disk (`disk: hunter-data` mounted at /data) and HUNTER_DB_PATH; the
+    worker has no disk mount at all and only talks to the web service
+    over HTTP — it cannot see this database, so nothing here assumes it
+    can.
+    """
+    from sqlalchemy import func
+    from sqlmodel import select
+
+    from app.database.config import DATABASE_URL, engine
+    from app.models.hunter_ledger import CanonicalOpportunity, Disposition, ExecutionRecord
+    from app.models.income_source import IncomeSource
+    from app.models.task import Task
+
+    try:
+        db_path = DATABASE_URL.replace("sqlite:///", "", 1)
+        _startup_logger.info(
+            "INVENTORY_DIAG db_path=%s on_persistent_disk=%s exists=%s size_bytes=%s",
+            db_path,
+            db_path.startswith("/data/"),
+            os.path.exists(db_path),
+            os.path.getsize(db_path) if os.path.exists(db_path) else 0,
+        )
+
+        with Session(engine) as session:
+            opp_total = session.exec(select(func.count()).select_from(CanonicalOpportunity)).one()
+            by_lane = dict(session.exec(select(CanonicalOpportunity.lane, func.count()).group_by(CanonicalOpportunity.lane)).all())
+            by_disposition = dict(session.exec(select(CanonicalOpportunity.disposition, func.count()).group_by(CanonicalOpportunity.disposition)).all())
+            by_provenance = dict(session.exec(select(CanonicalOpportunity.source_provenance, func.count()).group_by(CanonicalOpportunity.source_provenance)).all())
+            _startup_logger.info(
+                "INVENTORY_DIAG CanonicalOpportunity total=%d by_lane=%s by_disposition=%s by_provenance=%s",
+                opp_total, by_lane, by_disposition, by_provenance,
+            )
+
+            eligible_states = [Disposition.pending_research.value, Disposition.screened_only.value, Disposition.watchlist.value]
+            terminal_states = [Disposition.executed.value, Disposition.rejected.value, Disposition.duplicate.value, Disposition.inapplicable.value, Disposition.expired.value]
+            blocked_states = [Disposition.blocked.value, Disposition.blocked_infrastructure.value, Disposition.blocked_capability.value]
+            eligible_count = session.exec(select(func.count()).select_from(CanonicalOpportunity).where(CanonicalOpportunity.disposition.in_(eligible_states))).one()
+            terminal_count = session.exec(select(func.count()).select_from(CanonicalOpportunity).where(CanonicalOpportunity.disposition.in_(terminal_states))).one()
+            waiting_count = session.exec(select(func.count()).select_from(CanonicalOpportunity).where(CanonicalOpportunity.disposition == Disposition.pending_commander.value)).one()
+            blocked_count = session.exec(select(func.count()).select_from(CanonicalOpportunity).where(CanonicalOpportunity.disposition.in_(blocked_states))).one()
+            _startup_logger.info(
+                "INVENTORY_DIAG CanonicalOpportunity eligible=%d waiting_commander=%d blocked=%d terminal=%d",
+                eligible_count, waiting_count, blocked_count, terminal_count,
+            )
+
+            er_total = session.exec(select(func.count()).select_from(ExecutionRecord)).one()
+            _startup_logger.info("INVENTORY_DIAG ExecutionRecord total=%d", er_total)
+
+            src_total = session.exec(select(func.count()).select_from(IncomeSource)).one()
+            by_origin = dict(session.exec(select(IncomeSource.origin_module, func.count()).group_by(IncomeSource.origin_module)).all())
+            by_status = dict(session.exec(select(IncomeSource.status, func.count()).group_by(IncomeSource.status)).all())
+            by_category = dict(session.exec(select(IncomeSource.category, func.count()).group_by(IncomeSource.category)).all())
+            _startup_logger.info(
+                "INVENTORY_DIAG IncomeSource total=%d by_origin_module=%s by_status=%s by_category=%s",
+                src_total, by_origin, by_status, by_category,
+            )
+
+            task_total = session.exec(select(func.count()).select_from(Task)).one()
+            by_task_type = dict(session.exec(select(Task.task_type, func.count()).group_by(Task.task_type)).all())
+            by_task_status = dict(session.exec(select(Task.status, func.count()).group_by(Task.status)).all())
+            _startup_logger.info(
+                "INVENTORY_DIAG Task total=%d by_task_type=%s by_status=%s",
+                task_total, by_task_type, by_task_status,
+            )
+
+            # Bridge check: CanonicalOpportunity and IncomeSource are
+            # separate models with no FK between them anywhere in the
+            # codebase — confirm that empirically rather than by code
+            # reading alone. ID sets only, no other fields.
+            opp_ids = set(session.exec(select(CanonicalOpportunity.canonical_opportunity_id)).all())
+            src_ids = set(session.exec(select(IncomeSource.source_id)).all())
+            _startup_logger.info(
+                "INVENTORY_DIAG bridge_check canonical_opportunity_count=%d income_source_count=%d id_overlap=%d",
+                len(opp_ids), len(src_ids), len(opp_ids & src_ids),
+            )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning("inventory diagnostics failed — %s: %s", type(exc).__name__, exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Keep the critical startup path local and bounded. External opportunity
@@ -299,6 +395,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(asyncio.to_thread(_bootstrap_hunter_ledger_actions_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_commander_documents_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_resume_manual_action_tasks_after_startup))
+    asyncio.create_task(asyncio.to_thread(_log_production_inventory_diagnostics))
     yield
     scheduler.shutdown(wait=False)
 
