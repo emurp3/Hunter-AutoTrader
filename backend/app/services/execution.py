@@ -287,7 +287,12 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
         submitted_at=datetime.now(timezone.utc),
         execution_status=result.status,
         provider_message=result.provider_message,
-        raw_response_json=json.dumps(result.raw) if result.raw else None,
+        # default=str: belt-and-suspenders alongside the alpaca.py
+        # model_dump(mode="json") fix — a local record-keeping crash here
+        # must never be allowed to look like "the trade was skipped" when
+        # it was actually placed at the broker (adapter.place_order()
+        # above already succeeded by this point).
+        raw_response_json=json.dumps(result.raw, default=str) if result.raw else None,
         updated_at=datetime.now(timezone.utc),
     )
     session.add(provider_execution)

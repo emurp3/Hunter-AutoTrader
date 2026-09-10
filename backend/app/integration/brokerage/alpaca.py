@@ -146,7 +146,18 @@ class AlpacaAdapter:
             submitted_at=submitted_at,
             notional=notional,
             provider_message=str(getattr(response, 'status_message', '') or ''),
-            raw=response.model_dump() if hasattr(response, 'model_dump') else None,
+            # mode="json" (not the bare model_dump()) — Alpaca's SDK returns
+            # UUID/datetime fields as native Python objects, which the bare
+            # dump keeps as-is. execution.py's submit_packet_trade() then
+            # calls json.dumps() on this dict when building the local
+            # ProviderExecution record; a raw UUID there raised
+            # "Object of type UUID is not JSON serializable" AFTER the
+            # order had already been placed at the broker — a real trade
+            # with the local bookkeeping crashing right after, not a
+            # prevented one. mode="json" recursively stringifies
+            # everything up front, so the dict this returns is always
+            # safe to json.dumps() later.
+            raw=response.model_dump(mode="json") if hasattr(response, 'model_dump') else None,
         )
 
 
