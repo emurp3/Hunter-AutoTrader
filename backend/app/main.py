@@ -278,9 +278,20 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(recycle_cycle_task, "interval", seconds=RECYCLE_CYCLE_INTERVAL_SECONDS, id="recycle_cycle", max_instances=1, misfire_grace_time=30)
     scheduler.add_job(leon_daily_commerce_task, "cron", hour=8, minute=5, timezone=_SCHEDULER_TZ, id="leon_daily", misfire_grace_time=3600)
     scheduler.add_job(policy_scan_task, "cron", hour=6, minute=30, timezone=_SCHEDULER_TZ, id="policy_scan", misfire_grace_time=3600)
-    scheduler.add_job(ledger_recovery_loop_task, "interval", seconds=LEDGER_LOOP_INTERVAL_SECONDS, id="ledger_recovery_loop", max_instances=1, misfire_grace_time=600)
-    scheduler.add_job(checkpoint_resume_task, "interval", seconds=CHECKPOINT_RESUME_INTERVAL_SECONDS, id="checkpoint_resume", max_instances=1, misfire_grace_time=300)
-    scheduler.add_job(task_retry_sweep_task, "interval", seconds=TASK_RETRY_SWEEP_INTERVAL_SECONDS, id="task_retry_sweep", max_instances=1, misfire_grace_time=300)
+    # Recovery-board finding (Commander, 2026-09-10): APScheduler's default
+    # interval-trigger first run is now+interval, so every redeploy resets
+    # these jobs' countdown from zero — on a night with many deploys, due
+    # work (the campaign loop, checkpoint resumption, the retry sweep) can
+    # be repeatedly postponed and never actually run. next_run_time=now
+    # makes each process start (including every redeploy) fire one
+    # immediate catch-up pass before settling into the normal interval —
+    # a durable scheduler discovering and dispatching existing eligible
+    # work, not an engineer manually selecting a candidate.
+    from datetime import datetime as _datetime, timezone as _timezone
+    _due_work_now = _datetime.now(_timezone.utc)
+    scheduler.add_job(ledger_recovery_loop_task, "interval", seconds=LEDGER_LOOP_INTERVAL_SECONDS, id="ledger_recovery_loop", max_instances=1, misfire_grace_time=600, next_run_time=_due_work_now)
+    scheduler.add_job(checkpoint_resume_task, "interval", seconds=CHECKPOINT_RESUME_INTERVAL_SECONDS, id="checkpoint_resume", max_instances=1, misfire_grace_time=300, next_run_time=_due_work_now)
+    scheduler.add_job(task_retry_sweep_task, "interval", seconds=TASK_RETRY_SWEEP_INTERVAL_SECONDS, id="task_retry_sweep", max_instances=1, misfire_grace_time=300, next_run_time=_due_work_now)
     scheduler.start()
 
     # Do not block ASGI startup/health on opportunity intake or its providers.
