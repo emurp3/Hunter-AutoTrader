@@ -121,6 +121,36 @@ class AlpacaAdapter:
         request = self._GetOrdersRequest(status='all', limit=limit, nested=False)
         return [self._map_result(order) for order in self._client.get_orders(filter=request)]
 
+    def list_orders_paginated(self, *, max_pages: int = 20, page_size: int = 500) -> list[TradeResult]:
+        """Read-only full order history via cursor pagination — unlike
+        list_orders(), not capped at a single most-recent page. Alpaca
+        returns newest-first by default; each page's oldest submitted_at
+        becomes the next page's `until` cursor (exclusive, via a
+        microsecond offset) so consecutive pages never overlap. Bounded
+        by max_pages so a reconciliation run can never become an
+        unbounded broker-history scan; if the account has more history
+        than max_pages * page_size orders, the caller can tell from
+        len(result) == max_pages * page_size that coverage may be
+        incomplete."""
+        from datetime import timedelta
+
+        results: list[TradeResult] = []
+        until = None
+        for _ in range(max_pages):
+            kwargs = {'status': 'all', 'limit': page_size, 'nested': False}
+            if until is not None:
+                kwargs['until'] = until
+            request = self._GetOrdersRequest(**kwargs)
+            page = list(self._client.get_orders(filter=request))
+            if not page:
+                break
+            results.extend(self._map_result(order) for order in page)
+            if len(page) < page_size:
+                break
+            oldest = min(order.submitted_at for order in page if getattr(order, 'submitted_at', None) is not None)
+            until = oldest - timedelta(microseconds=1)
+        return results
+
     def place_trade(self, order: TradeOrder) -> TradeResult:
         return self.place_order(order)
 

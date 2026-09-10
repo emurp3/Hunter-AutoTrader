@@ -11,6 +11,7 @@ from app.services.autotrader import get_intake_state, refresh_intake_state, run_
 from app.services.source_acquisition import get_latest_results, get_source_status
 from app.auth.jwt import get_current_user, require_admin
 from app.auth.models import UserInDB
+from app.services.broker_history_reconciliation import reconcile_broker_history
 
 logger = logging.getLogger(__name__)
 
@@ -289,3 +290,22 @@ def autotrader_opportunities(
         "in_memory_count": len(in_memory),
         "sources_status": get_source_status().get("sources", {}),
     }
+
+
+@router.post("/broker-reconciliation")
+def trigger_broker_reconciliation(
+    _: UserInDB = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> dict:
+    """
+    Admin-only, read-only-against-the-broker reconciliation (Recovery
+    Board Track A item 3): pages the account's real order history and
+    matches it against Hunter's local records by exact identifier only.
+    Never places, cancels, or modifies an order. The only write this
+    performs is restoring a ProviderExecution row for a broker order
+    Hunter itself placed and tagged with its own client_order_id but
+    never locally recorded — every such row is marked
+    reconciled_from_broker_history=True with an auditable marker.
+    Unmatched broker activity is reported, never attributed.
+    """
+    return reconcile_broker_history(session)

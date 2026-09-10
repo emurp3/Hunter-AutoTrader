@@ -344,6 +344,16 @@ ENABLE_VIP_AUTO_INVEST: bool = _get_bool("HUNTER_ENABLE_VIP_AUTO_INVEST", False)
 # no new approved per-trade limit is introduced here.
 ENABLE_CRYPTO_AUTO_INVEST: bool = _get_bool("HUNTER_ENABLE_CRYPTO_AUTO_INVEST", False)
 
+# One-time, bounded broker-history reconciliation run at startup — default
+# off. Not a permanent startup dependency: the reusable mechanism is the
+# admin-only POST /autotrader/broker-reconciliation endpoint; this flag only
+# lets a single deploy also run it once, for cases (like this recovery
+# effort) where triggering the endpoint directly isn't available. Meant to
+# be turned back off after the run it was turned on for.
+RUN_BROKER_HISTORY_RECONCILIATION_ON_STARTUP: bool = _get_bool(
+    "HUNTER_RUN_BROKER_HISTORY_RECONCILIATION_ON_STARTUP", False
+)
+
 # Morning brief — Hunter proactively pushes a condensed status digest here
 # every morning (see morning_report_task in scheduler.py) rather than
 # waiting to be asked. Empty by default: the brief still builds and is

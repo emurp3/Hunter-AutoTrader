@@ -53,7 +53,7 @@ from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table
 from app.models.commander_document import CommanderDocument  # noqa: F401 — registers table
 from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task, discovery_scan_task, signal_scan_task, morning_report_task, ledger_recovery_loop_task, checkpoint_resume_task, task_retry_sweep_task
-from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS, SIGNAL_SCAN_INTERVAL_SECONDS, MORNING_REPORT_HOUR, MORNING_REPORT_MINUTE, LEDGER_LOOP_INTERVAL_SECONDS, CHECKPOINT_RESUME_INTERVAL_SECONDS, TASK_RETRY_SWEEP_INTERVAL_SECONDS
+from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS, SIGNAL_SCAN_INTERVAL_SECONDS, MORNING_REPORT_HOUR, MORNING_REPORT_MINUTE, LEDGER_LOOP_INTERVAL_SECONDS, CHECKPOINT_RESUME_INTERVAL_SECONDS, TASK_RETRY_SWEEP_INTERVAL_SECONDS, RUN_BROKER_HISTORY_RECONCILIATION_ON_STARTUP
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
@@ -507,6 +507,39 @@ def _log_production_inventory_diagnostics() -> None:
         _startup_logger.warning("broker read-only diagnostic failed — %s: %s", type(exc).__name__, exc)
 
 
+def _run_broker_history_reconciliation_once() -> None:
+    """Gated by RUN_BROKER_HISTORY_RECONCILIATION_ON_STARTUP (default
+    False) — not a permanent startup dependency. The durable, reusable
+    mechanism is the admin-only POST /autotrader/broker-reconciliation
+    endpoint; this only lets one deploy also run it once, for triggering
+    it without direct access to call the endpoint. Meant to be turned
+    back off (env var reset to false) after the run it was turned on
+    for."""
+    from app.database.config import engine as _engine
+    from app.services.broker_history_reconciliation import reconcile_broker_history
+    from sqlmodel import Session as _Session
+
+    try:
+        with _Session(_engine) as session:
+            result = reconcile_broker_history(session)
+        _startup_logger.info(
+            "BROKER_HISTORY_RECONCILIATION_STARTUP_RUN marker=%s examined=%d matched_packet_based=%d "
+            "matched_recycle=%d restored=%d unmatched=%d uncertain_packets=%d coverage=%s",
+            result["reconciliation_marker"],
+            result["broker_orders_examined"],
+            result["matched_packet_based"],
+            result["matched_recycle"],
+            result["restored_count"],
+            result["unmatched_count"],
+            result["internal_packets_with_uncertain_outcomes"],
+            result["coverage"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning(
+            "broker history reconciliation startup run failed — %s: %s", type(exc).__name__, exc
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Keep the critical startup path local and bounded. External opportunity
@@ -547,6 +580,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(asyncio.to_thread(_bootstrap_commander_documents_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_resume_manual_action_tasks_after_startup))
     asyncio.create_task(asyncio.to_thread(_log_production_inventory_diagnostics))
+    if RUN_BROKER_HISTORY_RECONCILIATION_ON_STARTUP:
+        asyncio.create_task(asyncio.to_thread(_run_broker_history_reconciliation_once))
     yield
     scheduler.shutdown(wait=False)
 

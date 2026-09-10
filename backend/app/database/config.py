@@ -172,6 +172,15 @@ def _migrate_sqlite_tables() -> None:
                 "commander_responded_at": "TIMESTAMP",
             },
         )
+        _ensure_columns(
+            conn,
+            "providerexecution",
+            {
+                "reconciled_from_broker_history": "BOOLEAN DEFAULT 0",
+                "reconciliation_marker": "TEXT",
+                "reconciled_at": "TIMESTAMP",
+            },
+        )
         conn.execute(
             """
             UPDATE weeklybudget
