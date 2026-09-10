@@ -261,6 +261,51 @@ def _bootstrap_resume_manual_action_tasks_after_startup() -> None:
         )
 
 
+def _bootstrap_backfill_local_business_dispatch_after_startup() -> None:
+    """EOD priority (Commander, 2026-09-10): "ensure the contact/routing
+    corrections apply to existing eligible leads, not only future
+    inserts." Today's fix (routing local_business_prospector sources to
+    service_outreach instead of a phantom task_type) only takes effect
+    at dispatch time — auto_dispatch_for_source is a pure function of a
+    source's current origin_module/category — but dispatch itself only
+    fires automatically for NEWLY ingested opportunities
+    (process_new_opportunity, called on insert). Sources already in the
+    database from before today's fix never got that call and would
+    otherwise sit un-dispatched until their next full re-discovery.
+    Re-dispatches all of them now; idempotent (dispatch_task's
+    idempotency key on source+task_type returns the existing task if one
+    is already active, and creates a fresh attempt if the prior one
+    already failed/escalated — the exact case for these sources). Runs
+    on every boot — a no-op once caught up, since a successfully
+    dispatched source's next call just returns its existing task."""
+    try:
+        from sqlmodel import select as _select
+
+        from app.database.config import engine
+        from app.models.income_source import IncomeSource
+        from app.services.tasks import auto_dispatch_for_source
+
+        with Session(engine) as session:
+            sources = session.exec(
+                _select(IncomeSource).where(IncomeSource.origin_module == "local_business_prospector")
+            ).all()
+            dispatched = []
+            for source in sources:
+                task = auto_dispatch_for_source(source.source_id, session)
+                if task:
+                    dispatched.append((source.source_id, task.task_id))
+            if dispatched:
+                _startup_logger.info(
+                    "backfill-dispatched %d existing local_business_prospector source(s): %s",
+                    len(dispatched), dispatched,
+                )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning(
+            "local_business_prospector backfill-dispatch bootstrap failed — %s: %s",
+            type(exc).__name__, exc,
+        )
+
+
 def _log_production_inventory_diagnostics() -> None:
     """
     Commander's Track 1 (2026-09-10): resolve the "authoritative production
@@ -467,6 +512,26 @@ def _log_production_inventory_diagnostics() -> None:
                     (t.outcome_notes or "")[:120],
                 )
 
+            # EOD safety verification (Commander, 2026-09-10): "an
+            # uncertain or accepted-but-unrecorded order is reconciled
+            # before any resubmission." "active" is the ActionPacket
+            # state submit_packet_trade() sets immediately BEFORE calling
+            # the broker (planned -> active -> in_progress happens right
+            # before adapter.place_order()) — a packet stuck in "active"
+            # (never advanced to in_progress/completed/failed) means
+            # something interrupted submission at exactly that boundary.
+            # id/source_id are Hunter's own identifiers; execution_notes
+            # is Hunter's own short diagnostic string, truncated.
+            active_packets_diag = session.exec(
+                select(ActionPacket).where(ActionPacket.execution_state == "active")
+            ).all()
+            for p in active_packets_diag:
+                _startup_logger.info(
+                    "INVENTORY_DIAG active_packet packet_id=%s source_id=%s execution_updated_at=%s execution_notes=%r",
+                    p.id, p.source_id, p.execution_updated_at,
+                    (p.execution_notes or "")[:160],
+                )
+
             # RECYCLE's OWN local tracking (Commander, 2026-09-10 — the
             # correction: broker history must be checked directly rather
             # than inferred from ActionPacket/ProviderExecution being
@@ -569,26 +634,31 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         _startup_logger.warning("create_db_and_tables failed: %s", exc)
 
+    # Recovery-board finding (Commander, 2026-09-10): APScheduler's default
+    # interval-trigger first run is now+interval, so every redeploy resets
+    # these jobs' countdown from zero — on a day with many deploys, due
+    # work can be repeatedly postponed and never actually run.
+    # next_run_time=now makes each process start (including every
+    # redeploy) fire one immediate catch-up pass before settling into the
+    # normal interval — a durable scheduler discovering and dispatching
+    # existing eligible work, not an engineer manually selecting a
+    # candidate. EOD finding (2026-09-10, later the same day): this fix
+    # was applied to ledger_recovery_loop/checkpoint_resume/task_retry_sweep
+    # but NOT to discovery_scan (3h interval) or signal_scan (6h interval)
+    # — with ~9 redeploys today, discovery_scan in particular has likely
+    # never completed a natural cycle, directly stalling new
+    # local_business_prospector leads for the service-outreach path.
+    from datetime import datetime as _datetime, timezone as _timezone
+    _due_work_now = _datetime.now(_timezone.utc)
     scheduler.add_job(daily_scan_task, "cron", hour=9, minute=35, timezone=_SCHEDULER_TZ, id="daily_scan", misfire_grace_time=3600)
-    scheduler.add_job(discovery_scan_task, "interval", seconds=DISCOVERY_SCAN_INTERVAL_SECONDS, id="discovery_scan", max_instances=1, misfire_grace_time=600)
-    scheduler.add_job(signal_scan_task, "interval", seconds=SIGNAL_SCAN_INTERVAL_SECONDS, id="signal_scan", max_instances=1, misfire_grace_time=900)
+    scheduler.add_job(discovery_scan_task, "interval", seconds=DISCOVERY_SCAN_INTERVAL_SECONDS, id="discovery_scan", max_instances=1, misfire_grace_time=600, next_run_time=_due_work_now)
+    scheduler.add_job(signal_scan_task, "interval", seconds=SIGNAL_SCAN_INTERVAL_SECONDS, id="signal_scan", max_instances=1, misfire_grace_time=900, next_run_time=_due_work_now)
     scheduler.add_job(weekly_report_task, "cron", day_of_week="mon", hour=8, minute=0, timezone=_SCHEDULER_TZ, id="weekly_report", misfire_grace_time=3600)
     scheduler.add_job(morning_report_task, "cron", hour=MORNING_REPORT_HOUR, minute=MORNING_REPORT_MINUTE, timezone=_SCHEDULER_TZ, id="morning_report", misfire_grace_time=1800)
     if ALPACA_ENABLED and STRATEGY_MODE == "RECYCLE":
         scheduler.add_job(recycle_cycle_task, "interval", seconds=RECYCLE_CYCLE_INTERVAL_SECONDS, id="recycle_cycle", max_instances=1, misfire_grace_time=30)
     scheduler.add_job(leon_daily_commerce_task, "cron", hour=8, minute=5, timezone=_SCHEDULER_TZ, id="leon_daily", misfire_grace_time=3600)
     scheduler.add_job(policy_scan_task, "cron", hour=6, minute=30, timezone=_SCHEDULER_TZ, id="policy_scan", misfire_grace_time=3600)
-    # Recovery-board finding (Commander, 2026-09-10): APScheduler's default
-    # interval-trigger first run is now+interval, so every redeploy resets
-    # these jobs' countdown from zero — on a night with many deploys, due
-    # work (the campaign loop, checkpoint resumption, the retry sweep) can
-    # be repeatedly postponed and never actually run. next_run_time=now
-    # makes each process start (including every redeploy) fire one
-    # immediate catch-up pass before settling into the normal interval —
-    # a durable scheduler discovering and dispatching existing eligible
-    # work, not an engineer manually selecting a candidate.
-    from datetime import datetime as _datetime, timezone as _timezone
-    _due_work_now = _datetime.now(_timezone.utc)
     scheduler.add_job(ledger_recovery_loop_task, "interval", seconds=LEDGER_LOOP_INTERVAL_SECONDS, id="ledger_recovery_loop", max_instances=1, misfire_grace_time=600, next_run_time=_due_work_now)
     scheduler.add_job(checkpoint_resume_task, "interval", seconds=CHECKPOINT_RESUME_INTERVAL_SECONDS, id="checkpoint_resume", max_instances=1, misfire_grace_time=300, next_run_time=_due_work_now)
     scheduler.add_job(task_retry_sweep_task, "interval", seconds=TASK_RETRY_SWEEP_INTERVAL_SECONDS, id="task_retry_sweep", max_instances=1, misfire_grace_time=300, next_run_time=_due_work_now)
@@ -599,6 +669,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(asyncio.to_thread(_bootstrap_hunter_ledger_actions_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_commander_documents_after_startup))
     asyncio.create_task(asyncio.to_thread(_bootstrap_resume_manual_action_tasks_after_startup))
+    asyncio.create_task(asyncio.to_thread(_bootstrap_backfill_local_business_dispatch_after_startup))
     asyncio.create_task(asyncio.to_thread(_log_production_inventory_diagnostics))
     if RUN_BROKER_HISTORY_RECONCILIATION_ON_STARTUP:
         asyncio.create_task(asyncio.to_thread(_run_broker_history_reconciliation_once))

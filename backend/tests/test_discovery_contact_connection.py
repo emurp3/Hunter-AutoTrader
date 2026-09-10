@@ -152,6 +152,91 @@ def test_persist_results_omits_contact_fields_entirely_when_source_has_none():
     assert "contact_url" not in record.notes
 
 
+def test_backfill_bootstrap_dispatches_existing_undispatched_leads(monkeypatch):
+    """EOD priority (Commander, 2026-09-10): "ensure the contact/routing
+    corrections apply to existing eligible leads, not only future
+    inserts." A local_business_prospector source already in the database
+    from before today's routing fix — never dispatched, since the old
+    routing was capability-gapped — gets dispatched by the backfill
+    bootstrap without waiting for a fresh discovery scan."""
+    import app.database.config as db_config
+
+    session = _make_session()
+    source = IncomeSource(
+        source_id="local:osm:dentist:11111",
+        description="Example Dental shows public listing gaps: missing website.",
+        estimated_profit=850.0,
+        currency="USD",
+        status=SourceStatus.budgeted,
+        date_found=date(2026, 9, 8),
+        next_action="Prepare a short outreach offer.",
+        notes=(
+            "Source URL: https://www.openstreetmap.org/node/11111 | "
+            "Lane: local_business_prospecting | "
+            "contact_email: front-desk@exampledental.example | "
+            "target_buyer: Example Dental"
+        ),
+        origin_module="local_business_prospector",
+        category="healthcare-implementation",
+        confidence=0.66,
+        score=70.0,
+    )
+    session.add(source)
+    session.commit()
+    session.close()
+
+    monkeypatch.setattr(db_config, "engine", session.get_bind())
+    from app.main import _bootstrap_backfill_local_business_dispatch_after_startup
+
+    _bootstrap_backfill_local_business_dispatch_after_startup()
+
+    verify_session = Session(session.get_bind())
+    from app.models.task import Task
+
+    tasks = verify_session.exec(
+        select(Task).where(Task.source_id == "local:osm:dentist:11111")
+    ).all()
+    assert len(tasks) == 1
+    assert tasks[0].task_type == "service_outreach"
+
+
+def test_backfill_bootstrap_is_a_safe_noop_on_repeated_runs(monkeypatch):
+    import app.database.config as db_config
+
+    session = _make_session()
+    source = IncomeSource(
+        source_id="local:osm:dentist:22222",
+        description="Example Clinic shows public listing gaps: missing website.",
+        estimated_profit=850.0,
+        currency="USD",
+        status=SourceStatus.budgeted,
+        date_found=date(2026, 9, 8),
+        next_action="Prepare a short outreach offer.",
+        notes="Source URL: https://www.openstreetmap.org/node/22222 | Lane: local_business_prospecting",
+        origin_module="local_business_prospector",
+        category="healthcare-implementation",
+        confidence=0.66,
+        score=70.0,
+    )
+    session.add(source)
+    session.commit()
+    session.close()
+
+    monkeypatch.setattr(db_config, "engine", session.get_bind())
+    from app.main import _bootstrap_backfill_local_business_dispatch_after_startup
+
+    _bootstrap_backfill_local_business_dispatch_after_startup()
+    _bootstrap_backfill_local_business_dispatch_after_startup()
+
+    verify_session = Session(session.get_bind())
+    from app.models.task import Task
+
+    tasks = verify_session.exec(
+        select(Task).where(Task.source_id == "local:osm:dentist:22222")
+    ).all()
+    assert len(tasks) == 1  # no duplicate task from the second run
+
+
 def test_local_business_prospector_origin_resolves_to_a_real_executor():
     """Deeper gap than the missing contact info: local_business_prospector's
     origin_module used to map to "local_outreach", a task_type with no
