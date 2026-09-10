@@ -59,6 +59,36 @@ class BrokerAcceptedRecordingIncompleteError(Exception):
         self.symbol = symbol
 
 
+class AmbiguousSubmissionOutcomeError(Exception):
+    """
+    Raised by submit_packet_trade() when adapter.place_order() itself
+    raised — meaning Hunter cannot assert "definitely not submitted."
+    Two real cases collapse to this:
+
+    1. The broker responded with an error whose text indicates this
+       exact client_order_id was already used — strong evidence an
+       order already exists under it (a genuine retry of an earlier
+       attempt, or a duplicate dispatch).
+    2. No response was received at all (timeout, connection reset) —
+       the request may or may not have reached the broker before the
+       connection was lost.
+
+    Unlike BrokerAcceptedRecordingIncompleteError, there is no
+    confirmed order_id/status here — only the client_order_id Hunter
+    itself assigned, which is what a human (or the broker-history
+    reconciliation routine) can search the broker by. Must never be
+    treated as "safe to retry as a fresh order" — the caller's fix is
+    the same deterministic client_order_id, which Alpaca's own
+    idempotency check will accept (nothing was actually created) or
+    reject (something already was) on any subsequent attempt.
+    """
+
+    def __init__(self, message: str, *, client_order_id: str, packet_id: int):
+        super().__init__(message)
+        self.client_order_id = client_order_id
+        self.packet_id = packet_id
+
+
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     ExecutionState.planned: {
         ExecutionState.active,
@@ -301,7 +331,29 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
         order.client_order_id = f"hunter-pkt-{packet.id}"
 
     adapter = get_alpaca_adapter()
-    result = adapter.place_order(order)
+    try:
+        result = adapter.place_order(order)
+    except Exception as submit_exc:  # noqa: BLE001
+        # "Definitely not submitted" can only be asserted when the
+        # broker gave a real validation response that isn't itself
+        # evidence of a prior submission. APIError (alpaca-py) means a
+        # response was actually received; anything else (timeout,
+        # connection reset, etc.) means the outcome of this exact
+        # request is unknown. Either way, a message naming this
+        # client_order_id as already used is proof an order likely
+        # already exists — never a plain rejection.
+        is_api_error = type(submit_exc).__name__ == "APIError"
+        error_text = str(submit_exc)
+        looks_like_duplicate_client_order_id = "client order id" in error_text.lower() or "client_order_id" in error_text.lower()
+        if not is_api_error or looks_like_duplicate_client_order_id:
+            raise AmbiguousSubmissionOutcomeError(
+                f"place_order raised for packet {packet.id} (client_order_id={order.client_order_id}) — "
+                f"outcome unknown, must not be treated as a safe-to-retry skip: "
+                f"{type(submit_exc).__name__}: {submit_exc}",
+                client_order_id=order.client_order_id,
+                packet_id=packet.id,
+            ) from submit_exc
+        raise
 
     # Everything from here on is LOCAL RECORD-KEEPING for an order that
     # has already been placed at the broker. A failure anywhere in this
@@ -852,6 +904,20 @@ def _get_allocation(source_id: str, session: Session) -> Optional[BudgetAllocati
     ).first()
 
 
+# Track A item 4 (Commander, 2026-09-10): all 36 of the recorded
+# error-42210000 broker rejections were the exact same Alpaca message —
+# "notional amount must be >= 1.00" — Alpaca's documented minimum for a
+# notional (dollar-amount) order. Not a risk/account restriction and not
+# a market-hours-style constraint: Hunter was submitting orders below a
+# fixed, always-rejected floor. Confirmed defect, fixed here (the single
+# choke point _validate_order_against_allocation shares with every
+# packet-based submission) rather than at the broker: this doesn't
+# change risk limits, account mode, or any broker restriction — it just
+# stops sending a request Alpaca will always reject, with an honest,
+# specific skip reason instead of a submission attempt.
+_ALPACA_MIN_NOTIONAL_USD = 1.00
+
+
 def _validate_order_against_allocation(order: TradeOrder, allocation: BudgetAllocation) -> None:
     if order.notional is None and (order.qty is None or order.limit_price is None):
         raise ValueError(
@@ -861,6 +927,11 @@ def _validate_order_against_allocation(order: TradeOrder, allocation: BudgetAllo
     requested_exposure = float(order.notional or (order.qty or 0.0) * (order.limit_price or 0.0))
     if requested_exposure <= 0:
         raise ValueError("Requested order exposure must be greater than zero.")
+    if order.notional is not None and requested_exposure < _ALPACA_MIN_NOTIONAL_USD:
+        raise ValueError(
+            f"Requested notional ${requested_exposure:.2f} is below Alpaca's "
+            f"${_ALPACA_MIN_NOTIONAL_USD:.2f} minimum for a notional order."
+        )
     if requested_exposure > allocation.amount_allocated:
         raise ValueError(
             f"Requested exposure ${requested_exposure:.2f} exceeds allocation cap ${allocation.amount_allocated:.2f}."
@@ -1069,6 +1140,26 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
         _mark_packet_trade_skipped(packet, session, err)
         _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
         return None
+    except AmbiguousSubmissionOutcomeError as exc:
+        # MUST be caught before the generic Exception handler below and
+        # MUST NOT call _mark_packet_trade_skipped() — we cannot assert
+        # "not submitted" here (see the exception's docstring).
+        diag_svc.record_error(
+            "execution.status",
+            str(exc),
+            affected_component="execution.auto_trade.submission",
+            metadata={
+                "source_id": source_id, "packet_id": str(packet.id),
+                "client_order_id": exc.client_order_id,
+            },
+        )
+        _mark_packet_submission_outcome_uncertain(packet, session, exc)
+        _logger.critical(
+            "auto_place_trade: SUBMISSION OUTCOME UNCERTAIN for packet %s (client_order_id=%s) — "
+            "needs manual reconciliation against broker history before any retry: %s",
+            packet.id, exc.client_order_id, exc,
+        )
+        return None
     except BrokerAcceptedRecordingIncompleteError as exc:
         # MUST be caught before the generic Exception handler below and
         # MUST NOT call _mark_packet_trade_skipped() — that framing
@@ -1207,14 +1298,62 @@ def _mark_packet_broker_accepted_recording_incomplete(
     try:
         alert_svc.raise_alert(
             alert_type=AlertType.execution_failed,
+            priority=AlertPriority.critical,
             title=f"RECONCILE: broker accepted order but local recording failed — packet {packet.id}",
             body=(
-                f"Alpaca order {exc.order_id} ({exc.status}) for {exc.symbol} was placed successfully, "
-                f"but Hunter's own record of it failed to save. This is NOT a failed trade — check the "
-                f"broker directly for {exc.order_id} before taking any other action on this packet."
+                f"Alpaca order {exc.order_id} ({exc.status}, {exc.symbol}) for packet {packet.id} "
+                f"was placed at the broker, but Hunter's local record of it failed to write. "
+                f"Reconcile via broker history before treating this packet as retryable."
             ),
             session=session,
+            source_id=packet.source_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _mark_packet_submission_outcome_uncertain(
+    packet: Optional[ActionPacket],
+    session: Session,
+    exc: AmbiguousSubmissionOutcomeError,
+) -> None:
+    """
+    Distinct from both _mark_packet_trade_skipped() (which asserts
+    "definitely not submitted") and
+    _mark_packet_broker_accepted_recording_incomplete() (which has a
+    confirmed order_id/status). Here place_order() itself raised with
+    no confirmed response — the outcome is genuinely unknown. Never
+    calls fail_packet_execution() and never sets execution_state to
+    failed/canceled, for the same reason as the recording-incomplete
+    case: this packet must never look "safe" for something else to
+    resubmit as a fresh order. A future retry naturally reuses the
+    same deterministic client_order_id (submit_packet_trade derives it
+    from packet.id), so even an automatic retry attempt cannot create
+    a second real order — Alpaca's own idempotency check is the
+    backstop while this stays unreconciled.
+    """
+    if not packet:
+        return
+    now = datetime.now(timezone.utc)
+    packet.execution_notes = (
+        f"SUBMISSION_OUTCOME_UNCERTAIN: client_order_id={exc.client_order_id} — {exc}"
+    )
+    packet.execution_updated_at = now
+    session.add(packet)
+    session.commit()
+
+    try:
+        alert_svc.raise_alert(
+            alert_type=AlertType.execution_failed,
             priority=AlertPriority.critical,
+            title=f"RECONCILE: submission outcome uncertain — packet {packet.id}",
+            body=(
+                f"Placing an order for packet {packet.id} (client_order_id={exc.client_order_id}) "
+                f"raised with no confirmed broker response. Search the broker by this "
+                f"client_order_id — via the broker-history reconciliation endpoint — before "
+                f"treating this packet as retryable."
+            ),
+            session=session,
             source_id=packet.source_id,
         )
     except Exception:  # noqa: BLE001
