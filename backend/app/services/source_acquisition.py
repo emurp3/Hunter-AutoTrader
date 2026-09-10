@@ -228,6 +228,19 @@ def _persist_results(session: Session, results: list[SourceOpportunity]) -> dict
         notes += f" | Lane: {item.lane}"
         if item.signal_type:
             notes += f" | Signal: {item.signal_type}"
+        # Track B (Commander, 2026-09-10): tasks.py's service_outreach
+        # builder reads contact_email/contact_url/target_buyer back out of
+        # this exact notes string via a "key: value" regex. Before this,
+        # notes never carried anything from item.metadata, so a provider
+        # (e.g. local_business_prospector) could find a real, published
+        # email/website and it would still never reach the task — every
+        # service_outreach task failed immediately with "No contact route
+        # available." This passes through ONLY what a source provider
+        # itself already found; it never invents or guesses a value.
+        for _key in ("contact_email", "contact_url", "target_buyer"):
+            _value = item.metadata.get(_key) if item.metadata else None
+            if _value:
+                notes += f" | {_key}: {_value}"
 
         if record:
             changed = False

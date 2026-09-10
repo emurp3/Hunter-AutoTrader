@@ -96,6 +96,15 @@ out tags 30;
                 "gap_reasons": gap_reasons,
                 "address": tags.get("addr:full") or tags.get("addr:street"),
                 "city": tags.get("addr:city"),
+                # Real, OSM-published contact info only — never guessed or
+                # inferred. Passed through as-is so it can reach a
+                # service_outreach task's contact_email/contact_url; a
+                # lead missing all of these still qualifies (that's the
+                # gap being prospected) but then has no automatable send
+                # route until a human supplies one.
+                "contact_email": email,
+                "contact_url": website,
+                "target_buyer": name,
             },
         )
 

@@ -575,7 +575,16 @@ _ORIGIN_TO_TASK_TYPE: dict[str, str] = {
     "rfp_scanner": "rfp_response",
     "affiliate_scanner": "affiliate_signup",
     "social_listener": "social_outreach",
-    "local_business_prospector": "local_outreach",
+    # Track B (Commander, 2026-09-10): "local_outreach" has no executor
+    # branch in app.worker.executors.execute_task and never did — every
+    # local_business_prospector source was capability-gapped out before
+    # ever reaching dispatch (resolve_task_type below correctly refused
+    # to send it somewhere with no executor). The work itself
+    # (business_type/contact_email/contact_url/search_query -> a short
+    # outreach email) is exactly what _execute_service_outreach already
+    # does; this source's leads just need to be routed there instead of
+    # to a phantom task_type.
+    "local_business_prospector": "service_outreach",
     "digital_product_scanner": "digital_product_launch",
 }
 
