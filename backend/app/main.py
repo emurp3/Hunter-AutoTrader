@@ -425,6 +425,26 @@ def _log_production_inventory_diagnostics() -> None:
                 len(failure_notes), reason_counts,
             )
 
+            # Track A item 4 (Commander, 2026-09-10): classify the 36
+            # error-42210000 broker rejections. The 60-char prefix above
+            # truncates the actual broker message, which is what's needed
+            # to tell a valid risk/account restriction from an expected
+            # market constraint from an invalid-request defect. Alpaca's
+            # own error text (e.g. "insufficient buying power",
+            # "asset X is not tradable", "opg orders only between...") is
+            # Hunter's own broker-integration diagnostic content, not
+            # personal data. Deduplicated (not one line per packet) and
+            # capped so this stays a bounded, redacted sample rather than
+            # a full record dump.
+            broker_rejection_notes = {
+                note for note in failure_notes
+                if note and note.startswith('Trade skipped before broker submission: {"code":42210000')
+            }
+            _startup_logger.info(
+                "INVENTORY_DIAG broker_rejection_42210000_distinct_messages count=%d messages=%s",
+                len(broker_rejection_notes), sorted(broker_rejection_notes)[:15],
+            )
+
             # Classify the historical "completed" tasks (Commander,
             # 2026-09-10): task_id/task_type/engine/source_id are Hunter's
             # own internal identifiers, not personal data. outcome_notes
