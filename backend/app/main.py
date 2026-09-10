@@ -398,6 +398,33 @@ def _log_production_inventory_diagnostics() -> None:
                 len(opp_ids), len(src_ids), len(opp_ids & src_ids),
             )
 
+            # Group real equities-trading failure reasons (Commander,
+            # 2026-09-10: "group failure reasons and identify the first
+            # broken shared component"). auto_place_trade_for_source()
+            # persists WHY a packet never reached the broker directly on
+            # ActionPacket.execution_notes via
+            # _mark_packet_trade_skipped()/fail_packet_execution() — a
+            # short, fixed set of Hunter-generated diagnostic strings
+            # ("No funded allocation is available for trade submission",
+            # "No trade symbol found...", etc.), not personal data.
+            # Grouped by the first 60 chars (the fixed-reason prefix,
+            # before any dynamic order-id suffix) so this stays a
+            # redacted summary, not raw content.
+            failure_notes = session.exec(
+                select(ActionPacket.execution_notes).where(
+                    ActionPacket.execution_state.in_(["failed", "canceled"]),
+                    ActionPacket.execution_notes.is_not(None),
+                )
+            ).all()
+            reason_counts: dict[str, int] = {}
+            for note in failure_notes:
+                key = (note or "")[:60]
+                reason_counts[key] = reason_counts.get(key, 0) + 1
+            _startup_logger.info(
+                "INVENTORY_DIAG equities_failure_reasons total_with_notes=%d by_reason_prefix=%s",
+                len(failure_notes), reason_counts,
+            )
+
             # Classify the historical "completed" tasks (Commander,
             # 2026-09-10): task_id/task_type/engine/source_id are Hunter's
             # own internal identifiers, not personal data. outcome_notes
