@@ -41,6 +41,24 @@ from app.services import events as event_svc
 from app.services import position_lifecycle as lifecycle_svc
 
 
+class BrokerAcceptedRecordingIncompleteError(Exception):
+    """
+    Raised by submit_packet_trade() when adapter.place_order() has
+    ALREADY succeeded — a real order exists at the broker — but writing
+    Hunter's own local record of it (ProviderExecution / lifecycle
+    tracking) then failed. Callers must never treat this the same as a
+    trade that was never submitted: no retry, no "skipped" framing. The
+    order_id/status are carried so the caller can raise a reconciliation
+    alert instead of silently losing track of a real broker action.
+    """
+
+    def __init__(self, message: str, *, order_id: str, status: str, symbol: str):
+        super().__init__(message)
+        self.order_id = order_id
+        self.status = status
+        self.symbol = symbol
+
+
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     ExecutionState.planned: {
         ExecutionState.active,
@@ -269,83 +287,110 @@ def submit_packet_trade(packet_id: int, order: TradeOrder, session: Session) -> 
             notes="Execution provider request submitted",
         )
 
+    # Deterministic, per-packet client_order_id: a genuine retry of the
+    # SAME intended order (worker reclaim, scheduler overlap, a caller
+    # naively re-invoking this function for a packet whose local
+    # recording failed last time) reuses this exact id. Alpaca itself
+    # rejects a duplicate client_order_id — a real, broker-enforced
+    # idempotency backstop that holds even when Hunter's own
+    # `existing_order` guard above can't (it depends on ProviderExecution
+    # having been written, which is exactly what can fail below). A
+    # different packet always gets a different id, so legitimately
+    # distinct orders are never conflated.
+    if not order.client_order_id:
+        order.client_order_id = f"hunter-pkt-{packet.id}"
+
     adapter = get_alpaca_adapter()
     result = adapter.place_order(order)
-    provider_execution = ProviderExecution(
-        packet_id=packet.id,
-        source_id=packet.source_id,
-        allocation_id=allocation.id,
-        provider="alpaca",
-        provider_mode="paper" if ALPACA_PAPER else "live",
-        external_order_id=result.order_id,
-        symbol=result.symbol,
-        order_side=result.side,
-        order_type=order.order_type,
-        qty=result.qty or order.qty,
-        notional=result.notional or order.notional,
-        limit_price=order.limit_price,
-        submitted_at=datetime.now(timezone.utc),
-        execution_status=result.status,
-        provider_message=result.provider_message,
-        # default=str: belt-and-suspenders alongside the alpaca.py
-        # model_dump(mode="json") fix — a local record-keeping crash here
-        # must never be allowed to look like "the trade was skipped" when
-        # it was actually placed at the broker (adapter.place_order()
-        # above already succeeded by this point).
-        raw_response_json=json.dumps(result.raw, default=str) if result.raw else None,
-        updated_at=datetime.now(timezone.utc),
-    )
-    session.add(provider_execution)
-    session.commit()
-    session.refresh(provider_execution)
 
-    order_side = (order.side or "").lower()
-    if order_side == "buy":
-        lifecycle_svc.record_entry_submission(
-            session,
-            symbol=result.symbol,
-            source_id=packet.source_id,
+    # Everything from here on is LOCAL RECORD-KEEPING for an order that
+    # has already been placed at the broker. A failure anywhere in this
+    # block must never be reported as "the trade was skipped before
+    # broker submission" — that is false and was the actual production
+    # defect (see BrokerAcceptedRecordingIncompleteError's docstring).
+    try:
+        provider_execution = ProviderExecution(
             packet_id=packet.id,
+            source_id=packet.source_id,
             allocation_id=allocation.id,
-            provider_order_id=result.order_id,
-            entered_at=provider_execution.submitted_at,
-        )
-    elif order_side == "sell":
-        lifecycle_svc.record_exit_submission(
-            session,
+            provider="alpaca",
+            provider_mode="paper" if ALPACA_PAPER else "live",
+            external_order_id=result.order_id,
             symbol=result.symbol,
-            source_id=packet.source_id,
-            packet_id=packet.id,
-            provider_order_id=result.order_id,
-            submitted_at=provider_execution.submitted_at,
+            order_side=result.side,
+            order_type=order.order_type,
+            qty=result.qty or order.qty,
+            notional=result.notional or order.notional,
+            limit_price=order.limit_price,
+            submitted_at=datetime.now(timezone.utc),
+            execution_status=result.status,
+            provider_message=result.provider_message,
+            # default=str: belt-and-suspenders alongside the alpaca.py
+            # model_dump(mode="json") fix.
+            raw_response_json=json.dumps(result.raw, default=str) if result.raw else None,
+            updated_at=datetime.now(timezone.utc),
         )
+        session.add(provider_execution)
+        session.commit()
+        session.refresh(provider_execution)
 
-    event_svc.log_event(
-        packet.source_id,
-        EventType.executed,
-        session,
-        summary=f"Order submitted via Alpaca ({'paper' if ALPACA_PAPER else 'live'}) for packet {packet.id}",
-        metadata={
-            "packet_id": str(packet.id),
-            "allocation_id": allocation.id,
-            "provider": "alpaca",
-            "mode": "paper" if ALPACA_PAPER else "live",
-            "external_order_id": result.order_id,
-            "symbol": result.symbol,
-            "side": result.side,
-            "qty": result.qty,
-            "notional": result.notional,
-            "status": result.status,
-        },
-    )
-    alert_svc.raise_alert(
-        alert_type=AlertType.execution_completed,
-        title=f"Order submitted ({'paper' if ALPACA_PAPER else 'live'}) - packet {packet.id}",
-        body=f"Alpaca {'paper ' if ALPACA_PAPER else 'live '}order {result.order_id} for {result.symbol} is {result.status}.",
-        session=session,
-        priority=AlertPriority.medium,
-        source_id=packet.source_id,
-    )
+        order_side = (order.side or "").lower()
+        if order_side == "buy":
+            lifecycle_svc.record_entry_submission(
+                session,
+                symbol=result.symbol,
+                source_id=packet.source_id,
+                packet_id=packet.id,
+                allocation_id=allocation.id,
+                provider_order_id=result.order_id,
+                entered_at=provider_execution.submitted_at,
+            )
+        elif order_side == "sell":
+            lifecycle_svc.record_exit_submission(
+                session,
+                symbol=result.symbol,
+                source_id=packet.source_id,
+                packet_id=packet.id,
+                provider_order_id=result.order_id,
+                submitted_at=provider_execution.submitted_at,
+            )
+
+        event_svc.log_event(
+            packet.source_id,
+            EventType.executed,
+            session,
+            summary=f"Order submitted via Alpaca ({'paper' if ALPACA_PAPER else 'live'}) for packet {packet.id}",
+            metadata={
+                "packet_id": str(packet.id),
+                "allocation_id": allocation.id,
+                "provider": "alpaca",
+                "mode": "paper" if ALPACA_PAPER else "live",
+                "external_order_id": result.order_id,
+                "symbol": result.symbol,
+                "side": result.side,
+                "qty": result.qty,
+                "notional": result.notional,
+                "status": result.status,
+            },
+        )
+        alert_svc.raise_alert(
+            alert_type=AlertType.execution_completed,
+            title=f"Order submitted ({'paper' if ALPACA_PAPER else 'live'}) - packet {packet.id}",
+            body=f"Alpaca {'paper ' if ALPACA_PAPER else 'live '}order {result.order_id} for {result.symbol} is {result.status}.",
+            session=session,
+            priority=AlertPriority.medium,
+            source_id=packet.source_id,
+        )
+    except Exception as record_exc:  # noqa: BLE001
+        session.rollback()
+        raise BrokerAcceptedRecordingIncompleteError(
+            f"Broker accepted order {result.order_id} ({result.status}) for packet {packet.id}, "
+            f"but local recording failed: {type(record_exc).__name__}: {record_exc}",
+            order_id=result.order_id,
+            status=result.status,
+            symbol=result.symbol,
+        ) from record_exc
+
     return result
 
 
@@ -1024,6 +1069,28 @@ def auto_place_trade_for_source(source_id: str, session: Session) -> Optional[Tr
         _mark_packet_trade_skipped(packet, session, err)
         _logger.warning("auto_place_trade: failed for source %s: %s", source_id, exc)
         return None
+    except BrokerAcceptedRecordingIncompleteError as exc:
+        # MUST be caught before the generic Exception handler below and
+        # MUST NOT call _mark_packet_trade_skipped() — that framing
+        # ("skipped before broker submission") is false here: the broker
+        # already accepted this order. Route to a distinct, loud path
+        # instead so a human reconciles it deliberately.
+        diag_svc.record_error(
+            "execution.status",
+            str(exc),
+            affected_component="execution.auto_trade.recording",
+            metadata={
+                "source_id": source_id, "packet_id": str(packet.id),
+                "broker_order_id": exc.order_id, "broker_status": exc.status,
+            },
+        )
+        _mark_packet_broker_accepted_recording_incomplete(packet, session, exc)
+        _logger.critical(
+            "auto_place_trade: BROKER ACCEPTED order %s (%s) for packet %s but local recording "
+            "failed — needs manual reconciliation, NOT a retry candidate: %s",
+            exc.order_id, exc.status, packet.id, exc,
+        )
+        return None
     except Exception as exc:
         diag_svc.record_error(
             "execution.status",
@@ -1103,6 +1170,55 @@ def _mark_packet_trade_skipped(
                 )
             )
         session.commit()
+
+
+def _mark_packet_broker_accepted_recording_incomplete(
+    packet: Optional[ActionPacket],
+    session: Session,
+    exc: BrokerAcceptedRecordingIncompleteError,
+) -> None:
+    """
+    Distinct from _mark_packet_trade_skipped(): the broker has already
+    accepted this order (exc.order_id/exc.status are real). This must
+    NEVER call fail_packet_execution() or otherwise set the packet to
+    failed/canceled — that would misrepresent a real, possibly-filled
+    order as one that didn't happen, and (worse) could make it look
+    "safe" for something else to submit a replacement.
+
+    Deliberately does NOT touch execution_state (it stays wherever
+    submit_packet_trade() last left it, e.g. in_progress) — this packet
+    belongs in neither the "resolved" nor the "safe to retry" bucket.
+    Only execution_notes changes, tagged with a distinct
+    BROKER_ACCEPTED_RECORDING_INCOMPLETE prefix so it's never confused
+    with an ordinary skip/failure reason, plus a high-priority alert for
+    manual reconciliation.
+    """
+    if not packet:
+        return
+    now = datetime.now(timezone.utc)
+    packet.execution_notes = (
+        f"BROKER_ACCEPTED_RECORDING_INCOMPLETE: order_id={exc.order_id} status={exc.status} "
+        f"symbol={exc.symbol} — {exc}"
+    )
+    packet.execution_updated_at = now
+    session.add(packet)
+    session.commit()
+
+    try:
+        alert_svc.raise_alert(
+            alert_type=AlertType.execution_failed,
+            title=f"RECONCILE: broker accepted order but local recording failed — packet {packet.id}",
+            body=(
+                f"Alpaca order {exc.order_id} ({exc.status}) for {exc.symbol} was placed successfully, "
+                f"but Hunter's own record of it failed to save. This is NOT a failed trade — check the "
+                f"broker directly for {exc.order_id} before taking any other action on this packet."
+            ),
+            session=session,
+            priority=AlertPriority.critical,
+            source_id=packet.source_id,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _extract_trade_symbol(source: IncomeSource) -> Optional[str]:
