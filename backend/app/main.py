@@ -397,8 +397,67 @@ def _log_production_inventory_diagnostics() -> None:
                 "INVENTORY_DIAG bridge_check canonical_opportunity_count=%d income_source_count=%d id_overlap=%d",
                 len(opp_ids), len(src_ids), len(opp_ids & src_ids),
             )
+
+            # Classify the historical "completed" tasks (Commander,
+            # 2026-09-10): task_id/task_type/engine/source_id are Hunter's
+            # own internal identifiers, not personal data. outcome_notes
+            # is Hunter's own short generated summary string (e.g. "sent
+            # real outreach email" / "prepared service outreach copy") —
+            # truncated defensively, never full task spec/contact content.
+            from app.models.task import Task, TaskAttempt, TaskStatus
+
+            completed = session.exec(select(Task).where(Task.status == TaskStatus.completed)).all()
+            for t in completed:
+                last_attempt = session.exec(
+                    select(TaskAttempt)
+                    .where(TaskAttempt.task_id == t.task_id)
+                    .order_by(TaskAttempt.attempt_number.desc())
+                ).first()
+                _startup_logger.info(
+                    "INVENTORY_DIAG completed_task task_id=%s task_type=%s source_id=%s engine=%s outcome_notes=%r",
+                    t.task_id, t.task_type, t.source_id,
+                    last_attempt.engine if last_attempt else None,
+                    (t.outcome_notes or "")[:120],
+                )
     except Exception as exc:  # noqa: BLE001
         _startup_logger.warning("inventory diagnostics failed — %s: %s", type(exc).__name__, exc)
+
+    # Separate try/except: broker connectivity failure must never mask or
+    # abort the DB diagnostics above. Read-only Alpaca queries via the
+    # existing, tested AlpacaAdapter (Commander, 2026-09-10: "use the
+    # deployed application's existing broker connection for narrowly
+    # scoped, read-only diagnostics. Log only redacted summaries.") — no
+    # order placement, no account_id, no per-symbol/per-order detail;
+    # aggregate counts and this account's own dollar figures only (not
+    # personal data — Hunter already reports these via /budget and the
+    # EOD report).
+    try:
+        from app.integration.brokerage.alpaca import get_alpaca_adapter
+
+        adapter = get_alpaca_adapter()
+        account = adapter.get_account()
+        _startup_logger.info(
+            "INVENTORY_DIAG broker_account status=%s currency=%s equity=%.2f cash=%.2f buying_power=%.2f",
+            account.status, account.currency, account.portfolio_value, account.cash, account.buying_power,
+        )
+
+        positions = adapter.get_positions()
+        total_market_value = sum(p.market_value or 0.0 for p in positions)
+        _startup_logger.info(
+            "INVENTORY_DIAG broker_positions open_count=%d total_market_value=%.2f",
+            len(positions), total_market_value,
+        )
+
+        orders = adapter.list_orders(limit=100)
+        by_status: dict[str, int] = {}
+        for o in orders:
+            by_status[o.status] = by_status.get(o.status, 0) + 1
+        _startup_logger.info(
+            "INVENTORY_DIAG broker_orders returned=%d by_status=%s (most-recent-first, limit=100)",
+            len(orders), by_status,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _startup_logger.warning("broker read-only diagnostic failed — %s: %s", type(exc).__name__, exc)
 
 
 @asynccontextmanager
