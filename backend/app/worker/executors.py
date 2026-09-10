@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -159,16 +159,46 @@ def _execute_service_outreach(task: dict[str, Any], spec: dict[str, Any]) -> Wor
         f"Business type: {business_type}\nSearch query: {search_query}\n"
     )
     artifact_path = _write_text_artifact(task["task_id"], "service_outreach_draft.md", draft)
+
+    # Real send, not just a draft, when a real contact_email exists and
+    # SMTP is actually configured on this worker — reuses the exact same
+    # SMTP infrastructure already used for Commander alert emails
+    # (app.services.email_notify), just not scoped to Commander.
+    # "Drafting is not sending" (Commander, 2026-09-10): email_sent below
+    # is a real, confirmed SMTP transmission or it's False with a reason —
+    # never inferred, never implying the recipient read or replied.
+    email_sent = False
+    send_error: Optional[str] = None
+    if contact_email:
+        from app.services import email_notify
+
+        subject = f"Regarding your {business_type} — quick question"
+        try:
+            email_sent = email_notify.send_email_to(contact_email, subject, draft)
+            if not email_sent:
+                send_error = "SMTP not configured or send failed — see worker logs"
+        except Exception as exc:  # noqa: BLE001
+            send_error = f"{type(exc).__name__}: {exc}"
+
     outcome = {
         "draft_created": True,
         "contact_email": contact_email,
         "contact_url": contact_url,
         "artifact_path": artifact_path,
         "search_query": search_query,
+        # Real, confirmed-or-not outcome — distinct from draft_created.
+        # A True here means smtplib.sendmail() completed without raising;
+        # it is not proof of delivery, a read, a reply, or any acceptance.
+        "email_sent": email_sent,
+        "send_error": send_error,
     }
     return WorkerResult(
         outcome=outcome,
-        notes="Hosted HVA prepared service outreach copy.",
+        notes=(
+            "Hosted HVA sent real outreach email." if email_sent
+            else "Hosted HVA prepared service outreach copy (not sent — "
+                 f"{send_error or 'no contact_email'})."
+        ),
         engine="claude_cu",
         trace_reference=artifact_path,
     )

@@ -50,7 +50,7 @@ def send_alert_email(title: str, body: str, priority: str) -> bool:
         return False
 
     subject = f"[Hunter {'URGENT' if priority == 'critical' else 'Alert'}] {title}"
-    return _send(subject, body)
+    return _send(subject, body, to_address=COMMANDER_EMAIL)
 
 
 def send_email(subject: str, body: str) -> bool:
@@ -58,19 +58,37 @@ def send_email(subject: str, body: str) -> bool:
     if not _is_configured():
         logger.warning("Email not configured (SMTP_* env vars missing)")
         return False
-    return _send(subject, body)
+    return _send(subject, body, to_address=COMMANDER_EMAIL)
 
 
-def _is_configured() -> bool:
+def send_email_to(to_address: str, subject: str, body: str) -> bool:
+    """Send a real email to an arbitrary recipient — the same SMTP
+    infrastructure as send_email()/send_alert_email(), just not scoped to
+    Commander. Used by the service-outreach executor to actually send a
+    drafted cold-outreach email to a real business contact_email, instead
+    of only drafting it. Returns True only on a confirmed SMTP send —
+    never implies the recipient read it, replied, or agreed to anything."""
+    if not to_address or not to_address.strip():
+        logger.warning("send_email_to: empty recipient address")
+        return False
+    if not _is_configured(sender_only=True):
+        logger.warning("Email not configured (SMTP_* env vars missing)")
+        return False
+    return _send(subject, body, to_address=to_address.strip())
+
+
+def _is_configured(*, sender_only: bool = False) -> bool:
+    if sender_only:
+        return bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD)
     return bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and COMMANDER_EMAIL)
 
 
-def _send(subject: str, body: str) -> bool:
+def _send(subject: str, body: str, *, to_address: str) -> bool:
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_USERNAME}>"
-        msg["To"] = COMMANDER_EMAIL
+        msg["To"] = to_address
 
         # Plain text part
         msg.attach(MIMEText(body, "plain"))
@@ -92,9 +110,9 @@ Hunter v0.2.0 &mdash; autonomous revenue engine
             server.ehlo()
             server.starttls(context=context)
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(SMTP_USERNAME, COMMANDER_EMAIL, msg.as_string())
+            server.sendmail(SMTP_USERNAME, to_address, msg.as_string())
 
-        logger.info("Email sent to %s — %s", COMMANDER_EMAIL, subject)
+        logger.info("Email sent to %s — %s", to_address, subject)
         return True
 
     except Exception as exc:
