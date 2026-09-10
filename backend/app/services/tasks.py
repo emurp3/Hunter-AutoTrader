@@ -9,6 +9,7 @@ outcomes back. Hunter closes the loop into ledger/strategy/budget.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -25,6 +26,8 @@ from app.models.alert import AlertPriority, AlertType
 from app.models.event import EventType
 from app.services import alerts as alert_svc
 from app.services import events as event_svc
+
+logger = logging.getLogger("hunter.tasks")
 
 # Worker must heartbeat within this window or the task is re-claimable.
 _LEASE_SECONDS = 120
@@ -564,19 +567,52 @@ _CATEGORY_TO_TASK_TYPE: dict[str, str] = {
 }
 
 
+# Recovery-board finding: every task_type above is assignable by the two
+# maps above, but app.worker.executors.execute_task only actually
+# implements a subset of them — any other task_type is guaranteed to be
+# claimed, fail immediately, and escalate as "Unsupported task_type",
+# burning a worker attempt and a Commander-visible alert for zero chance
+# of success. Capability-aware routing: don't dispatch what nothing can
+# execute. Keep this in sync with the branches in
+# app.worker.executors.execute_task.
+SUPPORTED_TASK_TYPES = {
+    "marketplace_listing",
+    "service_outreach",
+    "digital_product_launch",
+    "government_portal_search",
+    "intake_form_submission",
+    "generic_execution",
+}
+
+
 def resolve_task_type(source, *, execution_path: Optional[str] = None) -> Optional[str]:
-    """Map an IncomeSource to the appropriate hosted worker task_type string."""
+    """Map an IncomeSource to the appropriate hosted worker task_type
+    string — but only when a real executor exists for it (see
+    SUPPORTED_TASK_TYPES). A category/origin that maps to a task_type
+    with no executor is deliberately routed to None (skip) rather than
+    dispatched to fail: this is a known capability gap, not a fresh
+    Commander policy decision, and doesn't need to consume a worker
+    attempt or raise an escalation to be visible — it's logged here."""
     if execution_path == "trading":
         return None
+
+    t: Optional[str] = None
     if source.origin_module:
         t = _ORIGIN_TO_TASK_TYPE.get(source.origin_module)
-        if t:
-            return t
-    if source.category:
+    if not t and source.category:
         t = _CATEGORY_TO_TASK_TYPE.get(source.category.lower())
-        if t:
-            return t
-    return None
+    if not t:
+        return None
+
+    if t not in SUPPORTED_TASK_TYPES:
+        logger.info(
+            "resolve_task_type: skipping dispatch for source_id=%s — "
+            "task_type=%s has no wired executor (capability gap, not a "
+            "policy decision)",
+            getattr(source, "source_id", "?"), t,
+        )
+        return None
+    return t
 
 
 # ── Auto-dispatch (called from orchestrator) ──────────────────────────────────
