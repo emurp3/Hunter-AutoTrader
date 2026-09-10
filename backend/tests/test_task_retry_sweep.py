@@ -29,9 +29,9 @@ def _make_engine():
     return engine
 
 
-def _dispatch(session: Session, *, max_attempts: int = 3) -> Task:
+def _dispatch(session: Session, *, max_attempts: int = 3, task_type: str = "marketplace_listing") -> Task:
     return task_svc.dispatch_task(
-        task_type="marketplace_listing",
+        task_type=task_type,
         spec_payload={},
         session=session,
         source_type="income_source",
@@ -115,6 +115,47 @@ def test_escalated_and_completed_tasks_are_never_touched():
         assert retried == []
         assert session.get(Task, escalated.id).status == TaskStatus.escalated
         assert session.get(Task, completed.id).status == TaskStatus.completed
+
+
+def test_submission_capable_task_types_are_never_auto_retried():
+    """Live-production containment (2026-09-10): a task can fail with
+    attempts remaining AFTER its executor already reached a real external
+    action (e.g. clicked submit on a claim/intake form) but before the
+    worker reported completion. Retrying that blind would replay the
+    external action with no reconciliation. government_portal_search,
+    intake_form_submission (real submission-capable), and
+    generic_execution (real trades) must never be auto-retried by this
+    sweep, however old or however many attempts remain."""
+    engine = _make_engine()
+    with Session(engine) as session:
+        old = datetime.now(timezone.utc) - timedelta(seconds=6000)
+        excluded_tasks = [
+            _dispatch(session, max_attempts=5, task_type=t)
+            for t in sorted(task_svc.RETRY_SWEEP_EXCLUDED_TASK_TYPES)
+        ]
+        for t in excluded_tasks:
+            _claim_and_fail(session, t, failed_at=old)
+
+        retried = task_svc.sweep_and_retry_failed_tasks(session, min_age_seconds=300)
+
+        assert retried == []
+        for t in excluded_tasks:
+            assert session.get(Task, t.id).status == TaskStatus.failed
+
+
+def test_non_submission_task_types_still_retry_alongside_excluded_ones():
+    engine = _make_engine()
+    with Session(engine) as session:
+        old = datetime.now(timezone.utc) - timedelta(seconds=6000)
+        safe_task = _dispatch(session, max_attempts=3, task_type="marketplace_listing")
+        unsafe_task = _dispatch(session, max_attempts=3, task_type="intake_form_submission")
+        _claim_and_fail(session, safe_task, failed_at=old)
+        _claim_and_fail(session, unsafe_task, failed_at=old)
+
+        retried = task_svc.sweep_and_retry_failed_tasks(session, min_age_seconds=300)
+
+        assert [t.task_id for t in retried] == [safe_task.task_id]
+        assert session.get(Task, unsafe_task.id).status == TaskStatus.failed
 
 
 def test_sweep_is_idempotent_once_a_task_is_retrying():

@@ -456,6 +456,27 @@ def retry_task(task_id: str, session: Session) -> Task:
 _RETRY_SWEEP_MIN_AGE_SECONDS = 300  # let a transient failure (site hiccup,
 # timeout) settle before retrying, rather than hot-looping the same error.
 
+# Live-production containment (Commander, 2026-09-10): "attempts remaining"
+# alone is not sufficient criteria for a safe automatic retry. A task can
+# fail with attempts remaining AFTER its executor already reached a real,
+# possibly-irreversible external action (e.g. clicked submit on a claim/
+# intake form) but before the worker reported completion — retrying that
+# blind replays the external action with no reconciliation check. Every
+# task type currently reachable by this sweep is source_type=
+# "canonical_opportunity"; the two capable of a real external submission
+# are excluded here until each has a real pre-retry reconciliation check
+# (e.g. "was a receipt already recorded for this opportunity"), not just an
+# attempts-remaining count. generic_execution (trading) is excluded for the
+# same reason — a retry must never risk placing a duplicate trade.
+# marketplace_listing/service_outreach/digital_product_launch are confirmed
+# prepare/draft-only (no real external completion path exists in their
+# executors), so retrying those has no duplicate-external-effect risk.
+RETRY_SWEEP_EXCLUDED_TASK_TYPES = {
+    "government_portal_search",
+    "intake_form_submission",
+    "generic_execution",
+}
+
 
 def sweep_and_retry_failed_tasks(
     session: Session, *, min_age_seconds: int = _RETRY_SWEEP_MIN_AGE_SECONDS
@@ -463,15 +484,19 @@ def sweep_and_retry_failed_tasks(
     """Find ordinary (non-exhausted) failed tasks old enough to retry and
     re-queue them via retry_task(). Bounded and safe: only tasks that
     still have attempts remaining are eligible (retry_task() itself
-    refuses otherwise), and the age floor avoids retrying a failure that
-    just happened moments ago. Idempotent to call repeatedly — a task
-    moves out of `failed` status the moment it's retried."""
+    refuses otherwise), the age floor avoids retrying a failure that just
+    happened moments ago, and RETRY_SWEEP_EXCLUDED_TASK_TYPES keeps this
+    sweep away from anything that could replay a real external action
+    without reconciliation (see comment above). Idempotent to call
+    repeatedly — a task moves out of `failed` status the moment it's
+    retried."""
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
     candidates = session.exec(
         select(Task).where(
             Task.status == TaskStatus.failed,
             Task.failed_at.is_not(None),
             Task.failed_at <= cutoff,
+            Task.task_type.notin_(RETRY_SWEEP_EXCLUDED_TASK_TYPES),
         )
     ).all()
     retried: list[Task] = []
