@@ -53,10 +53,21 @@ CYCLE_DAYS = 28
 # Commander's 5/day, 25/week, 100/4-week target is scoped to the
 # compliance-recovery ("149 campaign") ledger only. Equities trading has
 # its own, entirely separate accounting (ProviderExecution/ExecutionOutcome
-# in app.services.execution) and must never count toward this quota just
-# because a candidate happens to carry lane="trading" in this ledger (e.g.
-# the addendum-seeded DARKPOOL row) — excluded here rather than counted.
-QUOTA_EXCLUDED_LANES = {"trading"}
+# in app.services.execution) and must never count toward this quota.
+#
+# Correction (Commander, 2026-09-10): a blocklist (QUOTA_EXCLUDED_LANES =
+# {"trading"}) is insufficient — it silently counts anything that ISN'T
+# named "trading" (a future crypto lane, a mistagged row, an unexpected
+# lane string), on the unproven assumption that everything else belongs
+# to the campaign. This is a positive allowlist instead: only these lanes
+# are the actual 149/compliance-recovery campaign, per every candidate
+# app.services.hunter_addendum_seed currently seeds
+# ("compliance_recovery", "legal_claims", "data_service", "service" — the
+# UCP-01/GOOGLE-02/PUBLICRECORDS/QRRE/GHOSTJOB/TRADEMARK candidates;
+# DARKPOOL is lane="trading" and deliberately excluded). A lane not in
+# this set — including "trading", "crypto", or any future/unexpected
+# value — does not count, full stop; nothing is exempted by name alone.
+CAMPAIGN_LANES = {"compliance_recovery", "legal_claims", "data_service", "service"}
 
 
 class SundayLockout(PermissionError):
@@ -415,12 +426,17 @@ def record_rescue_attempt(
 
 
 def _campaign_scoped_receipts(session: Session, start: datetime, end: datetime) -> set[str]:
-    """DISTINCT execution receipts in [start, end) that belong to the
-    149/compliance-recovery campaign — i.e. exclude any ExecutionRecord
-    whose linked CanonicalOpportunity.lane is out of scope for this quota
-    (QUOTA_EXCLUDED_LANES). A record whose opportunity row is missing is
-    kept counted (fail closed toward counting real work, not toward
-    silently discounting it)."""
+    """DISTINCT execution receipts in [start, end) that provably belong to
+    the 149/compliance-recovery campaign — positive membership: a receipt
+    only counts when its linked CanonicalOpportunity resolves AND its
+    lane is in CAMPAIGN_LANES. Anything unresolvable or out of scope
+    fails closed (does not count) rather than being counted by default —
+    "other activity does not count merely because it shares a table"
+    (Commander, 2026-09-10). A resolvable-but-orphaned receipt (the
+    opportunity row is missing — should not happen given
+    record_execution() always requires a real canonical_opportunity_id,
+    but data can drift) is a genuine reconciliation problem, not evidence
+    of campaign work, so it does not count either."""
     rows = session.exec(
         select(ExecutionRecord).where(
             ExecutionRecord.timestamp >= start,
@@ -432,7 +448,7 @@ def _campaign_scoped_receipts(session: Session, start: datetime, end: datetime) 
         if not r.receipt_reference:
             continue
         opp = _get_opportunity(session, r.canonical_opportunity_id)
-        if opp is not None and opp.lane in QUOTA_EXCLUDED_LANES:
+        if opp is None or opp.lane not in CAMPAIGN_LANES:
             continue
         receipts.add(r.receipt_reference)
     return receipts

@@ -5,9 +5,17 @@ CanonicalOpportunity belonged to — so a real trade recorded against the
 seeded trading-lane candidate (DARKPOOL) would count toward the same quota
 meant only for the 149/compliance-recovery campaign. Commander's decision:
 "The 5/day, 25/week, 100/four-week target applies only to the 149
-campaign." This is a bounded, campaign-scoping fix only — no change to
-record_execution()'s receipt/endpoint invariants, no change to what counts
-as a valid execution, just which lanes feed the quota count.
+campaign."
+
+First pass used a blocklist (exclude lane="trading"). Commander's follow-up
+correction: that's insufficient unless every OTHER counted record is
+proven to belong to the campaign — a blocklist silently counts anything
+not explicitly named. This is now a positive allowlist
+(CAMPAIGN_LANES) — only proven campaign lanes count, and anything
+unresolvable or out of scope (including an unexpected/future lane, not
+just "trading") fails closed. No change to record_execution()'s
+receipt/endpoint invariants or to what counts as a valid execution —
+just which lanes feed the quota count.
 """
 
 from __future__ import annotations
@@ -125,10 +133,13 @@ def test_mixed_lanes_only_campaign_lanes_count_toward_quota_pass():
     assert status["daily_verdict"] == "PASS"
 
 
-def test_execution_record_with_no_linked_opportunity_still_counts():
-    """A receipt whose CanonicalOpportunity row can't be found (e.g. a
-    data inconsistency) must fail toward counting real work, never toward
-    silently discounting it."""
+def test_execution_record_with_no_linked_opportunity_does_not_count():
+    """Positive membership: a receipt whose CanonicalOpportunity row can't
+    be found (e.g. a data inconsistency — shouldn't happen given
+    record_execution() always requires a real canonical_opportunity_id,
+    but data can drift) fails closed. It cannot be proven to belong to
+    the campaign, so it must not inflate the campaign's own quota —
+    "other activity does not count merely because it shares a table"."""
     session = _make_session()
     acct.record_execution(
         session,
@@ -141,4 +152,39 @@ def test_execution_record_with_no_linked_opportunity_still_counts():
         timestamp=_TS,
         enforce_sunday_lockout=False,
     )
-    assert acct.get_execution_count(session, _NON_SUNDAY) == 1
+    assert acct.get_execution_count(session, _NON_SUNDAY) == 0
+
+
+def test_unexpected_lane_not_named_trading_also_does_not_count():
+    """The whole point of a positive allowlist over a blocklist: a lane
+    that isn't "trading" (e.g. a future crypto lane, or a mistagged row)
+    must not be counted just because it's not on a exclusion list."""
+    session = _make_session()
+    _make_candidate(session, "CRYPTO-CAND", lane="crypto")
+
+    acct.record_execution(
+        session,
+        canonical_opportunity_id="CRYPTO-CAND",
+        source="test",
+        action_description="placed a crypto order",
+        actions_taken="bought BTC",
+        external_endpoint="https://broker.example/crypto/1",
+        receipt_reference="crypto-receipt-1",
+        timestamp=_TS,
+        enforce_sunday_lockout=False,
+    )
+
+    assert acct.get_execution_count(session, _NON_SUNDAY) == 0
+
+
+def test_every_currently_seeded_addendum_lane_is_in_campaign_lanes():
+    """Guards against drift: every lane app.services.hunter_addendum_seed
+    actually seeds today (compliance_recovery, legal_claims, data_service,
+    service — DARKPOOL's "trading" is the deliberate exception) must be
+    covered by CAMPAIGN_LANES, or real campaign candidates would silently
+    stop counting toward their own quota."""
+    from app.services.hunter_addendum_seed import _CANDIDATES
+
+    seeded_lanes = {c["lane"] for c in _CANDIDATES}
+    non_campaign = seeded_lanes - acct.CAMPAIGN_LANES
+    assert non_campaign == {"trading"}
