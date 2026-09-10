@@ -50,6 +50,14 @@ WEEKLY_EXECUTION_QUOTA = 25
 CYCLE_EXECUTION_QUOTA = 100
 CYCLE_DAYS = 28
 
+# Commander's 5/day, 25/week, 100/4-week target is scoped to the
+# compliance-recovery ("149 campaign") ledger only. Equities trading has
+# its own, entirely separate accounting (ProviderExecution/ExecutionOutcome
+# in app.services.execution) and must never count toward this quota just
+# because a candidate happens to carry lane="trading" in this ledger (e.g.
+# the addendum-seeded DARKPOOL row) — excluded here rather than counted.
+QUOTA_EXCLUDED_LANES = {"trading"}
+
 
 class SundayLockout(PermissionError):
     """Raised when an autonomous action is attempted on a Sunday."""
@@ -406,20 +414,38 @@ def record_rescue_attempt(
 # ── Quota / reconciliation ────────────────────────────────────────────────
 
 
-def get_execution_count(session: Session, day: Optional[date] = None) -> int:
-    """Count DISTINCT execution receipts for the given day (default:
-    today). This is the only function the quota check should read from."""
-    d = day or datetime.now(timezone.utc).date()
-    start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
+def _campaign_scoped_receipts(session: Session, start: datetime, end: datetime) -> set[str]:
+    """DISTINCT execution receipts in [start, end) that belong to the
+    149/compliance-recovery campaign — i.e. exclude any ExecutionRecord
+    whose linked CanonicalOpportunity.lane is out of scope for this quota
+    (QUOTA_EXCLUDED_LANES). A record whose opportunity row is missing is
+    kept counted (fail closed toward counting real work, not toward
+    silently discounting it)."""
     rows = session.exec(
         select(ExecutionRecord).where(
             ExecutionRecord.timestamp >= start,
             ExecutionRecord.timestamp < end,
         )
     ).all()
-    receipts = {r.receipt_reference for r in rows if r.receipt_reference}
-    return len(receipts)
+    receipts: set[str] = set()
+    for r in rows:
+        if not r.receipt_reference:
+            continue
+        opp = _get_opportunity(session, r.canonical_opportunity_id)
+        if opp is not None and opp.lane in QUOTA_EXCLUDED_LANES:
+            continue
+        receipts.add(r.receipt_reference)
+    return receipts
+
+
+def get_execution_count(session: Session, day: Optional[date] = None) -> int:
+    """Count DISTINCT, campaign-scoped execution receipts for the given
+    day (default: today). This is the only function the quota check
+    should read from."""
+    d = day or datetime.now(timezone.utc).date()
+    start = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    return len(_campaign_scoped_receipts(session, start, end))
 
 
 def get_weekly_execution_count(session: Session, day: Optional[date] = None) -> int:
@@ -427,13 +453,7 @@ def get_weekly_execution_count(session: Session, day: Optional[date] = None) -> 
     week_start = d - timedelta(days=d.weekday())
     start = datetime.combine(week_start, datetime.min.time(), tzinfo=timezone.utc)
     end = start + timedelta(days=7)
-    rows = session.exec(
-        select(ExecutionRecord).where(
-            ExecutionRecord.timestamp >= start,
-            ExecutionRecord.timestamp < end,
-        )
-    ).all()
-    return len({r.receipt_reference for r in rows if r.receipt_reference})
+    return len(_campaign_scoped_receipts(session, start, end))
 
 
 def get_cycle_execution_count(session: Session, day: Optional[date] = None, cycle_start: Optional[date] = None) -> int:
@@ -441,13 +461,7 @@ def get_cycle_execution_count(session: Session, day: Optional[date] = None, cycl
     cs = cycle_start or (d - timedelta(days=d.weekday()) - timedelta(weeks=3))
     start = datetime.combine(cs, datetime.min.time(), tzinfo=timezone.utc)
     end = start + timedelta(days=CYCLE_DAYS)
-    rows = session.exec(
-        select(ExecutionRecord).where(
-            ExecutionRecord.timestamp >= start,
-            ExecutionRecord.timestamp < end,
-        )
-    ).all()
-    return len({r.receipt_reference for r in rows if r.receipt_reference})
+    return len(_campaign_scoped_receipts(session, start, end))
 
 
 def get_quota_status(session: Session, day: Optional[date] = None) -> dict:
