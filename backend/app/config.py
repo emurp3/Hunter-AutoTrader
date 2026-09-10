@@ -306,6 +306,23 @@ SOURCES_BOUNTY_MAX_RESULTS: int = int(os.getenv("HUNTER_SOURCES_BOUNTY_MAX_RESUL
 # hammering free public APIs (grants.gov, Slickdeals RSS, HN, etc.).
 DISCOVERY_SCAN_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_DISCOVERY_SCAN_INTERVAL_SECONDS", "10800"))
 
+# Recovery-board fix: the compliance-recovery (149-campaign) ledger's own
+# research/quota-protection loop previously had no scheduler trigger at
+# all — only two hardcoded candidates ever advanced automatically. Same
+# 3h cadence as discovery: light candidate count, each pass does a few
+# HTTP fetches + LLM calls per still-open candidate.
+LEDGER_LOOP_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_LEDGER_LOOP_INTERVAL_SECONDS", "10800"))
+
+# Recovery-board fix: a Commander answer to a [MANUAL-ACTION-NEEDED]
+# checkpoint previously only resumed at the next redeploy. 15 minutes is
+# frequent enough that "answer the checkpoint" feels responsive without
+# adding meaningful load.
+CHECKPOINT_RESUME_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_CHECKPOINT_RESUME_INTERVAL_SECONDS", "900"))
+
+# Recovery-board fix: ordinary (non-exhausted) task failures had no
+# automatic retry path — retry_task() existed but nothing called it.
+TASK_RETRY_SWEEP_INTERVAL_SECONDS: int = int(os.getenv("HUNTER_TASK_RETRY_SWEEP_INTERVAL_SECONDS", "900"))
+
 # Signal engine (crypto momentum + congressional/executive-branch disclosure
 # monitoring). Monitoring/logging always runs when signal_scan_task is
 # scheduled. Real, unattended Alpaca trade execution for VIP-watchlist

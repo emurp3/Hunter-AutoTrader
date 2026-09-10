@@ -226,6 +226,85 @@ async def morning_report_task() -> None:
         logger.warning("morning_report_task: delivery exception — %s", exc)
 
 
+async def ledger_recovery_loop_task() -> None:
+    """
+    Autonomous scheduling for the compliance-recovery (149-campaign)
+    ledger — the exact same call the POST /hunter-ledger/loop/run endpoint
+    already makes (Hunter's own research engine as the quota loop's
+    preflight), just on a timer instead of requiring a human/API caller.
+    Recovery-board finding: this subsystem had no scheduler or bootstrap
+    trigger at all — only the two hardcoded UCP-01/GOOGLE-02 candidates
+    ever advanced on their own. This closes that gap generically for
+    every seeded candidate, not just those two.
+
+    Bounded by design, not by this job: run_quota_protection_loop only
+    pulls candidates still in pending_research/screened_only/watchlist,
+    caps at max_iterations, and its default executor never fabricates an
+    execution — it can only advance research/disposition state or (via a
+    real wired executor elsewhere) record a genuine receipt.
+    """
+    logger.info("ledger_recovery_loop_task: starting")
+    from app.services import execution_accounting as acct
+    from app.services.quota_loop import run_quota_protection_loop
+    from app.services.research import engine as research_engine
+
+    with Session(engine) as session:
+        try:
+            result = run_quota_protection_loop(
+                session, preflight_fn=research_engine.make_research_preflight(session)
+            )
+            logger.info(
+                "ledger_recovery_loop_task: complete — verdict=%s executions=%d steps=%d",
+                result.verdict, result.execution_count, len(result.steps),
+            )
+        except acct.SundayLockout:
+            logger.info("ledger_recovery_loop_task: skipped — Sunday lockout")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("ledger_recovery_loop_task: failed — %s", exc)
+
+
+async def checkpoint_resume_task() -> None:
+    """
+    Recovery-board finding: resume_manual_action_tasks() (Commander's
+    to-do-list resume step) only ever ran once, at process boot — a
+    Commander answer to a [MANUAL-ACTION-NEEDED] checkpoint sat idle
+    until the next redeploy. This runs the exact same idempotent function
+    on an interval instead, so an answer is picked up without anyone
+    having to restart the service. Idempotent per answer timestamp — see
+    resume_manual_action_tasks()'s docstring.
+    """
+    from app.services import tasks as task_svc
+
+    with Session(engine) as session:
+        try:
+            resumed = task_svc.resume_manual_action_tasks(session)
+            if resumed:
+                logger.info("checkpoint_resume_task: resumed %d task(s)", len(resumed))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("checkpoint_resume_task: failed — %s", exc)
+
+
+async def task_retry_sweep_task() -> None:
+    """
+    Recovery-board finding: fail_task() (the "attempts remain, transient
+    failure" terminal state — distinct from escalate_task()'s "attempts
+    exhausted, needs Commander") had no automatic retry path anywhere;
+    retry_task() existed but was never called. This sweep is that missing
+    link — safe and bounded: only tasks with attempts remaining and old
+    enough to not be a hot-loop are eligible (see
+    tasks.sweep_and_retry_failed_tasks()).
+    """
+    from app.services import tasks as task_svc
+
+    with Session(engine) as session:
+        try:
+            retried = task_svc.sweep_and_retry_failed_tasks(session)
+            if retried:
+                logger.info("task_retry_sweep_task: retried %d task(s)", len(retried))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("task_retry_sweep_task: failed — %s", exc)
+
+
 async def signal_scan_task() -> None:
     """
     Runs the signal engine (crypto momentum + congressional/executive-branch

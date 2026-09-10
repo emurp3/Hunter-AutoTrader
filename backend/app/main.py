@@ -51,8 +51,8 @@ from app.models.policy_event import PolicyEvent  # noqa: F401 — registers tabl
 from app.models.created_product import CreatedProduct  # noqa
 from app.models.campaign_brief import CampaignBrief  # noqa: F401 — registers table
 from app.models.commander_document import CommanderDocument  # noqa: F401 — registers table
-from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task, discovery_scan_task, signal_scan_task, morning_report_task
-from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS, SIGNAL_SCAN_INTERVAL_SECONDS, MORNING_REPORT_HOUR, MORNING_REPORT_MINUTE
+from app.services.scheduler import scheduler, daily_scan_task, weekly_report_task, recycle_cycle_task, leon_daily_commerce_task, policy_scan_task, discovery_scan_task, signal_scan_task, morning_report_task, ledger_recovery_loop_task, checkpoint_resume_task, task_retry_sweep_task
+from app.config import RECYCLE_CYCLE_INTERVAL_SECONDS, STRATEGY_MODE, ALPACA_ENABLED, DISCOVERY_SCAN_INTERVAL_SECONDS, SIGNAL_SCAN_INTERVAL_SECONDS, MORNING_REPORT_HOUR, MORNING_REPORT_MINUTE, LEDGER_LOOP_INTERVAL_SECONDS, CHECKPOINT_RESUME_INTERVAL_SECONDS, TASK_RETRY_SWEEP_INTERVAL_SECONDS
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _FRONTEND_DIST = _BACKEND_DIR / "frontend_dist"
@@ -278,6 +278,9 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(recycle_cycle_task, "interval", seconds=RECYCLE_CYCLE_INTERVAL_SECONDS, id="recycle_cycle", max_instances=1, misfire_grace_time=30)
     scheduler.add_job(leon_daily_commerce_task, "cron", hour=8, minute=5, timezone=_SCHEDULER_TZ, id="leon_daily", misfire_grace_time=3600)
     scheduler.add_job(policy_scan_task, "cron", hour=6, minute=30, timezone=_SCHEDULER_TZ, id="policy_scan", misfire_grace_time=3600)
+    scheduler.add_job(ledger_recovery_loop_task, "interval", seconds=LEDGER_LOOP_INTERVAL_SECONDS, id="ledger_recovery_loop", max_instances=1, misfire_grace_time=600)
+    scheduler.add_job(checkpoint_resume_task, "interval", seconds=CHECKPOINT_RESUME_INTERVAL_SECONDS, id="checkpoint_resume", max_instances=1, misfire_grace_time=300)
+    scheduler.add_job(task_retry_sweep_task, "interval", seconds=TASK_RETRY_SWEEP_INTERVAL_SECONDS, id="task_retry_sweep", max_instances=1, misfire_grace_time=300)
     scheduler.start()
 
     # Do not block ASGI startup/health on opportunity intake or its providers.

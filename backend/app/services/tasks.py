@@ -443,6 +443,42 @@ def retry_task(task_id: str, session: Session) -> Task:
     return task
 
 
+# Ordinary transient failure recovery gap this closes: fail_task() is the
+# terminal state the worker reports when a RetryableExecutionError happens
+# but attempts remain (see worker/main.py) — i.e. it is explicitly NOT the
+# "give up" state (that's escalate_task, attempts exhausted). Nothing was
+# ever calling the existing retry_task() automatically, so a task with
+# budget left simply sat as "failed" forever. This sweep is the missing
+# link, not new failure semantics.
+_RETRY_SWEEP_MIN_AGE_SECONDS = 300  # let a transient failure (site hiccup,
+# timeout) settle before retrying, rather than hot-looping the same error.
+
+
+def sweep_and_retry_failed_tasks(
+    session: Session, *, min_age_seconds: int = _RETRY_SWEEP_MIN_AGE_SECONDS
+) -> list[Task]:
+    """Find ordinary (non-exhausted) failed tasks old enough to retry and
+    re-queue them via retry_task(). Bounded and safe: only tasks that
+    still have attempts remaining are eligible (retry_task() itself
+    refuses otherwise), and the age floor avoids retrying a failure that
+    just happened moments ago. Idempotent to call repeatedly — a task
+    moves out of `failed` status the moment it's retried."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
+    candidates = session.exec(
+        select(Task).where(
+            Task.status == TaskStatus.failed,
+            Task.failed_at.is_not(None),
+            Task.failed_at <= cutoff,
+        )
+    ).all()
+    retried: list[Task] = []
+    for task in candidates:
+        if task.attempts >= task.max_attempts:
+            continue
+        retried.append(retry_task(task.task_id, session))
+    return retried
+
+
 # ── Attempt logging ───────────────────────────────────────────────────────────
 
 def record_attempt(
