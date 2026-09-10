@@ -55,11 +55,12 @@ request lifecycle so FastAPI's Depends() is not available.
 import json
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlmodel import Session, select
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select, update
 
 from app.database.config import engine
 from app.models.income_source import IncomeSource
@@ -78,6 +79,44 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 _REPORTS_PATH = Path(os.getenv("HUNTER_REPORTS_PATH", "./outputs/reports"))
+
+
+def _try_acquire_run_lock(session: Session, job_id: str, hold_seconds: int = 90) -> bool:
+    """
+    Cross-process guard against the same scheduled job firing twice during
+    a Render deploy's blue-green overlap window (Commander, 2026-09-10):
+    APScheduler's max_instances=1 only prevents double-firing WITHIN one
+    process — it does nothing if the old and new instance are briefly both
+    alive with their own in-memory schedulers, which next_run_time=now
+    (the immediate-catch-up fix) makes more likely to coincide right at
+    boot. Returns True only if this call actually won the lock and should
+    proceed; False means skip this run, another process/attempt has it.
+
+    Atomic at the DB layer, not a read-then-write race: first tries a
+    fresh INSERT (wins if no row exists yet); if the row already exists,
+    falls back to an UPDATE ... WHERE locked_until < now and checks the
+    affected row count — SQLite serializes concurrent writers, so exactly
+    one of two simultaneous callers can ever see rowcount > 0.
+    """
+    from app.models.scheduler_lock import SchedulerRunLock
+
+    now = datetime.now(timezone.utc)
+    new_until = now + timedelta(seconds=hold_seconds)
+
+    try:
+        session.add(SchedulerRunLock(job_id=job_id, locked_until=new_until))
+        session.commit()
+        return True
+    except IntegrityError:
+        session.rollback()
+
+    result = session.execute(
+        update(SchedulerRunLock)
+        .where(SchedulerRunLock.job_id == job_id, SchedulerRunLock.locked_until < now)
+        .values(locked_until=new_until)
+    )
+    session.commit()
+    return result.rowcount > 0
 
 
 def _run_weekly_quota_checks(session: Session) -> dict:
@@ -249,6 +288,9 @@ async def ledger_recovery_loop_task() -> None:
     from app.services.research import engine as research_engine
 
     with Session(engine) as session:
+        if not _try_acquire_run_lock(session, "ledger_recovery_loop_task"):
+            logger.info("ledger_recovery_loop_task: skipped — another instance holds the run lock")
+            return
         try:
             result = run_quota_protection_loop(
                 session, preflight_fn=research_engine.make_research_preflight(session)
@@ -276,6 +318,9 @@ async def checkpoint_resume_task() -> None:
     from app.services import tasks as task_svc
 
     with Session(engine) as session:
+        if not _try_acquire_run_lock(session, "checkpoint_resume_task"):
+            logger.info("checkpoint_resume_task: skipped — another instance holds the run lock")
+            return
         try:
             resumed = task_svc.resume_manual_action_tasks(session)
             if resumed:
@@ -297,6 +342,9 @@ async def task_retry_sweep_task() -> None:
     from app.services import tasks as task_svc
 
     with Session(engine) as session:
+        if not _try_acquire_run_lock(session, "task_retry_sweep_task"):
+            logger.info("task_retry_sweep_task: skipped — another instance holds the run lock")
+            return
         try:
             retried = task_svc.sweep_and_retry_failed_tasks(session)
             if retried:
