@@ -164,12 +164,16 @@ def observe_page_state(page, *, objective: str, checkpoint: str = "") -> dict[st
 
 def reason_next_action(
     observation: dict[str, Any], *, client: httpx.Client, history: list[dict[str, Any]]
-) -> Optional[dict[str, Any]]:
+) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """REASON — one narrow operational question to Hunter's own
-    configured advisor (Grok/Venice/DeepSeek — the same route the
-    research engine already uses live). Returns None if no advisor is
-    configured or every attempt fails; callers must treat that as a
-    genuine capability gap, never fabricate a decision in its place."""
+    configured advisor (Grok primary, Venice then DeepSeek fallback — the
+    same route the research engine already uses live). Returns
+    (decision, telemetry); decision is None if no advisor is configured
+    or every attempt fails, which callers must treat as a genuine
+    capability gap, never fabricating a decision in its place. telemetry
+    identifies which provider/model actually answered (see
+    llm_client.call_llm_json) — this is observability only, never fed
+    back into a future prompt or used to change control flow."""
     elements_summary = [
         {"ref": el["ref"], "tag": el["tag"], "text": el["text"], **el.get("attrs", {})}
         for el in observation["interactive_elements"]
@@ -188,7 +192,9 @@ def reason_next_action(
         f"Interactive elements: {json.dumps(elements_summary)}\n"
         f"Prior actions this attempt (avoid repeating a failed one): {json.dumps(prior)}"
     )
-    return call_llm_json(_REASON_SYSTEM_PROMPT, user_prompt, client=client, max_tokens=400)
+    telemetry: dict[str, Any] = {}
+    decision = call_llm_json(_REASON_SYSTEM_PROMPT, user_prompt, client=client, max_tokens=400, telemetry=telemetry)
+    return decision, telemetry
 
 
 _IDENTITY_KEYWORDS = ("ssn", "social", "dob", "birth", "address", "email", "phone")
@@ -333,15 +339,26 @@ def run_observe_reason_act_verify(
             return {"success": False, "trace": trace, "page": current_page}
         seen_fingerprints.add(fp)
 
-        decision = reason_next_action(observation, client=client, history=trace)
+        decision, reasoning_telemetry = reason_next_action(observation, client=client, history=trace)
         if not decision:
-            trace.append({"iteration": i, "outcome": "no_advisor_response"})
+            trace.append({
+                "iteration": i,
+                "outcome": "no_advisor_response",
+                "reasoning_provider": reasoning_telemetry.get("provider"),
+                "reasoning_model": reasoning_telemetry.get("model"),
+                "fallback_occurred": reasoning_telemetry.get("fallback_occurred"),
+                "fallback_reason": reasoning_telemetry.get("fallback_reason"),
+            })
             return {"success": False, "trace": trace, "page": current_page}
 
         step: dict[str, Any] = {
             "iteration": i,
             "url": observation["url"],
             "decision": decision,
+            "reasoning_provider": reasoning_telemetry.get("provider"),
+            "reasoning_model": reasoning_telemetry.get("model"),
+            "fallback_occurred": reasoning_telemetry.get("fallback_occurred"),
+            "fallback_reason": reasoning_telemetry.get("fallback_reason"),
         }
 
         if decision.get("action") == "give_up":

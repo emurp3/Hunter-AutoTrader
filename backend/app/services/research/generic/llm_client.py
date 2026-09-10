@@ -46,15 +46,26 @@ def call_llm_json(
     client: httpx.Client,
     max_tokens: int = 700,
     temperature: float = 0.2,
+    telemetry: Optional[dict] = None,
 ) -> Optional[dict]:
     """Call the first configured advisor and parse a JSON object from its
     response. Returns None if no advisor is configured or every attempt
     fails — callers must treat that as a genuine capability gap and never
-    fabricate a result in its place."""
+    fabricate a result in its place.
+
+    If `telemetry` is given, it's filled in place with which provider and
+    model actually answered (or None/None if every attempt failed),
+    whether a fallback past the primary (grok) occurred, and — when a
+    fallback did occur — a short reason naming what happened to each
+    earlier provider tried. Never includes API keys, request/response
+    bodies, or prompt content — provider/model names and exception TYPE
+    names only."""
+    attempted: list[dict] = []
     for name in _FALLBACK_ORDER:
         cfg = _ADVISOR_CONFIG[name]
         api_key = os.getenv(cfg["key_env"], "")
         if not api_key:
+            attempted.append({"provider": name, "outcome": "not_configured"})
             continue
         base_url = os.getenv(cfg["url_env"], cfg["default_url"])
         model = os.getenv(cfg["model_env"], cfg["default_model"])
@@ -78,7 +89,23 @@ def call_llm_json(
                 if content.startswith("json"):
                     content = content[4:]
                 content = content.strip()
-            return json.loads(content)
-        except Exception:
+            parsed = json.loads(content)
+            if telemetry is not None:
+                telemetry["provider"] = name
+                telemetry["model"] = model
+                telemetry["fallback_occurred"] = bool(attempted)
+                telemetry["fallback_reason"] = (
+                    "; ".join(f"{a['provider']}: {a['outcome']}" for a in attempted) if attempted else None
+                )
+            return parsed
+        except Exception as exc:  # noqa: BLE001
+            attempted.append({"provider": name, "outcome": f"error:{type(exc).__name__}"})
             continue
+    if telemetry is not None:
+        telemetry["provider"] = None
+        telemetry["model"] = None
+        telemetry["fallback_occurred"] = None
+        telemetry["fallback_reason"] = (
+            "; ".join(f"{a['provider']}: {a['outcome']}" for a in attempted) if attempted else "no advisor configured"
+        )
     return None

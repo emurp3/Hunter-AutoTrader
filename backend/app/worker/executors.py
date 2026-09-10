@@ -506,7 +506,9 @@ def _fill_identity_fields_with_reasoning_fallback(
             # even needed) is based on what Hunter's reasoning actually
             # tried, not another guess.
             trace_summary = " | ".join(
-                f"iter{step.get('iteration', '?')} url={step.get('url')}: "
+                f"iter{step.get('iteration', '?')} url={step.get('url')} "
+                f"provider={step.get('reasoning_provider')} model={step.get('reasoning_model')} "
+                f"fallback={step.get('fallback_occurred')} fallback_reason={step.get('fallback_reason')}: "
                 f"decision={step.get('decision')} act_result={step.get('act_result')} "
                 f"outcome={step.get('outcome')}"
                 for step in result["trace"]
