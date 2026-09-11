@@ -57,7 +57,18 @@ def dispatch_task(
 
     Idempotent: if idempotency_key is given and a non-terminal task already
     exists with that key, the existing task is returned unchanged.
+
+    A task escalated with EscalationType.contact_unavailable is a special
+    case (Commander, 2026-09-11): it means a real investigation already
+    ran and found no usable contact route with the CURRENT input. Blindly
+    re-dispatching would just repeat the identical, already-known-futile
+    attempt. Such a task blocks a fresh dispatch too — UNLESS the new
+    spec_payload actually differs from the one that escalated (e.g.
+    contact enrichment found something new), in which case the changed
+    input is allowed through for a fresh, genuinely different attempt.
     """
+    serialized_spec = json.dumps(spec_payload, sort_keys=True)
+
     if idempotency_key:
         existing = session.exec(
             select(Task).where(
@@ -67,6 +78,18 @@ def dispatch_task(
         ).first()
         if existing:
             return existing
+
+        last_contact_unavailable = session.exec(
+            select(Task)
+            .where(
+                Task.idempotency_key == idempotency_key,
+                Task.status == TaskStatus.escalated,
+                Task.escalation_type == EscalationType.contact_unavailable,
+            )
+            .order_by(Task.escalated_at.desc())
+        ).first()
+        if last_contact_unavailable and json.loads(last_contact_unavailable.spec_payload or "{}") == json.loads(serialized_spec):
+            return last_contact_unavailable
 
     task = Task(
         task_type=task_type,

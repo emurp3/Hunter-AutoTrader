@@ -39,6 +39,11 @@ class EscalationType(str, Enum):
     commander_boundary = "commander_boundary"
     unrecoverable_failure = "unrecoverable_failure"
     commander_flag = "commander_flag"
+    # A required input (e.g. contact info) was genuinely absent after a
+    # real investigation — distinct from unrecoverable_failure so
+    # dispatch_task can refuse to blindly re-run the same task against
+    # the same unchanged input (see dispatch_task's idempotency check).
+    contact_unavailable = "contact_unavailable"
 
 
 class Task(SQLModel, table=True):

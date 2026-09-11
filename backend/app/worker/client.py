@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import httpx
+
+# Demonstrated failure (2026-09-10, EOD recovery): a brief 502 from
+# Render's load balancer during the web service's own blue-green
+# redeploy hit the /escalate callback for an already-decided task
+# (contact info was already confirmed missing — no real action was
+# lost). The worker had already done the only irreversible-relevant
+# work (deciding there was no contact route); only the follow-up report
+# to the server failed. With no retry, the task sat in `executing` with
+# no way to close out until its 120s lease expired, at which point
+# stale-lease reclaim correctly-but-wastefully replayed the whole task.
+# For send-capable outcomes this same gap could replay a real SMTP send.
+# Bounded retry on the terminal callbacks (complete/fail/escalate) closes
+# it: report the already-decided outcome a few more times, comfortably
+# inside the lease window, before ever falling back to a full reclaim.
+_CALLBACK_RETRY_DELAYS = (2.0, 4.0, 8.0)
 
 
 class HunterWorkerClient:
@@ -19,6 +35,31 @@ class HunterWorkerClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def _post_terminal_with_retry(self, path: str, json_body: dict[str, Any]) -> dict[str, Any]:
+        """POST a terminal task callback (complete/fail/escalate) — the
+        underlying work this reports is already decided; only the HTTP
+        call itself can still fail transiently. Retries on a 5xx
+        response or a transport-level error (never on 4xx — that's a
+        real rejection, not a transient outage), bounded well under the
+        task lease so a brief outage doesn't strand the task for a full
+        reclaim cycle."""
+        last_exc: Exception | None = None
+        for delay in (0.0, *_CALLBACK_RETRY_DELAYS):
+            if delay:
+                time.sleep(delay)
+            try:
+                response = self._client.post(path, json=json_body)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code < 500:
+                    raise
+                last_exc = exc
+            except httpx.TransportError as exc:
+                last_exc = exc
+        assert last_exc is not None
+        raise last_exc
 
     def claim_task(self, worker_id: str) -> dict[str, Any] | None:
         response = self._client.post("/tasks/claim", json={"worker_id": worker_id})
@@ -45,9 +86,9 @@ class HunterWorkerClient:
         trace_reference: str | None = None,
         engine: str = "playwright",
     ) -> dict[str, Any]:
-        response = self._client.post(
+        return self._post_terminal_with_retry(
             f"/tasks/{task_id}/complete",
-            json={
+            {
                 "worker_id": worker_id,
                 "outcome": outcome,
                 "notes": notes,
@@ -57,8 +98,6 @@ class HunterWorkerClient:
                 "engine": engine,
             },
         )
-        response.raise_for_status()
-        return response.json()
 
     def fail(
         self,
@@ -72,9 +111,9 @@ class HunterWorkerClient:
         trace_reference: str | None = None,
         engine: str = "playwright",
     ) -> dict[str, Any]:
-        response = self._client.post(
+        return self._post_terminal_with_retry(
             f"/tasks/{task_id}/fail",
-            json={
+            {
                 "worker_id": worker_id,
                 "reason": reason,
                 "error_text": error_text,
@@ -84,8 +123,6 @@ class HunterWorkerClient:
                 "engine": engine,
             },
         )
-        response.raise_for_status()
-        return response.json()
 
     def escalate(
         self,
@@ -100,9 +137,9 @@ class HunterWorkerClient:
         trace_reference: str | None = None,
         engine: str = "playwright",
     ) -> dict[str, Any]:
-        response = self._client.post(
+        return self._post_terminal_with_retry(
             f"/tasks/{task_id}/escalate",
-            json={
+            {
                 "worker_id": worker_id,
                 "escalation_type": escalation_type,
                 "reason": reason,
@@ -113,8 +150,6 @@ class HunterWorkerClient:
                 "engine": engine,
             },
         )
-        response.raise_for_status()
-        return response.json()
 
     def notify(
         self,

@@ -54,19 +54,55 @@ def test_falls_back_to_draft_only_when_smtp_not_configured(monkeypatch):
     assert "not sent" in result.notes
 
 
-def test_no_send_attempted_when_only_contact_url_given(monkeypatch):
+def test_contact_url_only_triggers_a_real_website_investigation_and_sends_if_found(monkeypatch):
+    """Commander, 2026-09-11: a contact_url alone is not a dead end —
+    Hunter investigates the published website (via the existing
+    Playwright infrastructure) before giving up. When that investigation
+    finds a real, published email, it's used and the verification
+    evidence (source URL, timestamp) travels with the outcome."""
     monkeypatch.setattr(executors, "_claude_text", lambda prompt: "Draft body")
+
+    verification = {
+        "contact_email": "owner@localbiz.example",
+        "verification_source_url": "https://localbiz.example/contact",
+        "verified_at": "2026-09-11T00:00:00+00:00",
+    }
+    monkeypatch.setattr(executors, "_research_contact_email_from_website", lambda url: verification)
+
+    from app.services import email_notify
+    calls = []
+    monkeypatch.setattr(
+        email_notify, "send_email_to",
+        lambda to, subject, body: (calls.append((to, subject, body)), True)[1],
+    )
+
+    spec = {"service_outreach": {"contact_url": "https://localbiz.example/contact"}}
+    result = executors._execute_service_outreach(_task(), spec)
+
+    assert calls and calls[0][0] == "owner@localbiz.example"
+    assert result.outcome["email_sent"] is True
+    assert result.outcome["contact_verification"] == verification
+
+
+def test_contact_url_only_escalates_truthfully_when_investigation_finds_nothing(monkeypatch):
+    """No email published anywhere the crawl looked — a real, researched
+    "no route" outcome, not a guess and not a silent draft-only skip."""
+    import pytest
+    from app.worker.executors import WorkerExecutionError
+
+    monkeypatch.setattr(executors, "_claude_text", lambda prompt: "Draft body")
+    monkeypatch.setattr(executors, "_research_contact_email_from_website", lambda url: None)
 
     from app.services import email_notify
     calls = []
     monkeypatch.setattr(email_notify, "send_email_to", lambda *a: calls.append(a) or True)
 
     spec = {"service_outreach": {"contact_url": "https://localbiz.example/contact"}}
-    result = executors._execute_service_outreach(_task(), spec)
+    with pytest.raises(WorkerExecutionError) as excinfo:
+        executors._execute_service_outreach(_task(), spec)
 
-    assert calls == []
-    assert result.outcome["email_sent"] is False
-    assert result.outcome["send_error"] is None
+    assert excinfo.value.escalation_type == "contact_unavailable"
+    assert calls == []  # never sent anything
 
 
 def test_send_exception_is_captured_not_raised(monkeypatch):
