@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from email.policy import SMTP as SMTP_POLICY
 from email.utils import formataddr, make_msgid, parseaddr
 import smtplib
 import ssl
@@ -27,6 +28,8 @@ class PermitError(Exception):
 
 def _address(value: str) -> str:
     value = (value or "").strip()
+    if not value.isascii():
+        raise PreSendError("SMTPUTF8 addresses are not supported by this transport")
     if any(c in value for c in "\r\n,;") or parseaddr(value)[1] != value or value.count("@") != 1:
         raise PreSendError("Expected exactly one bare email address")
     local, domain = value.split("@")
@@ -53,7 +56,7 @@ def send_outreach(to: str, subject: str, body: str, *, before_send: Callable,
     message["Subject"] = subject
     message["Message-ID"] = make_msgid()
     message.set_content(body)
-    wire = message.as_bytes()
+    wire = message.as_bytes(policy=SMTP_POLICY)
     intent = {
         "from": sender, "to": recipient, "subject": subject, "body": body,
         "message_id": message["Message-ID"], "smtp_host": config.SMTP_HOST,

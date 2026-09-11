@@ -195,6 +195,7 @@ class FakeSMTP:
         self.calls.append("rcpt")
         return self.rcpt_code, b"recipient response"
     def data(self, wire):
+        assert b"\n" not in wire.replace(b"\r\n", b"")
         self.calls.append("data")
         if self.data_error:
             raise self.data_error
