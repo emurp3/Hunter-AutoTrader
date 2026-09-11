@@ -769,6 +769,13 @@ def auto_dispatch_for_source(source_id: str, session: Session) -> Optional[Task]
 
         spec["service_outreach"] = {
             "business_type": _sf(_notes, "target_buyer") or source.category,
+            # The actual business name when a discovery provider supplied
+            # one (e.g. local_business_prospector's OSM "name" tag) —
+            # kept distinct from business_type (which falls back to a
+            # generic category) so a contact-research step has an
+            # unambiguous name to search/verify against, never a category
+            # string like "healthcare-implementation".
+            "business_name": _sf(_notes, "target_buyer"),
             "execution_path": _sf(_notes, "execution_path") or "local_pitch",
             "contact_url": _sf(_notes, "contact_url"),
             "contact_email": _sf(_notes, "contact_email"),

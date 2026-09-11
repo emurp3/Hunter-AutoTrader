@@ -150,7 +150,63 @@ _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _EMAIL_EXCLUDE_SUBSTRINGS = ("example.com", "sentry.io", "wixpress.com", ".png", ".jpg", ".svg")
 
 
-def _research_contact_email_from_website(url: str) -> Optional[dict[str, Any]]:
+_NAME_SUFFIXES = {"llc", "inc", "corp", "corporation", "co", "ltd", "pllc", "pc", "the"}
+
+
+def _propose_candidate_business_website(business_name: str, business_type: str, location: str) -> Optional[str]:
+    """Commander, 2026-09-11: "do not confuse a missing source field
+    with an impossible opportunity" — OSM having no website tag doesn't
+    mean the business has none. Asks Claude (the worker's own existing
+    LLM integration — no new API) for a candidate official domain.
+    NEVER trusted on its own: the caller independently visits and
+    verifies it (_research_contact_email_from_website's
+    expected_business_name check) before it's ever used as a contact
+    route. Returns None — an honest "no candidate" — whenever Claude
+    isn't confident, matching the same "omit rather than guess"
+    convention already used by the generic research provider."""
+    prompt = (
+        "What is the official website domain for this specific local business? "
+        "Respond with ONLY the bare domain (e.g. example.com) or full URL — nothing "
+        "else, no explanation, no punctuation around it. If you are not genuinely "
+        "confident which real site belongs to this exact business, respond with "
+        "exactly: UNKNOWN\n"
+        f"Business name: {business_name}\nBusiness type: {business_type}\nLocation: {location}\n"
+    )
+    try:
+        text = _claude_text(prompt).strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("candidate-website proposal failed: %s: %s", type(exc).__name__, exc)
+        return None
+    if not text or " " in text or text.upper() == "UNKNOWN":
+        return None
+    if not text.startswith("http://") and not text.startswith("https://"):
+        text = f"https://{text}"
+    return text
+
+
+def _business_name_appears_on_page(page, business_name: str) -> bool:
+    """Bounded, conservative verification — a candidate website (however
+    it was found) is never treated as this business's real contact
+    route unless the business's own name actually appears on the page.
+    Strips common legal suffixes before matching."""
+    tokens = [
+        t.strip(".,").lower()
+        for t in business_name.split()
+        if t.strip(".,").lower() not in _NAME_SUFFIXES
+    ]
+    tokens = [t for t in tokens if len(t) >= 3]
+    if not tokens:
+        return False
+    try:
+        haystack = (page.title() + " " + page.inner_text("body")).lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return tokens[0] in haystack
+
+
+def _research_contact_email_from_website(
+    url: str, *, expected_business_name: Optional[str] = None
+) -> Optional[dict[str, Any]]:
     """Commander, 2026-09-11: "use the existing discovery/research
     machinery to investigate contact routes... obtain genuinely
     published contact information... preserve the source URL and
@@ -161,7 +217,13 @@ def _research_contact_email_from_website(url: str) -> Optional[dict[str, Any]]:
     email-shaped string in the page's own text) on the homepage and one
     "contact"-labeled link if present. Returns None (not a guess) when
     nothing is found or the site can't be reached — that is itself a
-    real, useful research outcome, not a failure to hide."""
+    real, useful research outcome, not a failure to hide.
+
+    When expected_business_name is given (a candidate website Hunter
+    itself proposed, not one OSM published), the page must actually
+    reference that business before anything on it is trusted — an
+    unrelated or wrong site is never mistaken for a verified contact
+    route."""
     from datetime import datetime, timezone
 
     try:
@@ -175,6 +237,8 @@ def _research_contact_email_from_website(url: str) -> Optional[dict[str, Any]]:
                 pages_to_check = [url]
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    if expected_business_name and not _business_name_appears_on_page(page, expected_business_name):
+                        return None
                     contact_link = page.locator(
                         'a[href*="contact" i]:not([href^="mailto:"])'
                     ).first
@@ -183,7 +247,7 @@ def _research_contact_email_from_website(url: str) -> Optional[dict[str, Any]]:
                         if href:
                             pages_to_check.append(str(httpx.URL(url).join(href)))
                 except PlaywrightTimeoutError:
-                    pass
+                    return None
 
                 for page_url in pages_to_check:
                     try:
@@ -207,6 +271,7 @@ def _research_contact_email_from_website(url: str) -> Optional[dict[str, Any]]:
                             "contact_email": found_email,
                             "verification_source_url": page.url,
                             "verified_at": datetime.now(timezone.utc).isoformat(),
+                            "website_candidate": bool(expected_business_name),
                         }
                 return None
             finally:
@@ -220,16 +285,40 @@ def _execute_service_outreach(task: dict[str, Any], spec: dict[str, Any]) -> Wor
     details = spec.get("service_outreach") or {}
     contact_email = details.get("contact_email")
     contact_url = details.get("contact_url")
+    business_name = details.get("business_name")
     verification: Optional[dict[str, Any]] = None
+
     if not contact_email and contact_url:
         verification = _research_contact_email_from_website(contact_url)
         if verification:
             contact_email = verification["contact_email"]
+    elif not contact_email and not contact_url and business_name:
+        # Commander, 2026-09-11: "do not confuse a missing source field
+        # with an impossible opportunity" — the discovery source (e.g.
+        # OSM) publishing no website is not proof this business has
+        # none. Propose a candidate official site via Claude, then
+        # independently visit and verify it references this exact
+        # business before it's ever treated as a real contact route —
+        # never guessed, never used unverified.
+        location = details.get("location") or ""
+        business_type = details.get("business_type") or spec.get("category") or "business"
+        candidate_url = _propose_candidate_business_website(business_name, business_type, location)
+        if candidate_url:
+            verification = _research_contact_email_from_website(
+                candidate_url, expected_business_name=business_name
+            )
+            if verification:
+                contact_email = verification["contact_email"]
+                contact_url = verification["verification_source_url"]
+
     if not contact_email and not contact_url:
         raise WorkerExecutionError(
             "No contact route available for service outreach",
             escalation_type="contact_unavailable",
-            error_text="Missing contact_email and contact_url in task spec",
+            error_text=(
+                "Missing contact_email and contact_url in task spec; "
+                + ("no verifiable official website candidate found" if business_name else "no business name to research")
+            ),
             engine="claude_cu",
         )
     if not contact_email:

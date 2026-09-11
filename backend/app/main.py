@@ -126,25 +126,31 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                     CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-01-UCP"
                 )
             ).first()
-            if ucp and ucp.commander_response and ucp.disposition != Disposition.executed.value:
-                identity_fields = _available_identity_fields(
-                    ["full_name", "address_line1", "address_line2", "city", "state", "zip"]
-                )
-                task_svc.dispatch_task(
-                    task_type="government_portal_search",
-                    spec_payload={
-                        "search_url": PORTAL_URL,
-                        "business_name": ucp.commander_response,
-                        "canonical_opportunity_id": ucp.canonical_opportunity_id,
-                        "identity_fields": identity_fields,
-                    },
-                    session=session,
-                    source_type="canonical_opportunity",
-                    source_id=ucp.canonical_opportunity_id,
-                    priority=10,
-                    idempotency_key=f"gov-search:{ucp.canonical_opportunity_id}:{_date.today().isoformat()}",
-                    max_attempts=2,
-                )
+            if (
+                ucp
+                and ucp.commander_response
+                and ucp.disposition not in (Disposition.executed.value, Disposition.rejected.value)
+            ):
+                business_name = acct.resolve_ucp_business_name_checkpoint(session, ucp)
+                if business_name:
+                    identity_fields = _available_identity_fields(
+                        ["full_name", "address_line1", "address_line2", "city", "state", "zip"]
+                    )
+                    task_svc.dispatch_task(
+                        task_type="government_portal_search",
+                        spec_payload={
+                            "search_url": PORTAL_URL,
+                            "business_name": business_name,
+                            "canonical_opportunity_id": ucp.canonical_opportunity_id,
+                            "identity_fields": identity_fields,
+                        },
+                        session=session,
+                        source_type="canonical_opportunity",
+                        source_id=ucp.canonical_opportunity_id,
+                        priority=10,
+                        idempotency_key=f"gov-search:{ucp.canonical_opportunity_id}:{_date.today().isoformat()}",
+                        max_attempts=2,
+                    )
 
             google = session.exec(
                 _select(CanonicalOpportunity).where(

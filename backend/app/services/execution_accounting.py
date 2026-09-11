@@ -400,6 +400,72 @@ def record_commander_answer(
     )
 
 
+# Commander, 2026-09-11: the UCP-01 government-portal-search dispatch was
+# using commander_response verbatim as the literal business_name to
+# search for — with no check that it actually WAS a business name.
+# Real production evidence: a search was dispatched with
+# business_name="skip" (Commander's explicit decline, typed as free
+# text after two earlier answers didn't visibly lead anywhere), and
+# again with business_name="Approved — proceed." (an approval-only
+# reply with no business name in it at all).
+_UCP_DECLINE_ANSWERS = {"skip", "n/a", "na", "none"}
+_UCP_APPROVAL_ONLY_ANSWERS = {"approve", "approved", "approved — proceed.", "approved - proceed."}
+UCP_BUSINESS_NAME_ASK_MARKER = "business name or FEIN"
+
+
+def resolve_ucp_business_name_checkpoint(
+    session: Session, opp: CanonicalOpportunity
+) -> Optional[str]:
+    """Returns the business name to search Georgia's unclaimed-property
+    portal for, only when Commander's latest answer is actually a
+    business name. Otherwise handles the checkpoint directly and returns
+    None so the caller never dispatches a search with the wrong input:
+
+    - "skip" (or a clear equivalent) is Commander's own decision to drop
+      this checkpoint — honored silently: never used as search input,
+      and never re-asked again (nothing here changes disposition or
+      commander_response, so this same branch is taken on every future
+      boot too, with no repeated prompting).
+    - An approval-only reply ("Approved — proceed.") means Commander
+      wants to continue but has not yet supplied the actually-needed
+      business name — reopens the checkpoint with that specific,
+      narrower ask (the same reopen-with-specific-ask pattern already
+      used for the GOOGLE-02 checkpoint) rather than misusing the
+      approval phrase as search input. set_disposition() with
+      new_checkpoint clears commander_response, so a genuinely new
+      answer resurfaces in the decisions feed and is honored on the
+      next boot without needing Commander to resubmit anything already
+      given (identity fields are untouched by this).
+    - Anything else is treated as a real, substantive answer and
+      returned for use as the search's business_name — unchanged from
+      prior behavior.
+    """
+    response_text = (opp.commander_response or "").strip()
+    if not response_text:
+        return None
+    normalized = response_text.lower()
+    if normalized in _UCP_DECLINE_ANSWERS:
+        return None
+    if normalized in _UCP_APPROVAL_ONLY_ANSWERS:
+        already_reopened = UCP_BUSINESS_NAME_ASK_MARKER in (opp.required_commander_checkpoints or "")
+        if not already_reopened:
+            set_disposition(
+                session, opp.canonical_opportunity_id, Disposition.pending_commander,
+                evidence=(
+                    "Commander approved proceeding but did not supply the business "
+                    "name/FEIN this search needs."
+                ),
+                new_checkpoint=(
+                    "To search Georgia's unclaimed property portal, Hunter needs the "
+                    "specific business name or FEIN to search for — approval alone "
+                    "isn't enough input. Reply with that name/FEIN, or reply 'skip' "
+                    "to drop this checkpoint."
+                ),
+            )
+        return None
+    return response_text
+
+
 def record_rescue_attempt(
     session: Session,
     canonical_opportunity_id: str,

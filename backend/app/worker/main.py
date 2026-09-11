@@ -21,6 +21,33 @@ logger = logging.getLogger("hunter.worker")
 
 _STOP = False
 
+# Commander, 2026-09-11: "verify that an external success followed by
+# exhausted callback retries cannot cause duplicate execution."
+# HunterWorkerClient's terminal callbacks already retry a transient
+# failure (the confirmed real case — a brief 502 during the web
+# service's own redeploy). This covers what retry alone cannot: if
+# EVERY retry is exhausted (a longer outage) after execute_task()
+# already did something irreversible (e.g. sent a real email),
+# stale-lease reclaim would otherwise hand the SAME task back to
+# claim_task() with no memory that it already ran — re-executing it
+# from scratch. Caching the outcome in-process, keyed by task_id, means
+# a reclaim landing on THIS SAME worker process re-reports the already-
+# decided outcome instead of redoing the work. Bounded so it can never
+# grow unboundedly across a long-running process; does not survive a
+# worker restart, which is a materially narrower and much rarer window
+# than the confirmed failure this closes.
+_reported_outcome_cache: dict[str, dict[str, Any]] = {}
+_MAX_CACHED_OUTCOMES = 500
+
+
+def _cache_outcome(task_id: str, kwargs: dict[str, Any]) -> None:
+    if task_id in _reported_outcome_cache:
+        del _reported_outcome_cache[task_id]
+    elif len(_reported_outcome_cache) >= _MAX_CACHED_OUTCOMES:
+        oldest = next(iter(_reported_outcome_cache))
+        del _reported_outcome_cache[oldest]
+    _reported_outcome_cache[task_id] = kwargs
+
 
 def _ensure_playwright_browsers_installed() -> None:
     """The build step only installs the regular Chromium binary
@@ -71,6 +98,26 @@ def _process_task(client: HunterWorkerClient, worker_id: str, task: dict[str, An
     source_id = task.get("source_id")
     logger.info("claimed task %s (%s)", task_id, task_type)
 
+    cached = _reported_outcome_cache.get(task_id)
+    if cached is not None:
+        # This exact worker process already ran this task and knows its
+        # real outcome — a claim landing here again means the earlier
+        # /complete report never got through, not that the work is
+        # undone. Re-report it; never re-run execute_task, which would
+        # repeat whatever external action already happened.
+        logger.warning(
+            "task %s (%s) reclaimed but already executed in this process — "
+            "re-reporting cached outcome instead of re-running it",
+            task_id, task_type,
+        )
+        try:
+            client.complete(task_id, worker_id, **cached)
+            del _reported_outcome_cache[task_id]
+            logger.info("completed task %s (from cache)", task_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("failed to re-report cached outcome for %s: %s", task_id, exc)
+        return
+
     stop_event = threading.Event()
     hb = threading.Thread(
         target=_heartbeat_loop,
@@ -95,17 +142,6 @@ def _process_task(client: HunterWorkerClient, worker_id: str, task: dict[str, An
                 alert_type="review_required",
             )
         result = execute_task(task, worker_id)
-        client.complete(
-            task_id,
-            worker_id,
-            outcome=result.outcome,
-            notes=result.notes,
-            screenshot_path=result.screenshot_path,
-            page_url=result.page_url,
-            trace_reference=result.trace_reference,
-            engine=result.engine,
-        )
-        logger.info("completed task %s", task_id)
     except RetryableExecutionError as exc:
         attempt_num = int(task.get("attempts", 0))
         max_attempts = int(task.get("max_attempts", 0))
@@ -157,6 +193,32 @@ def _process_task(client: HunterWorkerClient, worker_id: str, task: dict[str, An
             engine="playwright",
         )
         logger.exception("unhandled exception while executing %s", task_id)
+    else:
+        # execute_task() already succeeded — it may have done something
+        # irreversible (e.g. sent a real email). Only the report of that
+        # outcome can still fail from here, and a failure here must
+        # never be treated as if the task itself failed (the generic
+        # except above would misrepresent a real success as an
+        # "unhandled exception").
+        complete_kwargs = dict(
+            outcome=result.outcome,
+            notes=result.notes,
+            screenshot_path=result.screenshot_path,
+            page_url=result.page_url,
+            trace_reference=result.trace_reference,
+            engine=result.engine,
+        )
+        _cache_outcome(task_id, complete_kwargs)
+        try:
+            client.complete(task_id, worker_id, **complete_kwargs)
+            del _reported_outcome_cache[task_id]
+            logger.info("completed task %s", task_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.critical(
+                "task %s completed a real action but could not report it after "
+                "retries — cached in-process for re-report on next reclaim: %s",
+                task_id, exc,
+            )
     finally:
         stop_event.set()
         hb.join(timeout=2)
