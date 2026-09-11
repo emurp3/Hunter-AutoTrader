@@ -7,6 +7,7 @@ POST /tasks/claim               — atomically claim the next task
 GET  /tasks/{task_id}           — inspect a task
 GET  /tasks/{task_id}/attempts  — attempt history for a task
 POST /tasks/{task_id}/heartbeat — extend worker lease
+POST /tasks/{task_id}/record-outcome — durably record a real outcome before the terminal report (restart-safe)
 POST /tasks/{task_id}/complete  — record success outcome
 POST /tasks/{task_id}/escalate  — hard-stop escalation
 POST /tasks/{task_id}/fail      — mark as failed (exhausted)
@@ -55,6 +56,16 @@ class HeartbeatRequest(BaseModel):
 
 
 class CompleteRequest(BaseModel):
+    worker_id: str
+    outcome: dict[str, Any] = {}
+    notes: str = ""
+    screenshot_path: Optional[str] = None
+    page_url: Optional[str] = None
+    trace_reference: Optional[str] = None
+    engine: Optional[str] = None
+
+
+class RecordOutcomeRequest(BaseModel):
     worker_id: str
     outcome: dict[str, Any] = {}
     notes: str = ""
@@ -169,6 +180,31 @@ def heartbeat(task_id: str, body: HeartbeatRequest, session: Session = Depends(g
             detail="Heartbeat rejected — task no longer owned by this worker",
         )
     return {"status": "ok", "task_id": task_id}
+
+
+@router.post("/{task_id}/record-outcome")
+def record_outcome(task_id: str, body: RecordOutcomeRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
+    """Durably record a real outcome before the terminal /complete report
+    is attempted (Commander, 2026-09-11: duplicate-send protection that
+    survives a worker restart, not just the in-process case). Does not
+    close the task — /complete (or /fail, /escalate) still must follow;
+    this only ensures a lost worker process can't cause the SAME work to
+    be re-executed on reclaim."""
+    try:
+        task = task_svc.record_pending_outcome(
+            task_id,
+            session,
+            outcome=body.outcome,
+            notes=body.notes,
+            screenshot_path=body.screenshot_path,
+            page_url=body.page_url,
+            trace_reference=body.trace_reference,
+            engine=body.engine,
+            worker_id=body.worker_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return task
 
 
 @router.post("/{task_id}/complete")

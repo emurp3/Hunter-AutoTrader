@@ -181,6 +181,14 @@ def _migrate_sqlite_tables() -> None:
                 "reconciled_at": "TIMESTAMP",
             },
         )
+        _ensure_columns(
+            conn,
+            "task",
+            {
+                "pending_outcome_json": "TEXT",
+                "pending_outcome_recorded_at": "TIMESTAMP",
+            },
+        )
         conn.execute(
             """
             UPDATE weeklybudget

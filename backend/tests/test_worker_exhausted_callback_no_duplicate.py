@@ -25,6 +25,7 @@ class _FakeClient:
         self.escalate_calls: list[dict] = []
         self.fail_calls: list[dict] = []
         self.notify_calls: list[dict] = []
+        self.record_pending_outcome_calls: list[dict] = []
         self._complete_failures_remaining = complete_failures
 
     def notify(self, **kwargs):
@@ -32,6 +33,9 @@ class _FakeClient:
 
     def heartbeat(self, task_id, worker_id):
         pass
+
+    def record_pending_outcome(self, task_id, worker_id, **kwargs):
+        self.record_pending_outcome_calls.append({"task_id": task_id, "worker_id": worker_id, **kwargs})
 
     def complete(self, task_id, worker_id, **kwargs):
         if self._complete_failures_remaining > 0:
@@ -72,6 +76,11 @@ def test_successful_completion_leaves_no_cached_outcome(monkeypatch):
     assert len(client.complete_calls) == 1
     assert execute_calls == ["t1"]
     assert "t1" not in worker_main._reported_outcome_cache
+    # Durable record (Commander, 2026-09-11: must survive a worker
+    # restart, not just the in-process reclaim case) is attempted before
+    # the terminal /complete report.
+    assert len(client.record_pending_outcome_calls) == 1
+    assert client.record_pending_outcome_calls[0]["outcome"]["email_sent"] is True
 
 
 def test_exhausted_callback_after_real_success_does_not_lose_the_outcome(monkeypatch):

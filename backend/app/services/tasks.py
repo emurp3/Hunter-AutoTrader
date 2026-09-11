@@ -136,32 +136,108 @@ def claim_task(worker_id: str, session: Session) -> Optional[Task]:
     - status=executing with an expired lease (abandoned by prior worker)
 
     Returns None when no tasks are available.
+
+    Commander, 2026-09-11: "finish durable protection against repeating a
+    successful or uncertain send across worker restarts." A task can
+    reach here with status=executing and an expired lease not because it
+    never ran, but because the worker process that ran it (and already
+    produced a real, possibly-irreversible outcome via
+    record_pending_outcome()) was lost — crashed or restarted — before it
+    could report completion. Handing that task to a NEW worker would
+    re-run execute_task() and risk repeating the real action (e.g.
+    sending a second email). Any such task is finalized here from its
+    durably recorded outcome instead of being claimed for execution.
     """
     now = datetime.now(timezone.utc)
     lease_expiry = now + timedelta(seconds=_LEASE_SECONDS)
 
-    stmt = (
-        select(Task)
-        .where(
-            (Task.status.in_([TaskStatus.dispatched, TaskStatus.retrying]))
-            | (
-                (Task.status == TaskStatus.executing)
-                & (Task.lease_expires_at < now)
+    while True:
+        stmt = (
+            select(Task)
+            .where(
+                (Task.status.in_([TaskStatus.dispatched, TaskStatus.retrying]))
+                | (
+                    (Task.status == TaskStatus.executing)
+                    & (Task.lease_expires_at < now)
+                )
             )
+            .order_by(Task.priority.desc(), Task.created_at.asc())
+            .limit(1)
         )
-        .order_by(Task.priority.desc(), Task.created_at.asc())
-        .limit(1)
-    )
-    task = session.exec(stmt).first()
-    if not task:
-        return None
+        task = session.exec(stmt).first()
+        if not task:
+            return None
 
-    task.status = TaskStatus.executing
-    task.worker_id = worker_id
-    task.lease_expires_at = lease_expiry
-    task.last_heartbeat_at = now
-    task.executing_at = now
-    task.attempts += 1
+        if task.pending_outcome_json:
+            logger.warning(
+                "claim_task: task %s (%s) has a durable pending outcome from a "
+                "prior worker process — finalizing from the recorded outcome "
+                "instead of re-dispatching it for execution",
+                task.task_id, task.task_type,
+            )
+            payload = json.loads(task.pending_outcome_json)
+            complete_task(
+                task.task_id,
+                payload.get("outcome") or {},
+                session,
+                notes=payload.get("notes", ""),
+                screenshot_path=payload.get("screenshot_path"),
+                page_url=payload.get("page_url"),
+                trace_reference=payload.get("trace_reference"),
+                engine=payload.get("engine"),
+                worker_id_override=worker_id,
+            )
+            continue
+
+        task.status = TaskStatus.executing
+        task.worker_id = worker_id
+        task.lease_expires_at = lease_expiry
+        task.last_heartbeat_at = now
+        task.executing_at = now
+        task.attempts += 1
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        return task
+
+
+def record_pending_outcome(
+    task_id: str,
+    session: Session,
+    *,
+    outcome: dict[str, Any],
+    notes: str = "",
+    screenshot_path: Optional[str] = None,
+    page_url: Optional[str] = None,
+    trace_reference: Optional[str] = None,
+    engine: Optional[str] = None,
+    worker_id: Optional[str] = None,
+) -> Task:
+    """Durably record that execute_task() already produced this real
+    outcome, before the terminal complete() report is attempted. This is
+    what lets claim_task() finalize a task correctly even if the worker
+    process that ran it never comes back to report — closing the gap the
+    worker's in-process outcome cache can't (it doesn't survive a
+    restart). Idempotent: safe to call again with the same outcome (e.g.
+    the worker retrying this call itself). Does not change task status or
+    consume the worker's lease."""
+    task = _get_task_or_raise(task_id, session)
+    if worker_id and task.worker_id and task.worker_id != worker_id:
+        # Ownership has already moved on (e.g. a reclaim already
+        # finalized this task from an earlier recorded outcome) — never
+        # overwrite state that isn't this caller's to write.
+        return task
+    task.pending_outcome_json = json.dumps(
+        {
+            "outcome": outcome,
+            "notes": notes,
+            "screenshot_path": screenshot_path,
+            "page_url": page_url,
+            "trace_reference": trace_reference,
+            "engine": engine,
+        }
+    )
+    task.pending_outcome_recorded_at = datetime.now(timezone.utc)
     session.add(task)
     session.commit()
     session.refresh(task)
@@ -223,6 +299,8 @@ def complete_task(
     task.completed_at = now
     task.worker_id = None
     task.lease_expires_at = None
+    task.pending_outcome_json = None
+    task.pending_outcome_recorded_at = None
     session.add(task)
     session.commit()
     session.refresh(task)
@@ -283,6 +361,8 @@ def escalate_task(
     task.escalated_at = now
     task.worker_id = None
     task.lease_expires_at = None
+    task.pending_outcome_json = None
+    task.pending_outcome_recorded_at = None
     session.add(task)
     session.commit()
     session.refresh(task)
@@ -428,6 +508,8 @@ def fail_task(
     task.failed_at = now
     task.worker_id = None
     task.lease_expires_at = None
+    task.pending_outcome_json = None
+    task.pending_outcome_recorded_at = None
     session.add(task)
     session.commit()
     session.refresh(task)

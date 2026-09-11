@@ -209,6 +209,24 @@ def _process_task(client: HunterWorkerClient, worker_id: str, task: dict[str, An
             engine=result.engine,
         )
         _cache_outcome(task_id, complete_kwargs)
+        # Commander, 2026-09-11: the in-process cache above only survives
+        # a reclaim landing on THIS SAME worker process — a restart loses
+        # it. Record the same outcome durably on the server BEFORE
+        # attempting /complete, so a reclaim after a lost process (crash,
+        # restart, deploy) finalizes from the real recorded outcome
+        # instead of claim_task() handing this task to a new worker for
+        # re-execution. Best-effort: record_pending_outcome already
+        # retries internally; if it's still exhausted, /complete is tried
+        # anyway and the in-process cache remains the fallback for a
+        # same-process reclaim.
+        try:
+            client.record_pending_outcome(task_id, worker_id, **complete_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "task %s: could not durably record pending outcome before "
+                "reporting completion — %s",
+                task_id, exc,
+            )
         try:
             client.complete(task_id, worker_id, **complete_kwargs)
             del _reported_outcome_cache[task_id]

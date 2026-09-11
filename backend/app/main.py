@@ -95,12 +95,14 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
        directly — Hunter never invents identity data, but once
        Commander has supplied it, submission is autonomous."""
     try:
+        import json as _json
         from datetime import date as _date
 
         from sqlmodel import select as _select
 
         from app.database.config import engine
         from app.models.hunter_ledger import CanonicalOpportunity, Disposition
+        from app.models.task import Task, TaskStatus
         from app.services import commander_identity
         from app.services import execution_accounting as acct
         from app.services import tasks as task_svc
@@ -158,6 +160,7 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                 )
             ).first()
             _google_specific_ask_marker = "full legal name"
+            _google_dead_url_marker = "confirmed unreachable"
             if google and google.disposition != Disposition.executed.value:
                 already_reopened_with_specific_ask = _google_specific_ask_marker in (
                     google.required_commander_checkpoints or ""
@@ -193,20 +196,78 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                     if identity_fields.get("full_name") and (
                         identity_fields.get("email") or identity_fields.get("phone")
                     ):
-                        task_svc.dispatch_task(
-                            task_type="intake_form_submission",
-                            spec_payload={
-                                "intake_url": INTAKE_URL,
-                                "canonical_opportunity_id": google.canonical_opportunity_id,
-                                "identity_fields": identity_fields,
-                            },
-                            session=session,
-                            source_type="canonical_opportunity",
-                            source_id=google.canonical_opportunity_id,
-                            priority=10,
-                            idempotency_key=f"intake-submit:{google.canonical_opportunity_id}:{_date.today().isoformat()}",
-                            max_attempts=2,
+                        # Commander, 2026-09-11: "stop daily execution
+                        # against the known GOOGLE-02 404." The prior
+                        # code dispatched a fresh intake_form_submission
+                        # every boot with a date-scoped idempotency key —
+                        # a genuinely new key every day, so a task that
+                        # already confirmed THIS EXACT intake_url dead
+                        # (real evidence: task 6ed846bd, 2026-09-11,
+                        # reached incognitoprivacyfail.com and found it a
+                        # dead page) never blocked tomorrow's identical
+                        # attempt. Check the real dispatch history for
+                        # this candidate before dispatching again: if the
+                        # most recent terminal attempt against the SAME
+                        # intake_url already failed or escalated, that is
+                        # standing, truthful evidence the URL doesn't
+                        # work — don't repeat it. A future fix to
+                        # INTAKE_URL (a verified current alternative) is
+                        # a different string and is allowed straight
+                        # through.
+                        last_intake_task = session.exec(
+                            _select(Task)
+                            .where(
+                                Task.source_id == google.canonical_opportunity_id,
+                                Task.task_type == "intake_form_submission",
+                            )
+                            .order_by(Task.created_at.desc())
+                        ).first()
+                        confirmed_dead_for_current_url = bool(
+                            last_intake_task
+                            and last_intake_task.status in (TaskStatus.failed, TaskStatus.escalated)
+                            and (_json.loads(last_intake_task.spec_payload or "{}").get("intake_url") == INTAKE_URL)
                         )
+                        if confirmed_dead_for_current_url:
+                            already_flagged = _google_dead_url_marker in (
+                                google.required_commander_checkpoints or ""
+                            )
+                            if not already_flagged:
+                                acct.set_disposition(
+                                    session,
+                                    google.canonical_opportunity_id,
+                                    Disposition.pending_commander,
+                                    evidence=(
+                                        "A real automated attempt reached the intake URL on "
+                                        f"file (task {last_intake_task.task_id}) and it did "
+                                        "not resolve to a working intake form — Hunter will "
+                                        "not keep re-attempting the same confirmed-"
+                                        "unreachable URL every day."
+                                    ),
+                                    new_checkpoint=(
+                                        "Hunter tried the Google Incognito intake URL on file "
+                                        f"({INTAKE_URL}) and it did not lead to a working "
+                                        "intake form — confirmed unreachable, not a Hunter "
+                                        "defect. Hunter will not keep re-attempting this same "
+                                        "URL every day. Reply with a verified current intake "
+                                        "URL if you have one, or 'skip' to drop this "
+                                        "opportunity for now."
+                                    ),
+                                )
+                        else:
+                            task_svc.dispatch_task(
+                                task_type="intake_form_submission",
+                                spec_payload={
+                                    "intake_url": INTAKE_URL,
+                                    "canonical_opportunity_id": google.canonical_opportunity_id,
+                                    "identity_fields": identity_fields,
+                                },
+                                session=session,
+                                source_type="canonical_opportunity",
+                                source_id=google.canonical_opportunity_id,
+                                priority=10,
+                                idempotency_key=f"intake-submit:{google.canonical_opportunity_id}:{_date.today().isoformat()}",
+                                max_attempts=2,
+                            )
     except Exception as exc:  # noqa: BLE001
         _startup_logger.warning(
             "hunter ledger startup bootstrap failed — %s: %s",

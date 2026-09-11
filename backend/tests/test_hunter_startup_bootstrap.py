@@ -10,7 +10,7 @@ itself: which candidates get acted on, and that it's safe to run repeatedly.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 import app.database.config as db_config
 from sqlalchemy.pool import StaticPool
@@ -392,6 +392,139 @@ def test_google_intake_dispatch_is_idempotent(monkeypatch):
     with Session(engine) as session:
         tasks = session.exec(select(Task).where(Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE")).all()
         assert len(tasks) == 1
+
+
+# ── Stop daily re-execution against a confirmed-dead intake URL ────────────
+# Commander, 2026-09-11: "stop daily execution against the known
+# GOOGLE-02 404. Route it to investigation of a verified current
+# alternative, or a truthful unavailable/waiting disposition." Real
+# production evidence: task 6ed846bd reached the intake URL on file and
+# found it dead (confirmed via a real Playwright/reasoning run, not
+# assumed) — the OLD code would dispatch a fresh attempt against the
+# SAME URL again the very next boot (a new date-scoped idempotency key
+# every day). These tests cover the fix: the most recent terminal
+# attempt against the CURRENT intake_url blocks a same-URL redispatch
+# and truthfully reopens the checkpoint instead.
+
+
+def _seed_google_with_prior_intake_attempt(engine, *, status, intake_url):
+    from app.models.task import Task as _Task
+    from app.models.task import TaskStatus as _TaskStatus
+
+    with Session(engine) as session:
+        session.add(
+            CanonicalOpportunity(
+                canonical_opportunity_id="HUNTER-CAND-2026-09-08-02-GOOGLE",
+                lane="legal_recovery",
+                factual_mechanism="Google Incognito lawsuit intake",
+                source_provenance="seed",
+                freshness_date=date(2026, 9, 8),
+                disposition=Disposition.pending_commander.value,
+                commander_response="Eddie Murphy Jr., eddie@example.com, 2019-2023",
+                required_commander_checkpoints="Need your full legal name, email, and dates.",
+            )
+        )
+        session.add(
+            _Task(
+                task_id="prior-intake-task",
+                task_type="intake_form_submission",
+                source_type="canonical_opportunity",
+                source_id="HUNTER-CAND-2026-09-08-02-GOOGLE",
+                spec_payload=json.dumps({"intake_url": intake_url}),
+                status=_TaskStatus(status),
+                failed_at=datetime(2026, 9, 11, 3, 0, tzinfo=timezone.utc) if status == "failed" else None,
+                escalated_at=datetime(2026, 9, 11, 3, 0, tzinfo=timezone.utc) if status == "escalated" else None,
+            )
+        )
+        session.commit()
+
+
+def test_google_no_redispatch_when_same_intake_url_already_failed(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    _seed_google_with_prior_intake_attempt(
+        engine,
+        status="failed",
+        intake_url="https://potterhandy.com/google-privacy-violations-lawsuit/",
+    )
+
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        tasks = session.exec(
+            select(Task).where(
+                Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE",
+                Task.task_type == "intake_form_submission",
+                Task.task_id != "prior-intake-task",
+            )
+        ).all()
+        assert tasks == []  # no fresh daily attempt against the same dead URL
+
+        google = session.exec(
+            select(CanonicalOpportunity).where(
+                CanonicalOpportunity.canonical_opportunity_id == "HUNTER-CAND-2026-09-08-02-GOOGLE"
+            )
+        ).first()
+        assert google.disposition == Disposition.pending_commander.value
+        assert "confirmed unreachable" in google.required_commander_checkpoints
+        assert google.commander_response is None  # reopened — awaiting a real reply
+
+
+def test_google_redispatches_when_intake_url_has_changed(monkeypatch):
+    """A verified current alternative URL (e.g. an engineering fix to
+    INTAKE_URL) must be allowed straight through — this is not a general
+    ban on the task type, only on repeating the identical dead URL."""
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    _seed_google_with_prior_intake_attempt(
+        engine,
+        status="failed",
+        intake_url="https://old-dead-url.example/intake",
+    )
+
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        tasks = session.exec(
+            select(Task).where(
+                Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE",
+                Task.task_type == "intake_form_submission",
+                Task.task_id != "prior-intake-task",
+            )
+        ).all()
+        assert len(tasks) == 1
+        spec = json.loads(tasks[0].spec_payload)
+        assert "potterhandy.com" in spec["intake_url"]
+
+
+def test_google_dead_url_reopen_does_not_repeat_across_boots(monkeypatch):
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    _seed_google_with_prior_intake_attempt(
+        engine,
+        status="escalated",
+        intake_url="https://potterhandy.com/google-privacy-violations-lawsuit/",
+    )
+
+    _run_bootstrap(engine, monkeypatch)
+    _run_bootstrap(engine, monkeypatch)
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        tasks = session.exec(
+            select(Task).where(
+                Task.source_id == "HUNTER-CAND-2026-09-08-02-GOOGLE",
+                Task.task_type == "intake_form_submission",
+                Task.task_id != "prior-intake-task",
+            )
+        ).all()
+        assert tasks == []  # never dispatched, on any of the three boots
 
 
 def test_resume_manual_action_bootstrap_redispatches_after_commander_answer(monkeypatch):

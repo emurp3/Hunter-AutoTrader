@@ -78,6 +78,26 @@ def test_fail_gives_up_after_exhausting_retries_on_persistent_5xx(monkeypatch):
     assert len(calls) == 4  # initial attempt + 3 retries, then give up
 
 
+def test_record_pending_outcome_retries_past_a_transient_502_and_succeeds(monkeypatch):
+    """Commander, 2026-09-11: the durable pending-outcome record must be
+    just as resilient to a brief redeploy-window 502 as complete/fail/
+    escalate — it's reporting the same kind of already-decided outcome."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) < 2:
+            return httpx.Response(502, text="Bad Gateway")
+        return httpx.Response(200, json={"task_id": "t1", "status": "executing"})
+
+    client = _client(monkeypatch, httpx.MockTransport(handler))
+
+    result = client.record_pending_outcome("t1", "worker-1", outcome={"email_sent": True})
+
+    assert len(calls) == 2
+    assert result["task_id"] == "t1"
+
+
 def test_escalate_retries_past_a_transport_level_error(monkeypatch):
     calls = []
 

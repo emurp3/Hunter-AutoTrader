@@ -74,6 +74,38 @@ class HunterWorkerClient:
         )
         response.raise_for_status()
 
+    def record_pending_outcome(
+        self,
+        task_id: str,
+        worker_id: str,
+        *,
+        outcome: dict[str, Any],
+        notes: str = "",
+        screenshot_path: str | None = None,
+        page_url: str | None = None,
+        trace_reference: str | None = None,
+        engine: str = "playwright",
+    ) -> dict[str, Any]:
+        """Durably record a real outcome (server-side, survives a worker
+        restart) before attempting the terminal /complete report — see
+        _post_terminal_with_retry's comment for the transient-outage case
+        this complements. Retried the same way; if every retry is
+        exhausted here too, the caller still has its in-process cache as
+        a same-process fallback, and the next /complete attempt (or a
+        later reclaim, once this does succeed) closes the gap."""
+        return self._post_terminal_with_retry(
+            f"/tasks/{task_id}/record-outcome",
+            {
+                "worker_id": worker_id,
+                "outcome": outcome,
+                "notes": notes,
+                "screenshot_path": screenshot_path,
+                "page_url": page_url,
+                "trace_reference": trace_reference,
+                "engine": engine,
+            },
+        )
+
     def complete(
         self,
         task_id: str,

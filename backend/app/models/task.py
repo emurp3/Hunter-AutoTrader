@@ -90,6 +90,20 @@ class Task(SQLModel, table=True):
     outcome: Optional[str] = Field(default=None)       # JSON string
     outcome_notes: Optional[str] = Field(default=None)
 
+    # Durable restart-survival for the outcome-recording race (Commander,
+    # 2026-09-11: "finish durable protection against repeating a
+    # successful or uncertain send across worker restarts"). Set via
+    # tasks.record_pending_outcome() immediately after a worker's
+    # execute_task() succeeds — before the terminal complete() callback
+    # that can still fail or never arrive (e.g. the worker process is
+    # killed/restarted before it can report). Unlike the worker's
+    # in-process cache, this survives a restart: claim_task() checks it
+    # before ever handing the task back out for re-execution, so a
+    # reclaim after a lost worker finalizes from the real recorded
+    # outcome instead of re-running (and re-sending) anything.
+    pending_outcome_json: Optional[str] = Field(default=None)
+    pending_outcome_recorded_at: Optional[datetime] = Field(default=None)
+
     # Escalation
     escalation_reason: Optional[str] = Field(default=None)
     escalation_type: Optional[EscalationType] = Field(default=None)
