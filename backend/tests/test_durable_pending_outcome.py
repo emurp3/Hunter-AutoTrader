@@ -13,6 +13,7 @@ rather than ever handing such a task back out for re-execution.
 from __future__ import annotations
 
 import json
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.pool import StaticPool
@@ -107,8 +108,9 @@ def test_record_pending_outcome_never_overwrites_a_different_owner():
     session.add(row)
     session.commit()
 
-    task_svc.record_pending_outcome(
-        task.task_id, session, outcome={"email_sent": True}, worker_id="worker-1",
-    )
+    with pytest.raises(ValueError, match="does not own"):
+        task_svc.record_pending_outcome(
+            task.task_id, session, outcome={"email_sent": True}, worker_id="worker-1",
+        )
     row = session.exec(select(Task).where(Task.task_id == task.task_id)).first()
     assert row.pending_outcome_json is None

@@ -75,6 +75,12 @@ class RecordOutcomeRequest(BaseModel):
     engine: Optional[str] = None
 
 
+class BeginOutreachRequest(BaseModel):
+    worker_id: str
+    attempt_number: int
+    intent: dict[str, Any]
+
+
 class EscalateRequest(BaseModel):
     worker_id: str
     escalation_type: EscalationType
@@ -205,6 +211,16 @@ def record_outcome(task_id: str, body: RecordOutcomeRequest, session: Session = 
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return task
+
+
+@router.post("/{task_id}/begin-outreach")
+def begin_outreach(task_id: str, body: BeginOutreachRequest,
+                   session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
+    try:
+        task = task_svc.begin_outreach(task_id, body.worker_id, body.attempt_number, body.intent, session)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"permitted": True, "task_id": task.task_id}
 
 
 @router.post("/{task_id}/complete")

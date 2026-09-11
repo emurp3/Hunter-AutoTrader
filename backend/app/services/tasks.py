@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from sqlmodel import Session, select
+from sqlalchemy import update
 
 from app.models.task import (
     EscalationType,
@@ -68,6 +69,17 @@ def dispatch_task(
     input is allowed through for a fresh, genuinely different attempt.
     """
     serialized_spec = json.dumps(spec_payload, sort_keys=True)
+
+    if task_type == "service_outreach" and source_id:
+        reserved = session.exec(select(Task).where(
+            Task.task_type == task_type, Task.source_id == source_id,
+            Task.source_type == source_type,
+            (Task.outreach_intent_json.is_not(None)) | (Task.pending_outcome_json.is_not(None))
+            | (Task.status == TaskStatus.completed)
+            | (Task.escalation_type == EscalationType.external_outcome_uncertain),
+        )).first()
+        if reserved:
+            return reserved
 
     if idempotency_key:
         existing = session.exec(
@@ -150,23 +162,44 @@ def claim_task(worker_id: str, session: Session) -> Optional[Task]:
     """
     now = datetime.now(timezone.utc)
     lease_expiry = now + timedelta(seconds=_LEASE_SECONDS)
+    available = (
+        Task.status.in_([TaskStatus.dispatched, TaskStatus.retrying])
+        | ((Task.status == TaskStatus.executing) & (Task.lease_expires_at < now))
+        | ((Task.status == TaskStatus.escalated) & Task.outreach_intent_json.is_not(None)
+           & Task.pending_outcome_json.is_not(None))
+    )
 
     while True:
         stmt = (
             select(Task)
-            .where(
-                (Task.status.in_([TaskStatus.dispatched, TaskStatus.retrying]))
-                | (
-                    (Task.status == TaskStatus.executing)
-                    & (Task.lease_expires_at < now)
-                )
-            )
+            .where(available)
             .order_by(Task.priority.desc(), Task.created_at.asc())
             .limit(1)
         )
         task = session.exec(stmt).first()
         if not task:
             return None
+
+        # Compare-and-swap the observed row: concurrent claimers and a worker
+        # recording its send intent cannot both win an expired lease.
+        observed_intent = task.outreach_intent_json
+        observed_pending = task.pending_outcome_json
+        result = session.execute(update(Task).where(
+            Task.id == task.id, Task.attempts == task.attempts,
+            Task.status == task.status,
+            Task.outreach_intent_json == observed_intent,
+            Task.pending_outcome_json == observed_pending,
+            available,
+        ).values(
+            status=TaskStatus.executing, lease_expires_at=lease_expiry,
+            worker_id=task.worker_id if (observed_intent or observed_pending) else worker_id,
+            attempts=task.attempts if (observed_intent or observed_pending) else task.attempts + 1,
+            last_heartbeat_at=now, executing_at=now,
+        ).execution_options(synchronize_session=False))
+        session.commit()
+        session.refresh(task)
+        if result.rowcount != 1:
+            continue
 
         if task.pending_outcome_json:
             logger.warning(
@@ -185,20 +218,84 @@ def claim_task(worker_id: str, session: Session) -> Optional[Task]:
                 page_url=payload.get("page_url"),
                 trace_reference=payload.get("trace_reference"),
                 engine=payload.get("engine"),
-                worker_id_override=worker_id,
+                worker_id_override=task.worker_id,
             )
             continue
 
-        task.status = TaskStatus.executing
-        task.worker_id = worker_id
-        task.lease_expires_at = lease_expiry
-        task.last_heartbeat_at = now
-        task.executing_at = now
-        task.attempts += 1
-        session.add(task)
-        session.commit()
-        session.refresh(task)
+        if task.outreach_intent_json:
+            escalate_task(task.task_id, EscalationType.external_outcome_uncertain,
+                          "Worker lost after durable SMTP intent; do not resend without reconciliation.",
+                          session)
+            continue
+
         return task
+
+
+def begin_outreach(task_id: str, worker_id: str, attempt_number: int,
+                   intent: dict[str, Any], session: Session) -> Task:
+    """One-shot send permit. A lost response is NOT permission to send.
+
+    The write lock serializes reservations, including duplicate task rows.
+    Intent contains the exact envelope, message and contact evidence, never
+    credentials. Any reservation (even uncertain) blocks blind replay.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {**intent, "worker_id": worker_id, "attempt_number": attempt_number}
+    result = session.execute(update(Task).where(
+        Task.task_id == task_id, Task.task_type == "service_outreach",
+        Task.status == TaskStatus.executing, Task.worker_id == worker_id,
+        Task.attempts == attempt_number, Task.lease_expires_at > now,
+        Task.outreach_intent_json.is_(None), Task.pending_outcome_json.is_(None),
+    ).values(outreach_intent_json=json.dumps(payload), outreach_intent_at=now)
+      .execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        session.rollback()
+        raise ValueError("Send permit rejected: expired ownership or existing attempt")
+    task = _get_task_or_raise(task_id, session)
+    session.refresh(task)
+    if not _outreach_source_eligible(task, session):
+        session.rollback()
+        raise ValueError("Send permit rejected: source is not currently authorized for outreach")
+    others = session.exec(select(Task).where(
+        Task.task_type == "service_outreach", Task.task_id != task_id,
+        (Task.outreach_intent_json.is_not(None)) | (Task.outcome.is_not(None))
+        | (Task.escalation_type == EscalationType.external_outcome_uncertain),
+    )).all()
+    for other in others:
+        prior = json.loads(other.outreach_intent_json or other.outcome or "{}")
+        same_source = task.source_id and other.source_id == task.source_id and other.source_type == task.source_type
+        same_recipient = (prior.get("to") or prior.get("contact_email") or "").casefold() == intent.get("to", "").casefold()
+        if same_source or same_recipient:
+            session.rollback()
+            raise ValueError("Send permit rejected: this source or recipient already has an external attempt")
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+def _outreach_source_eligible(task: Task, session: Session) -> bool:
+    from app.models.income_source import IncomeSource, SourceStatus
+    from app.models.decision import OpportunityDecision
+    if task.source_type != "income_source" or not task.source_id:
+        return False
+    source = session.exec(select(IncomeSource).where(IncomeSource.source_id == task.source_id)).first()
+    decision = session.exec(select(OpportunityDecision).where(OpportunityDecision.source_id == task.source_id)).first()
+    return bool(source and decision
+        and source.status not in {SourceStatus.parked, SourceStatus.rejected, SourceStatus.archived,
+                                  SourceStatus.exhausted, SourceStatus.complete, SourceStatus.failed}
+        and decision.execution_ready and not decision.approval_required and not decision.blocked_by
+        and decision.action_state in {"auto_execute", "ready_to_act"}
+        and decision.execution_path in {"outreach", "local_pitch", "automation_proposal"})
+
+
+def _check_outreach_owner(task: Task, worker_id: Optional[str]) -> None:
+    if task.task_type != "service_outreach" or not worker_id:
+        return
+    owner = task.worker_id
+    if task.outreach_intent_json:
+        owner = json.loads(task.outreach_intent_json).get("worker_id")
+    if owner != worker_id:
+        raise ValueError("Outreach callback rejected: worker does not own this attempt")
 
 
 def record_pending_outcome(
@@ -222,6 +319,9 @@ def record_pending_outcome(
     the worker retrying this call itself). Does not change task status or
     consume the worker's lease."""
     task = _get_task_or_raise(task_id, session)
+    _check_outreach_owner(task, worker_id)
+    if task.status == TaskStatus.completed:
+        return task
     if worker_id and task.worker_id and task.worker_id != worker_id:
         # Ownership has already moved on (e.g. a reclaim already
         # finalized this task from an earlier recorded outcome) — never
@@ -241,6 +341,12 @@ def record_pending_outcome(
     session.add(task)
     session.commit()
     session.refresh(task)
+    if task.outreach_intent_json and task.status == TaskStatus.escalated:
+        # A late confirmed receipt can resolve a lost-worker escalation. Do
+        # not strand it if this process also dies before the /complete call.
+        return complete_task(task_id, outcome, session, notes=notes,
+                             worker_id_override=worker_id, engine=engine,
+                             trace_reference=trace_reference)
     return task
 
 
@@ -275,7 +381,19 @@ def complete_task(
     worker_id_override: Optional[str] = None,
 ) -> Task:
     task = _get_task_or_raise(task_id, session)
+    _check_outreach_owner(task, worker_id_override)
+    if task.status == TaskStatus.completed:
+        return task
     now = datetime.now(timezone.utc)
+
+    if task.task_type == "service_outreach" and outcome.get("send_status") in {"uncertain", "rejected"}:
+        # Preserve the receipt even though the task requires reconciliation.
+        task.outcome = json.dumps(outcome)
+        session.add(task)
+        return escalate_task(task_id,
+            EscalationType.external_outcome_uncertain if outcome["send_status"] == "uncertain" else EscalationType.unrecoverable_failure,
+            notes or "SMTP submission did not confirm acceptance", session,
+            worker_id_override=worker_id_override, engine=engine)
 
     # Record attempt with artifacts
     _record_terminal_attempt(
@@ -294,6 +412,10 @@ def complete_task(
     )
 
     task.status = TaskStatus.completed
+    if task.task_type == "service_outreach":
+        task.must_escalate = False
+        task.escalation_type = None
+        task.escalation_reason = None
     task.outcome = json.dumps(outcome)
     task.outcome_notes = notes
     task.completed_at = now
@@ -336,6 +458,11 @@ def escalate_task(
 ) -> Task:
     """Hard-stop escalation — raises Commander alert immediately."""
     task = _get_task_or_raise(task_id, session)
+    _check_outreach_owner(task, worker_id_override)
+    if task.status == TaskStatus.completed:
+        return task
+    if task.outreach_intent_json and not task.outcome:
+        escalation_type = EscalationType.external_outcome_uncertain
     now = datetime.now(timezone.utc)
 
     _record_terminal_attempt(
@@ -487,6 +614,12 @@ def fail_task(
 ) -> Task:
     """Max attempts exhausted and no escalation condition applies."""
     task = _get_task_or_raise(task_id, session)
+    _check_outreach_owner(task, worker_id_override)
+    if task.status == TaskStatus.completed:
+        return task
+    if task.outreach_intent_json:
+        return escalate_task(task_id, EscalationType.external_outcome_uncertain,
+                             reason, session, worker_id_override=worker_id_override)
     now = datetime.now(timezone.utc)
 
     _record_terminal_attempt(
@@ -537,12 +670,24 @@ def fail_task(
 def retry_task(task_id: str, session: Session) -> Task:
     """Re-queue a failed/executing task. Raises if max_attempts already exhausted."""
     task = _get_task_or_raise(task_id, session)
+    if task.outreach_intent_json or task.pending_outcome_json or task.status == TaskStatus.completed:
+        raise ValueError("Recorded external attempt/outcome cannot be replayed")
+    if task.task_type == "service_outreach" and task.status == TaskStatus.executing:
+        raise ValueError("Cannot reset an executing worker lease")
+    if task.task_type == "service_outreach" and task.status == TaskStatus.escalated and task.escalation_type != EscalationType.credentials_required:
+        raise ValueError("This escalation is not eligible for automatic retry")
+    if task.task_type == "service_outreach" and not _outreach_source_eligible(task, session):
+        raise ValueError("Outreach source is not currently eligible")
     if task.attempts >= task.max_attempts:
         raise ValueError(
             f"Task {task_id} has used {task.attempts}/{task.max_attempts} attempts. "
             "Escalate instead of retrying."
         )
     task.status = TaskStatus.retrying
+    if task.task_type == "service_outreach":
+        task.must_escalate = False
+        task.escalation_type = None
+        task.escalation_reason = None
     task.worker_id = None
     task.lease_expires_at = None
     session.add(task)
@@ -606,6 +751,8 @@ def sweep_and_retry_failed_tasks(
     ).all()
     retried: list[Task] = []
     for task in candidates:
+        if task.outreach_intent_json or task.pending_outcome_json:
+            continue
         if task.attempts >= task.max_attempts:
             continue
         retried.append(retry_task(task.task_id, session))

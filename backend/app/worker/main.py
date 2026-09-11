@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from typing import Any
 
 from app.worker.client import HunterWorkerClient
@@ -21,21 +22,8 @@ logger = logging.getLogger("hunter.worker")
 
 _STOP = False
 
-# Commander, 2026-09-11: "verify that an external success followed by
-# exhausted callback retries cannot cause duplicate execution."
-# HunterWorkerClient's terminal callbacks already retry a transient
-# failure (the confirmed real case — a brief 502 during the web
-# service's own redeploy). This covers what retry alone cannot: if
-# EVERY retry is exhausted (a longer outage) after execute_task()
-# already did something irreversible (e.g. sent a real email),
-# stale-lease reclaim would otherwise hand the SAME task back to
-# claim_task() with no memory that it already ran — re-executing it
-# from scratch. Caching the outcome in-process, keyed by task_id, means
-# a reclaim landing on THIS SAME worker process re-reports the already-
-# decided outcome instead of redoing the work. Bounded so it can never
-# grow unboundedly across a long-running process; does not survive a
-# worker restart, which is a materially narrower and much rarer window
-# than the confirmed failure this closes.
+# Warm-process reporting cache only. SMTP replay safety comes from the
+# durable pre-send reservation, which survives loss of this entire process.
 _reported_outcome_cache: dict[str, dict[str, Any]] = {}
 _MAX_CACHED_OUTCOMES = 500
 
@@ -141,6 +129,10 @@ def _process_task(client: HunterWorkerClient, worker_id: str, task: dict[str, An
                 priority="medium",
                 alert_type="review_required",
             )
+        # The executor invokes this only after input/SMTP authentication
+        # checks, immediately before any message submission.
+        task["_begin_outreach"] = lambda intent: client.begin_outreach(
+            task_id, worker_id, int(task.get("attempts", 0)), intent)
         result = execute_task(task, worker_id)
     except RetryableExecutionError as exc:
         attempt_num = int(task.get("attempts", 0))
@@ -246,7 +238,7 @@ def main() -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, _handle_signal)
 
-    worker_id = os.getenv("HUNTER_WORKER_ID", "hosted-hva-worker-1")
+    worker_id = os.getenv("HUNTER_WORKER_ID", "hosted-hva-worker-1") + ":" + uuid.uuid4().hex
     poll_interval = max(5, int(os.getenv("HUNTER_POLL_INTERVAL_SECONDS", "10")))
     _ensure_playwright_browsers_installed()
     client = HunterWorkerClient()

@@ -74,6 +74,16 @@ class HunterWorkerClient:
         )
         response.raise_for_status()
 
+    def begin_outreach(self, task_id: str, worker_id: str, attempt_number: int, intent: dict) -> None:
+        # Deliberately NOT retried. Lost acknowledgement leaves a durable
+        # uncertain reservation; it never authorizes an SMTP submission.
+        response = self._client.post(f"/tasks/{task_id}/begin-outreach", json={
+            "worker_id": worker_id, "attempt_number": attempt_number, "intent": intent,
+        })
+        response.raise_for_status()
+        if response.json().get("permitted") is not True:
+            raise RuntimeError("Server did not grant an outreach send permit")
+
     def record_pending_outcome(
         self,
         task_id: str,

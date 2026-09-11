@@ -19,11 +19,11 @@ def _task(task_id: str = "task-1") -> dict:
 def test_sends_real_email_when_contact_email_and_smtp_configured(monkeypatch):
     monkeypatch.setattr(executors, "_claude_text", lambda prompt: "Hello, quick question about your business.")
 
-    from app.services import email_notify
+    from app.services import outreach_smtp as email_notify
     sent_calls = []
     monkeypatch.setattr(
-        email_notify, "send_email_to",
-        lambda to, subject, body: (sent_calls.append((to, subject, body)), True)[1],
+        email_notify, "send_outreach",
+        lambda to, subject, body, **kw: (sent_calls.append((to, subject, body)), {"send_status": "accepted"})[1],
     )
 
     spec = {
@@ -36,22 +36,17 @@ def test_sends_real_email_when_contact_email_and_smtp_configured(monkeypatch):
     assert result.outcome["send_error"] is None
     assert result.outcome["draft_created"] is True
     assert sent_calls == [("owner@localbiz.example", "Regarding your bakery — quick question", "Hello, quick question about your business.")]
-    assert "sent real outreach email" in result.notes
+    assert "SMTP accepted" in result.notes
 
 
-def test_falls_back_to_draft_only_when_smtp_not_configured(monkeypatch):
+def test_missing_smtp_escalates_before_send(monkeypatch):
+    import pytest
+    from app.services import outreach_smtp
     monkeypatch.setattr(executors, "_claude_text", lambda prompt: "Draft body")
-
-    from app.services import email_notify
-    monkeypatch.setattr(email_notify, "send_email_to", lambda to, subject, body: False)
-
-    spec = {"service_outreach": {"contact_email": "owner@localbiz.example"}}
-    result = executors._execute_service_outreach(_task(), spec)
-
-    assert result.outcome["email_sent"] is False
-    assert result.outcome["send_error"] == "SMTP not configured or send failed — see worker logs"
-    assert result.outcome["draft_created"] is True
-    assert "not sent" in result.notes
+    monkeypatch.setattr(outreach_smtp.config, "SMTP_HOST", "")
+    with pytest.raises(executors.WorkerExecutionError) as error:
+        executors._execute_service_outreach(_task(), {"service_outreach": {"contact_email": "owner@example.test"}})
+    assert error.value.escalation_type == "credentials_required"
 
 
 def test_contact_url_only_triggers_a_real_website_investigation_and_sends_if_found(monkeypatch):
@@ -69,11 +64,11 @@ def test_contact_url_only_triggers_a_real_website_investigation_and_sends_if_fou
     }
     monkeypatch.setattr(executors, "_research_contact_email_from_website", lambda url: verification)
 
-    from app.services import email_notify
+    from app.services import outreach_smtp as email_notify
     calls = []
     monkeypatch.setattr(
-        email_notify, "send_email_to",
-        lambda to, subject, body: (calls.append((to, subject, body)), True)[1],
+        email_notify, "send_outreach",
+        lambda to, subject, body, **kw: (calls.append((to, subject, body)), {"send_status": "accepted"})[1],
     )
 
     spec = {"service_outreach": {"contact_url": "https://localbiz.example/contact"}}
@@ -93,9 +88,9 @@ def test_contact_url_only_escalates_truthfully_when_investigation_finds_nothing(
     monkeypatch.setattr(executors, "_claude_text", lambda prompt: "Draft body")
     monkeypatch.setattr(executors, "_research_contact_email_from_website", lambda url: None)
 
-    from app.services import email_notify
+    from app.services import outreach_smtp as email_notify
     calls = []
-    monkeypatch.setattr(email_notify, "send_email_to", lambda *a: calls.append(a) or True)
+    monkeypatch.setattr(email_notify, "send_outreach", lambda *a, **kw: calls.append(a) or {"send_status": "accepted"})
 
     spec = {"service_outreach": {"contact_url": "https://localbiz.example/contact"}}
     with pytest.raises(WorkerExecutionError) as excinfo:
@@ -105,21 +100,13 @@ def test_contact_url_only_escalates_truthfully_when_investigation_finds_nothing(
     assert calls == []  # never sent anything
 
 
-def test_send_exception_is_captured_not_raised(monkeypatch):
+def test_uncertain_send_is_reported_as_uncertain(monkeypatch):
     monkeypatch.setattr(executors, "_claude_text", lambda prompt: "Draft body")
-
-    from app.services import email_notify
-
-    def _boom(to, subject, body):
-        raise RuntimeError("smtp connection reset")
-
-    monkeypatch.setattr(email_notify, "send_email_to", _boom)
-
-    spec = {"service_outreach": {"contact_email": "owner@localbiz.example"}}
-    result = executors._execute_service_outreach(_task(), spec)
-
+    from app.services import outreach_smtp
+    monkeypatch.setattr(outreach_smtp, "send_outreach", lambda *a, **kw: {"send_status": "uncertain"})
+    result = executors._execute_service_outreach(_task(), {"service_outreach": {"contact_email": "owner@example.test"}})
     assert result.outcome["email_sent"] is False
-    assert "smtp connection reset" in result.outcome["send_error"]
+    assert result.outcome["send_status"] == "uncertain"
 
 
 def test_no_website_at_all_proposes_and_verifies_a_candidate_then_sends(monkeypatch):
@@ -148,11 +135,11 @@ def test_no_website_at_all_proposes_and_verifies_a_candidate_then_sends(monkeypa
 
     monkeypatch.setattr(executors, "_research_contact_email_from_website", _fake_research)
 
-    from app.services import email_notify
+    from app.services import outreach_smtp as email_notify
     calls = []
     monkeypatch.setattr(
-        email_notify, "send_email_to",
-        lambda to, subject, body: (calls.append((to, subject, body)), True)[1],
+        email_notify, "send_outreach",
+        lambda to, subject, body, **kw: (calls.append((to, subject, body)), {"send_status": "accepted"})[1],
     )
 
     spec = {"service_outreach": {"business_name": "Example Dental", "business_type": "Example Dental"}}
@@ -171,9 +158,9 @@ def test_no_website_and_no_verified_candidate_escalates_truthfully(monkeypatch):
     )
     monkeypatch.setattr(executors, "_research_contact_email_from_website", lambda url, **kw: None)
 
-    from app.services import email_notify
+    from app.services import outreach_smtp as email_notify
     calls = []
-    monkeypatch.setattr(email_notify, "send_email_to", lambda *a: calls.append(a) or True)
+    monkeypatch.setattr(email_notify, "send_outreach", lambda *a, **kw: calls.append(a) or {"send_status": "accepted"})
 
     import pytest
     from app.worker.executors import WorkerExecutionError
@@ -193,7 +180,7 @@ def test_no_website_and_no_business_name_never_calls_claude_for_a_candidate(monk
     calls = []
     monkeypatch.setattr(
         executors, "_propose_candidate_business_website",
-        lambda *a: calls.append(a) or None,
+        lambda *a, **kw: calls.append(a) or None,
     )
 
     import pytest

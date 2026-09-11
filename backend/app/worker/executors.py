@@ -337,28 +337,29 @@ def _execute_service_outreach(task: dict[str, Any], spec: dict[str, Any]) -> Wor
     draft = _claude_text(
         "Draft a short, respectful cold outreach email for a local business prospect.\n"
         f"Business type: {business_type}\nSearch query: {search_query}\n"
+        f"Authorized proposed offer: {spec.get('next_action') or details.get('offer') or ''}\n"
+        "Return only the message body. Do not invent a sender identity, price, credentials, "
+        "client history, promised results or facts about the business. Missing fields in an "
+        "OpenStreetMap listing do not mean the business lacks a website, phone or email. "
+        "Ask whether the proposed service would be useful; do not assert unverified problems.\n"
     )
     artifact_path = _write_text_artifact(task["task_id"], "service_outreach_draft.md", draft)
 
-    # Real send, not just a draft, when a real contact_email exists and
-    # SMTP is actually configured on this worker — reuses the exact same
-    # SMTP infrastructure already used for Commander alert emails
-    # (app.services.email_notify), just not scoped to Commander.
-    # "Drafting is not sending" (Commander, 2026-09-10): email_sent below
-    # is a real, confirmed SMTP transmission or it's False with a reason —
-    # never inferred, never implying the recipient read or replied.
-    email_sent = False
-    send_error: Optional[str] = None
-    if contact_email:
-        from app.services import email_notify
+    from app.services.outreach_smtp import send_outreach, PreSendError, PermitError
 
-        subject = f"Regarding your {business_type} — quick question"
-        try:
-            email_sent = email_notify.send_email_to(contact_email, subject, draft)
-            if not email_sent:
-                send_error = "SMTP not configured or send failed — see worker logs"
-        except Exception as exc:  # noqa: BLE001
-            send_error = f"{type(exc).__name__}: {exc}"
+    subject = f"Regarding your {business_type} — quick question"
+    try:
+        receipt = send_outreach(contact_email, subject, draft,
+            before_send=task.get("_begin_outreach"), contact_verification=verification)
+    except PreSendError as exc:
+        raise WorkerExecutionError(str(exc),
+            escalation_type="credentials_required" if exc.configuration else "unrecoverable_failure",
+            trace_reference=artifact_path, engine="direct_api") from exc
+    except PermitError as exc:
+        raise WorkerExecutionError(str(exc), escalation_type="external_outcome_uncertain",
+            trace_reference=artifact_path, engine="direct_api") from exc
+    email_sent = receipt["send_status"] == "accepted"
+    send_error = None if email_sent else "SMTP " + receipt["send_status"]
 
     outcome = {
         "draft_created": True,
@@ -370,19 +371,15 @@ def _execute_service_outreach(task: dict[str, Any], spec: dict[str, Any]) -> Wor
         # crawl rather than supplied directly in the task spec — the
         # source URL and timestamp are the verification evidence.
         "contact_verification": verification,
-        # Real, confirmed-or-not outcome — distinct from draft_created.
-        # A True here means smtplib.sendmail() completed without raising;
-        # it is not proof of delivery, a read, a reply, or any acceptance.
         "email_sent": email_sent,
         "send_error": send_error,
+        "send_status": receipt["send_status"],
+        "smtp_receipt": receipt,
     }
     return WorkerResult(
         outcome=outcome,
-        notes=(
-            "Hosted HVA sent real outreach email." if email_sent
-            else "Hosted HVA prepared service outreach copy (not sent — "
-                 f"{send_error or 'no contact_email'})."
-        ),
+        notes=("SMTP accepted outreach; awaiting delivery/response." if email_sent
+               else "SMTP " + receipt["send_status"] + "; do not automatically resend."),
         engine="claude_cu",
         trace_reference=artifact_path,
     )

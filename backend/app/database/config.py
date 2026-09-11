@@ -187,6 +187,8 @@ def _migrate_sqlite_tables() -> None:
             {
                 "pending_outcome_json": "TEXT",
                 "pending_outcome_recorded_at": "TIMESTAMP",
+                "outreach_intent_json": "TEXT",
+                "outreach_intent_at": "TIMESTAMP",
             },
         )
         conn.execute(
