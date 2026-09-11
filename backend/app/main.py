@@ -532,6 +532,39 @@ def _log_production_inventory_diagnostics() -> None:
                     (p.execution_notes or "")[:160],
                 )
 
+            # Trace the two named checkpoints (Commander, 2026-09-11):
+            # "trace the Commander answers already recorded through
+            # checkpoint state, eligibility, dispatch, and outcome."
+            # commander_response is Commander's own submitted text
+            # (never inferred), disposition/checkpoint are Hunter's own
+            # ledger fields, spec_payload is the exact input a dispatched
+            # task actually carries — truncated defensively, no personal
+            # data beyond what Commander already typed into this exact
+            # checkpoint.
+            from app.models.hunter_ledger import CanonicalOpportunity as _CO
+            from app.models.task import Task as _T
+
+            for _coid in ("HUNTER-CAND-2026-09-08-01-UCP", "HUNTER-CAND-2026-09-08-02-GOOGLE"):
+                _opp = session.exec(select(_CO).where(_CO.canonical_opportunity_id == _coid)).first()
+                if not _opp:
+                    continue
+                _matching_tasks = session.exec(
+                    select(_T).where(_T.source_id == _coid).order_by(_T.dispatched_at.desc())
+                ).all()
+                _startup_logger.info(
+                    "INVENTORY_DIAG checkpoint_trace id=%s disposition=%s commander_response=%r "
+                    "commander_responded_at=%s checkpoint=%r",
+                    _coid, _opp.disposition, (_opp.commander_response or "")[:200],
+                    _opp.commander_responded_at, (_opp.required_commander_checkpoints or "")[:200],
+                )
+                for _t in _matching_tasks[:5]:
+                    _startup_logger.info(
+                        "INVENTORY_DIAG checkpoint_trace_task id=%s task_id=%s task_type=%s status=%s "
+                        "dispatched_at=%s spec_payload=%r",
+                        _coid, _t.task_id, _t.task_type, _t.status, _t.dispatched_at,
+                        (_t.spec_payload or "")[:300],
+                    )
+
             # RECYCLE's OWN local tracking (Commander, 2026-09-10 — the
             # correction: broker history must be checked directly rather
             # than inferred from ActionPacket/ProviderExecution being
