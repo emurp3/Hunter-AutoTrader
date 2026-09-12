@@ -1407,7 +1407,14 @@ function ResultsSection({ onAuthFail }) {
         </DataCard>
         <DataCard title="Tasks">
           <KeyValueList rows={[
-            { label: 'Pending', value: formatNumber(valueFrom(taskCounts.pending, taskCounts.queued, taskCounts.open)) },
+            { label: 'Pending', value: formatNumber(
+              Number(taskCounts.pending || 0)
+              + Number(taskCounts.queued || 0)
+              + Number(taskCounts.open || 0)
+              + Number(taskCounts.created || 0)
+              + Number(taskCounts.dispatched || 0)
+              + Number(taskCounts.retrying || 0)
+            ) },
             { label: 'Completed', value: formatNumber(valueFrom(taskCounts.completed, taskCounts.done, taskCounts.success)) },
             { label: 'Failed', value: formatNumber(valueFrom(taskCounts.failed, taskCounts.error)) },
           ]} />
