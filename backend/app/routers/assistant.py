@@ -1,8 +1,9 @@
 import os
 import logging
+from typing import Literal
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.auth.jwt import require_admin
@@ -23,13 +24,40 @@ def identity_status(_user=Depends(require_admin)):
     return commander_identity.get_identity_field_presence()
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str
+    history: list[ChatMessage] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
     response: str
     context_snapshot: dict
+    error_code: str | None = None
+    provider: str = "deepseek"
+    model: str | None = None
+    usage: dict | None = None
+    estimated_cost_usd: float | None = None
+
+
+def _provider_error(exc: Exception) -> tuple[str, str]:
+    status = getattr(exc, "status_code", None)
+    body = str(exc).lower()
+    if status in (401, 403):
+        return "provider_authentication", "Hunter AI provider authentication failed."
+    if "insufficient" in body and any(term in body for term in ("balance", "credit", "quota")):
+        return "provider_balance", "Hunter AI provider balance is unavailable."
+    if status == 429:
+        return "provider_rate_limit", "Hunter AI provider is rate-limited. Please retry shortly."
+    if "timeout" in body:
+        return "provider_timeout", "Hunter AI provider timed out. Please retry."
+    if status is not None and status >= 500:
+        return "provider_unavailable", "Hunter AI provider is temporarily unavailable."
+    return "inference_error", "Hunter AI could not complete that request."
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -37,21 +65,33 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
     ctx = _gather_context(session)
     system_prompt = _build_system_prompt(ctx)
 
+    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
+    error_code = None
     try:
         import openai
-        client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        client = openai.OpenAI(
+            api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+            base_url=os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com"),
+            timeout=float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "30")),
+        )
+        history = [m.model_dump() for m in payload.history[-20:]]
         completion = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
+                *history,
                 {"role": "user", "content": payload.message},
             ],
             max_tokens=600,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         response_text = completion.choices[0].message.content
+        usage = completion.usage.model_dump() if completion.usage else None
+        logger.info("Hunter chat completed provider=deepseek model=%s usage=%s", model, usage)
     except Exception as exc:
-        logger.error("OpenAI call failed: %s", exc)
-        response_text = "Hunter AI is temporarily offline. Check your connection."
+        error_code, response_text = _provider_error(exc)
+        logger.error("DeepSeek chat failed code=%s model=%s: %s", error_code, model, exc)
+        usage = None
 
     return ChatResponse(
         response=response_text,
@@ -60,6 +100,9 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
             "top_opp_count": len(ctx.get("top_opps", [])),
             "signals_total": ctx.get("signals_total", 0),
         },
+        error_code=error_code,
+        model=model,
+        usage=usage,
     )
 
 

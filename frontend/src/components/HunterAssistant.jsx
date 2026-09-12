@@ -89,13 +89,20 @@ export default function HunterAssistant() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          history: messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .slice(-20)
+            .map(({ role, content }) => ({ role, content })),
+        }),
       })
+      if (!res.ok) throw new Error(`Hunter server returned ${res.status}`)
       const data = await res.json()
       setMsgs(prev => [...prev, { role: 'assistant', content: data.response }])
       if (data.context_snapshot) setSnap(data.context_snapshot)
     } catch {
-      setMsgs(prev => [...prev, { role: 'assistant', content: 'Hunter AI is temporarily offline. Check your connection.' }])
+      setMsgs(prev => [...prev, { role: 'assistant', content: 'Hunter server is unavailable. Please retry.' }])
     } finally {
       setLoading(false)
     }
