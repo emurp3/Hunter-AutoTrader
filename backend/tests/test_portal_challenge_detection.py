@@ -54,6 +54,11 @@ def test_visible_captcha_control_is_detected():
     assert _has_anti_bot_challenge(page) is True
 
 
+def test_visible_captcha_modal_is_detected():
+    page = _Page({"#captchaModal.show": _Locator(count=1, visible=True)})
+    assert _has_anti_bot_challenge(page) is True
+
+
 def test_passive_recaptcha_badge_text_does_not_count_as_a_challenge():
     page = _Page({}, body_text="This site is protected by reCAPTCHA and the Google Privacy Policy applies")
     assert _has_anti_bot_challenge(page) is False

@@ -904,7 +904,8 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
 
             claim_trigger = page.locator(
                 'a:has-text("File a Claim"), a:has-text("File Claim"), a:has-text("Start Claim"), '
-                'button:has-text("File a Claim"), button:has-text("Start Claim"), a:has-text("Claim")'
+                'a:has-text("Claim Property"), button:has-text("File a Claim"), '
+                'button:has-text("Start Claim"), button:has-text("Claim Property")'
             )
             if claim_trigger.count() == 0 or not claim_trigger.first.is_visible():
                 # Honest, legitimate outcome — no claimable record found on this
@@ -1142,6 +1143,7 @@ def _has_anti_bot_challenge(page) -> bool:
     for selector in (
         # A passive badge/anchor appears on ordinary forms. Only the
         # interactive challenge frame should block execution.
+        '#captchaModal.show', '[role="dialog"][id*="captcha" i][class*="show" i]',
         'iframe[src*="recaptcha" i][src*="bframe" i]',
         'iframe[src*="hcaptcha" i][title*="challenge" i]',
         'iframe[title*="captcha challenge" i]',
