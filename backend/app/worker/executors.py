@@ -797,6 +797,9 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             page_url = page.url
             page.wait_for_timeout(2000)
 
+            _dismiss_claimant_login_if_possible(page)
+            page_url = page.url
+
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot.png")
                 page.screenshot(path=screenshot_path, full_page=True)
@@ -848,6 +851,9 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             page.wait_for_timeout(4000)
             page_url = page.url
 
+            _dismiss_claimant_login_if_possible(page)
+            page_url = page.url
+
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-postsearch.png")
                 page.screenshot(path=screenshot_path, full_page=True)
@@ -855,6 +861,17 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
                     "Anti-bot control appeared after search submission",
                     escalation_type="commander_boundary",
                     error_text="CAPTCHA/anti-bot indicator found on results page",
+                    page_url=page.url,
+                    screenshot_path=screenshot_path,
+                )
+
+            if _has_login_wall(page):
+                screenshot_path = str(_artifact_dir(task_id) / "gov-portal-login-required.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                raise WorkerExecutionError(
+                    "Government portal requires a claimant account login",
+                    escalation_type="credentials_required",
+                    error_text="Visible username/password login form remained after using the public Cancel path",
                     page_url=page.url,
                     screenshot_path=screenshot_path,
                 )
@@ -1127,15 +1144,46 @@ def _has_anti_bot_challenge(page) -> bool:
         '[class*="hcaptcha" i]', 'iframe[title*="captcha" i]', '[id*="captcha" i]',
     ):
         try:
-            if page.locator(selector).count() > 0:
+            locator = page.locator(selector)
+            if locator.count() > 0 and locator.first.is_visible():
                 return True
         except Exception:
             continue
-    body = page.content().lower()
+    try:
+        body = page.locator("body").inner_text().lower()
+    except Exception:
+        body = ""
     return any(
         token in body
         for token in ("verify you are human", "i'm not a robot", "captcha", "bot detection", "access denied")
     )
+
+
+def _has_login_wall(page) -> bool:
+    """Identify a visible username/password gate without calling it anti-bot."""
+    username = page.locator(
+        'input[type="text"][name*="user" i], input[name*="username" i], input[id*="username" i]'
+    )
+    password = page.locator('input[type="password"]')
+    return (
+        username.count() > 0 and username.first.is_visible()
+        and password.count() > 0 and password.first.is_visible()
+    )
+
+
+def _dismiss_claimant_login_if_possible(page) -> bool:
+    """Use the portal's public Cancel path when a claimant login interrupts search."""
+    if not _has_login_wall(page):
+        return False
+    cancel = page.locator(
+        'button:has-text("Cancel"), input[type="button"][value="Cancel" i], '
+        'input[type="submit"][value="Cancel" i], a:has-text("Cancel")'
+    )
+    if cancel.count() == 0 or not cancel.first.is_visible():
+        return False
+    cancel.first.click()
+    page.wait_for_timeout(2000)
+    return True
 
 
 def _login_form_still_visible(page) -> bool:
