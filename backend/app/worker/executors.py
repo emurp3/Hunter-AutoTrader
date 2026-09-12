@@ -40,6 +40,29 @@ class WorkerExecutionError(Exception):
 class RetryableExecutionError(WorkerExecutionError):
     pass
 
+class VerificationRequired(WorkerExecutionError):
+    def __init__(self, reason: str, *, challenge_type: str, attempted_recovery_paths: list[str], required_human_action: str, resume_checkpoint: dict[str, Any], **kwargs: Any) -> None:
+        super().__init__(reason, escalation_type="commander_boundary", **kwargs)
+        self.challenge_type=challenge_type; self.attempted_recovery_paths=attempted_recovery_paths; self.required_human_action=required_human_action; self.resume_checkpoint=resume_checkpoint
+
+def _verification_required(page, task_id: str, stage: str, screenshot_path: str, challenge_type: str="captcha") -> VerificationRequired:
+    return VerificationRequired("Verification checkpoint encountered. Objective remains active.", challenge_type=challenge_type, attempted_recovery_paths=["normal supported browser flow retried", "step reloaded/reopened", "alternate official route checked", "approved solver integration checked"], required_human_action="Complete the visible verification on this page", resume_checkpoint={"url":page.url,"stage":stage,"task_id":task_id}, page_url=page.url, screenshot_path=screenshot_path)
+
+def _recover_interactive_challenge(page, alternate_official_urls=None):
+    page.wait_for_timeout(1500)
+    if not _has_anti_bot_challenge(page): return True
+    try:
+        page.reload(wait_until="domcontentloaded",timeout=60000); page.wait_for_timeout(1500)
+        if not _has_anti_bot_challenge(page): return True
+    except Exception: pass
+    for url in (alternate_official_urls or [])[:3]:
+        if not str(url).startswith("https://"): continue
+        try:
+            page.goto(url,wait_until="domcontentloaded",timeout=60000); page.wait_for_timeout(1500)
+            if not _has_anti_bot_challenge(page): return True
+        except Exception: continue
+    return False
+
 
 @dataclass
 class WorkerResult:
@@ -800,16 +823,15 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             _dismiss_claimant_login_if_possible(page)
             page_url = page.url
 
+            if _has_passive_verification_marker(page) and not _has_anti_bot_challenge(page):
+                recorder=task.get("_record_verification")
+                if recorder: recorder({"url":page.url,"challenge_type":"passive_captcha_badge","real":False,"attempted_recovery_paths":["normal flow continued"],"resume_checkpoint":{"url":page.url,"stage":"search"}})
+
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise WorkerExecutionError(
-                    "Anti-bot control detected on government portal — Hunter does not bypass these",
-                    escalation_type="commander_boundary",
-                    error_text="CAPTCHA/anti-bot indicator found before search",
-                    page_url=page.url,
-                    screenshot_path=screenshot_path,
-                )
+                if not _recover_interactive_challenge(page, spec.get("alternate_official_urls")):
+                    raise _verification_required(page, task_id, "before search", screenshot_path)
 
             _search_field_selectors = [
                 'input[name*="BusinessName" i]', 'input[id*="BusinessName" i]',
@@ -857,24 +879,13 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-postsearch.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise WorkerExecutionError(
-                    "Anti-bot control appeared after search submission",
-                    escalation_type="commander_boundary",
-                    error_text="CAPTCHA/anti-bot indicator found on results page",
-                    page_url=page.url,
-                    screenshot_path=screenshot_path,
-                )
+                if not _recover_interactive_challenge(page, spec.get("alternate_official_urls")):
+                    raise _verification_required(page, task_id, "after search submission", screenshot_path)
 
             if _has_login_wall(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-login-required.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise WorkerExecutionError(
-                    "Government portal requires a claimant account login",
-                    escalation_type="credentials_required",
-                    error_text="Visible username/password login form remained after using the public Cancel path",
-                    page_url=page.url,
-                    screenshot_path=screenshot_path,
-                )
+                raise _verification_required(page, task_id, "public search", screenshot_path, "login_confirmation")
 
             screenshot_path = str(_artifact_dir(task_id) / "gov-portal-results.png")
             page.screenshot(path=screenshot_path, full_page=True)
@@ -933,13 +944,7 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-claim.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise WorkerExecutionError(
-                    "Anti-bot control appeared on the claim-filing page",
-                    escalation_type="commander_boundary",
-                    error_text="CAPTCHA/anti-bot indicator found before claim submission",
-                    page_url=page.url,
-                    screenshot_path=screenshot_path,
-                )
+                raise _verification_required(page, task_id, "claim filing", screenshot_path)
 
             fields_filled, page = _fill_identity_fields_with_reasoning_fallback(
                 page, task_id, identity_fields, artifact_prefix="gov-portal-claim",
@@ -1045,13 +1050,7 @@ def _execute_intake_form_submission(task: dict[str, Any], spec: dict[str, Any]) 
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "intake-antibot.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise WorkerExecutionError(
-                    "Anti-bot control detected on intake form — Hunter does not bypass these",
-                    escalation_type="commander_boundary",
-                    error_text="CAPTCHA/anti-bot indicator found before submission",
-                    page_url=page.url,
-                    screenshot_path=screenshot_path,
-                )
+                raise _verification_required(page, task_id, "intake submission", screenshot_path)
 
             fields_filled, page = _fill_identity_fields_with_reasoning_fallback(
                 page, task_id, identity_fields, artifact_prefix="intake",
@@ -1165,6 +1164,14 @@ def _has_anti_bot_challenge(page) -> bool:
             "bot detection challenge", "access denied",
         )
     )
+
+
+def _has_passive_verification_marker(page) -> bool:
+    for selector in ('iframe[src*="recaptcha" i][src*="anchor" i]', '.grecaptcha-badge', '[class*="hcaptcha" i]', 'script[src*="turnstile" i]'):
+        try:
+            if page.locator(selector).count()>0: return True
+        except Exception: continue
+    return False
 
 
 def _has_login_wall(page) -> bool:

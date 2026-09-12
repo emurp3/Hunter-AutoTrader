@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 from app.worker.client import HunterWorkerClient
-from app.worker.executors import RetryableExecutionError, WorkerExecutionError, execute_task
+from app.worker.executors import RetryableExecutionError, VerificationRequired, WorkerExecutionError, execute_task
 
 
 logging.basicConfig(
@@ -133,7 +133,16 @@ def _process_task(client: HunterWorkerClient, worker_id: str, task: dict[str, An
         # checks, immediately before any message submission.
         task["_begin_outreach"] = lambda intent: client.begin_outreach(
             task_id, worker_id, int(task.get("attempts", 0)), intent)
+        task["_record_verification"] = lambda payload: client.verification_event(
+            task_id, worker_id, **payload)
         result = execute_task(task, worker_id)
+    except VerificationRequired as exc:
+        client.verification_checkpoint(task_id, worker_id, url=exc.page_url or "",
+            challenge_type=exc.challenge_type,
+            attempted_recovery_paths=exc.attempted_recovery_paths,
+            required_human_action=exc.required_human_action,
+            resume_checkpoint=exc.resume_checkpoint)
+        logger.info("verification checkpoint routed for active task %s", task_id)
     except RetryableExecutionError as exc:
         attempt_num = int(task.get("attempts", 0))
         max_attempts = int(task.get("max_attempts", 0))

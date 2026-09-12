@@ -189,6 +189,9 @@ def _migrate_sqlite_tables() -> None:
                 "pending_outcome_recorded_at": "TIMESTAMP",
                 "outreach_intent_json": "TEXT",
                 "outreach_intent_at": "TIMESTAMP",
+                "verification_attempts": "INTEGER DEFAULT 0",
+                "verification_state": "TEXT",
+                "resume_checkpoint_json": "TEXT",
             },
         )
         conn.execute(

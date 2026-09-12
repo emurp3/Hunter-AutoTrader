@@ -580,6 +580,15 @@ def resume_manual_action_tasks(session: Session) -> list[Task]:
     ).all()
     for opp in candidates:
         checkpoint = opp.required_commander_checkpoints or ""
+        if "[HUMAN-VERIFICATION-REQUIRED]" in checkpoint:
+            waiting = session.exec(select(Task).where(
+                Task.source_id == opp.canonical_opportunity_id,
+                Task.status == TaskStatus.awaiting_human_verification,
+            ).order_by(Task.id.desc())).first()
+            if waiting:
+                from app.services.verification import resume
+                resumed.append(resume(waiting, session))
+            continue
         if _MANUAL_ACTION_TAG not in checkpoint:
             continue
 

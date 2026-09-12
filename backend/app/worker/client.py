@@ -217,3 +217,13 @@ class HunterWorkerClient:
         response.raise_for_status()
         return response.json()
 
+    def verification_checkpoint(self, task_id: str, worker_id: str, **payload: Any) -> dict[str, Any]:
+        return self._post_terminal_with_retry(
+            f"/tasks/{task_id}/verification-checkpoint", {"worker_id": worker_id, **payload})
+
+    def verification_event(self, task_id: str, worker_id: str, **payload: Any) -> dict[str, Any]:
+        response = self._client.post(f"/tasks/{task_id}/verification-event",
+            json={"worker_id": worker_id, "required_human_action": "", **payload})
+        response.raise_for_status()
+        return response.json()
+

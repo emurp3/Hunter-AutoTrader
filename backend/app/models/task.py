@@ -24,6 +24,9 @@ class TaskStatus(str, Enum):
     completed = "completed"
     failed = "failed"
     escalated = "escalated"
+    rerouting = "rerouting"
+    awaiting_human_verification = "awaiting_human_verification"
+    resuming = "resuming"
 
 
 class ExecutionEngine(str, Enum):
@@ -81,6 +84,9 @@ class Task(SQLModel, table=True):
     status: TaskStatus = Field(default=TaskStatus.dispatched, index=True)
     attempts: int = Field(default=0)
     max_attempts: int = Field(default=3)
+    verification_attempts: int = Field(default=0)
+    verification_state: Optional[str] = Field(default=None, index=True)
+    resume_checkpoint_json: Optional[str] = Field(default=None)
 
     # Worker lease — atomic claiming and heartbeat
     worker_id: Optional[str] = Field(default=None, index=True)
@@ -110,6 +116,22 @@ class Task(SQLModel, table=True):
     completed_at: Optional[datetime] = Field(default=None)
     failed_at: Optional[datetime] = Field(default=None)
     escalated_at: Optional[datetime] = Field(default=None)
+
+
+class VerificationReceipt(SQLModel, table=True):
+    """Durable audit record for passive and interactive access friction."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    objective_id: Optional[str] = Field(default=None, index=True)
+    task_id: str = Field(index=True)
+    target_site: str = Field(default="")
+    url: str = Field(default="")
+    challenge_type: str = Field(default="unknown")
+    challenge_reality: str = Field(default="real")
+    attempted_recovery_paths: str = Field(default="[]")
+    current_state: str = Field(default="ACTIVE", index=True)
+    required_human_action: Optional[str] = Field(default=None)
+    resume_checkpoint: str = Field(default="{}")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 
 
 class TaskAttempt(SQLModel, table=True):

@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 
 from app.database.config import get_session
 from app.auth.jwt import require_worker
-from app.models.task import EscalationType, ExecutionEngine, Task, TaskAttempt, TaskStatus
+from app.models.task import EscalationType, ExecutionEngine, Task, TaskAttempt, TaskStatus, VerificationReceipt
 from app.services import tasks as task_svc
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -100,6 +100,15 @@ class FailRequest(BaseModel):
     error_text: Optional[str] = None
     trace_reference: Optional[str] = None
     engine: Optional[str] = None
+
+class VerificationRequest(BaseModel):
+    worker_id: str
+    url: str
+    challenge_type: str
+    attempted_recovery_paths: list[str] = []
+    required_human_action: str
+    resume_checkpoint: dict[str, Any] = {}
+    real: bool = True
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -262,6 +271,33 @@ def escalate(task_id: str, body: EscalateRequest, session: Session = Depends(get
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return task
+
+@router.post("/{task_id}/verification-checkpoint")
+def verification_checkpoint(task_id: str, body: VerificationRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
+    """Route real access friction without terminating the objective."""
+    from app.services.verification import await_human
+    try:
+        return await_human(session, task_id, url=body.url, challenge_type=body.challenge_type,
+            attempted_paths=body.attempted_recovery_paths,
+            required_human_action=body.required_human_action, checkpoint=body.resume_checkpoint)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+@router.get("/{task_id}/verification-receipts")
+def verification_receipts(task_id: str, session: Session = Depends(get_session)):
+    return session.exec(select(VerificationReceipt).where(VerificationReceipt.task_id == task_id).order_by(VerificationReceipt.timestamp)).all()
+
+@router.post("/{task_id}/verification-event")
+def verification_event(task_id: str, body: VerificationRequest, session: Session = Depends(get_session), _w: dict = Depends(require_worker)):
+    from app.services.verification import ACTIVE, record_receipt
+    task = session.exec(select(Task).where(Task.task_id == task_id)).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    record_receipt(session, task, url=body.url, challenge_type=body.challenge_type,
+        real=body.real, attempted_paths=body.attempted_recovery_paths,
+        state=ACTIVE, checkpoint=body.resume_checkpoint)
+    session.commit()
+    return {"recorded": True, "state": ACTIVE}
 
 
 @router.post("/{task_id}/fail")
