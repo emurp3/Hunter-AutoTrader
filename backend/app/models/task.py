@@ -131,6 +131,15 @@ class VerificationReceipt(SQLModel, table=True):
     current_state: str = Field(default="ACTIVE", index=True)
     required_human_action: Optional[str] = Field(default=None)
     resume_checkpoint: str = Field(default="{}")
+    solver_provider: Optional[str] = Field(default=None)
+    solver_enabled: bool = Field(default=False)
+    solver_configured: bool = Field(default=False)
+    challenge_family: Optional[str] = Field(default=None)
+    solver_request_id: Optional[str] = Field(default=None)
+    solver_attempt_count: int = Field(default=0)
+    solver_result: Optional[str] = Field(default=None)
+    verification_accepted: bool = Field(default=False)
+    fallback_reason: Optional[str] = Field(default=None)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 
 

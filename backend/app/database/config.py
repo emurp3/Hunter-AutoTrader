@@ -194,6 +194,13 @@ def _migrate_sqlite_tables() -> None:
                 "resume_checkpoint_json": "TEXT",
             },
         )
+        _ensure_columns(conn, "verificationreceipt", {
+            "solver_provider": "TEXT", "solver_enabled": "BOOLEAN DEFAULT 0",
+            "solver_configured": "BOOLEAN DEFAULT 0", "challenge_family": "TEXT",
+            "solver_request_id": "TEXT", "solver_attempt_count": "INTEGER DEFAULT 0",
+            "solver_result": "TEXT", "verification_accepted": "BOOLEAN DEFAULT 0",
+            "fallback_reason": "TEXT",
+        })
         conn.execute(
             """
             UPDATE weeklybudget

@@ -8,8 +8,9 @@ ACTIVE="ACTIVE"; RETRYING="RETRYING"; REROUTING="REROUTING"
 AWAITING_HUMAN_VERIFICATION="AWAITING_HUMAN_VERIFICATION"; RESUMING="RESUMING"; COMPLETED="COMPLETED"
 FAILED_ONLY_AFTER_ALL_VALID_PATHS_EXHAUSTED="FAILED_ONLY_AFTER_ALL_VALID_PATHS_EXHAUSTED"
 HUMAN_VERIFICATION_TAG="[HUMAN-VERIFICATION-REQUIRED]"
-def record_receipt(session: Session, task: Task, *, url: str, challenge_type: str, real: bool, attempted_paths: list[str], state: str, required_human_action: str|None=None, checkpoint: dict[str, Any]|None=None) -> VerificationReceipt:
-    receipt=VerificationReceipt(objective_id=task.source_id, task_id=task.task_id, target_site=urlsplit(url).netloc, url=url, challenge_type=challenge_type, challenge_reality="real" if real else "passive", attempted_recovery_paths=json.dumps(attempted_paths), current_state=state, required_human_action=required_human_action, resume_checkpoint=json.dumps(checkpoint or {}))
+def record_receipt(session: Session, task: Task, *, url: str, challenge_type: str, real: bool, attempted_paths: list[str], state: str, required_human_action: str|None=None, checkpoint: dict[str, Any]|None=None, solver: dict[str, Any]|None=None) -> VerificationReceipt:
+    solver=solver or {}
+    receipt=VerificationReceipt(objective_id=task.source_id, task_id=task.task_id, target_site=urlsplit(url).netloc, url=url, challenge_type=challenge_type, challenge_reality="real" if real else "passive", attempted_recovery_paths=json.dumps(attempted_paths), current_state=state, required_human_action=required_human_action, resume_checkpoint=json.dumps(checkpoint or {}), solver_provider=solver.get("solver_provider"), solver_enabled=solver.get("solver_enabled",False), solver_configured=solver.get("solver_configured",False), challenge_family=solver.get("challenge_family"), solver_request_id=solver.get("solver_request_id"), solver_attempt_count=solver.get("solver_attempt_count",0), solver_result=solver.get("solver_result"), verification_accepted=solver.get("verification_accepted",False), fallback_reason=solver.get("fallback_reason"))
     session.add(receipt); return receipt
 def await_human(session: Session, task_id: str, *, url: str, challenge_type: str, attempted_paths: list[str], required_human_action: str, checkpoint: dict[str, Any]) -> Task:
     task=session.exec(select(Task).where(Task.task_id==task_id)).first()

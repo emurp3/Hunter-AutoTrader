@@ -48,20 +48,25 @@ class VerificationRequired(WorkerExecutionError):
 def _verification_required(page, task_id: str, stage: str, screenshot_path: str, challenge_type: str="captcha") -> VerificationRequired:
     return VerificationRequired("Verification checkpoint encountered. Objective remains active.", challenge_type=challenge_type, attempted_recovery_paths=["normal supported browser flow retried", "step reloaded/reopened", "alternate official route checked", "approved solver integration checked"], required_human_action="Complete the visible verification on this page", resume_checkpoint={"url":page.url,"stage":stage,"task_id":task_id}, page_url=page.url, screenshot_path=screenshot_path)
 
-def _recover_interactive_challenge(page, alternate_official_urls=None):
+def _recover_interactive_challenge(page, task: dict[str, Any], spec: dict[str, Any]):
     page.wait_for_timeout(1500)
     if not _has_anti_bot_challenge(page): return True
     try:
         page.reload(wait_until="domcontentloaded",timeout=60000); page.wait_for_timeout(1500)
         if not _has_anti_bot_challenge(page): return True
     except Exception: pass
-    for url in (alternate_official_urls or [])[:3]:
+    for url in (spec.get("alternate_official_urls") or [])[:3]:
         if not str(url).startswith("https://"): continue
         try:
             page.goto(url,wait_until="domcontentloaded",timeout=60000); page.wait_for_timeout(1500)
             if not _has_anti_bot_challenge(page): return True
         except Exception: continue
-    return False
+    from app.worker.captcha_provider import solve_in_browser
+    receipt = solve_in_browser(page, spec)
+    recorder = task.get("_record_verification")
+    if recorder:
+        recorder({"url": page.url, "challenge_type": receipt["challenge_family"], "real": True, "attempted_recovery_paths": ["provider execution"], "resume_checkpoint": {"url": page.url, "stage": "solver"}, **receipt})
+    return bool(receipt["verification_accepted"])
 
 
 @dataclass
@@ -830,7 +835,7 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                if not _recover_interactive_challenge(page, spec.get("alternate_official_urls")):
+                if not _recover_interactive_challenge(page, task, spec):
                     raise _verification_required(page, task_id, "before search", screenshot_path)
 
             _search_field_selectors = [
@@ -879,7 +884,7 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-postsearch.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                if not _recover_interactive_challenge(page, spec.get("alternate_official_urls")):
+                if not _recover_interactive_challenge(page, task, spec):
                     raise _verification_required(page, task_id, "after search submission", screenshot_path)
 
             if _has_login_wall(page):
@@ -944,7 +949,8 @@ def _execute_government_portal_search(task: dict[str, Any], spec: dict[str, Any]
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "gov-portal-antibot-claim.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise _verification_required(page, task_id, "claim filing", screenshot_path)
+                if not _recover_interactive_challenge(page, task, spec):
+                    raise _verification_required(page, task_id, "claim filing", screenshot_path)
 
             fields_filled, page = _fill_identity_fields_with_reasoning_fallback(
                 page, task_id, identity_fields, artifact_prefix="gov-portal-claim",
@@ -1050,7 +1056,8 @@ def _execute_intake_form_submission(task: dict[str, Any], spec: dict[str, Any]) 
             if _has_anti_bot_challenge(page):
                 screenshot_path = str(_artifact_dir(task_id) / "intake-antibot.png")
                 page.screenshot(path=screenshot_path, full_page=True)
-                raise _verification_required(page, task_id, "intake submission", screenshot_path)
+                if not _recover_interactive_challenge(page, task, spec):
+                    raise _verification_required(page, task_id, "intake submission", screenshot_path)
 
             fields_filled, page = _fill_identity_fields_with_reasoning_fallback(
                 page, task_id, identity_fields, artifact_prefix="intake",

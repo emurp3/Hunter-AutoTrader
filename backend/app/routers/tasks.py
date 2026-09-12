@@ -109,6 +109,15 @@ class VerificationRequest(BaseModel):
     required_human_action: str
     resume_checkpoint: dict[str, Any] = {}
     real: bool = True
+    solver_provider: Optional[str] = None
+    solver_enabled: bool = False
+    solver_configured: bool = False
+    challenge_family: Optional[str] = None
+    solver_request_id: Optional[str] = None
+    solver_attempt_count: int = 0
+    solver_result: Optional[str] = None
+    verification_accepted: bool = False
+    fallback_reason: Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -295,9 +304,24 @@ def verification_event(task_id: str, body: VerificationRequest, session: Session
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     record_receipt(session, task, url=body.url, challenge_type=body.challenge_type,
         real=body.real, attempted_paths=body.attempted_recovery_paths,
-        state=ACTIVE, checkpoint=body.resume_checkpoint)
+        state=ACTIVE, checkpoint=body.resume_checkpoint,
+        solver=body.model_dump(include={"solver_provider","solver_enabled","solver_configured","challenge_family","solver_request_id","solver_attempt_count","solver_result","verification_accepted","fallback_reason"}))
     session.commit()
     return {"recorded": True, "state": ACTIVE}
+
+@router.get("/captcha/provider-health")
+def captcha_provider_health(live: bool = False, session: Session = Depends(get_session)):
+    from app.worker.captcha_provider import TwoCaptchaProvider
+    status = TwoCaptchaProvider().provider_health(live=live)
+    last = session.exec(select(VerificationReceipt).where(
+        VerificationReceipt.verification_accepted == True
+    ).order_by(VerificationReceipt.timestamp.desc())).first()
+    status["last_end_to_end_success"] = last.timestamp.isoformat() if last else None
+    status["operational"] = bool(status["enabled"] and status["credentials"] == "configured"
+                                 and status["api_reachable"] is True and last)
+    if status["operational"]:
+        status["status"] = "OPERATIONAL"
+    return status
 
 
 @router.post("/{task_id}/fail")
