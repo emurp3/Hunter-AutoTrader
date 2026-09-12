@@ -295,7 +295,7 @@ def get_execution_metrics(session: Session) -> dict[str, Any]:
             1
             for attempt in attempts
             if attempt.completed_at
-            and attempt.completed_at >= cutoff
+            and _as_utc(attempt.completed_at) >= cutoff
             and attempt.status in {"failed", "escalated"}
         ),
     }
@@ -339,6 +339,11 @@ def get_component_health_summary() -> dict[str, Any]:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize SQLite's naive datetimes before comparing them to UTC values."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _latest_timestamp(*values: Any) -> str | None:

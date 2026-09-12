@@ -30,6 +30,11 @@ from app.services import events as event_svc
 
 logger = logging.getLogger("hunter.tasks")
 
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize SQLite's naive datetimes before comparing them to UTC values."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 # Worker must heartbeat within this window or the task is re-claimable.
 _LEASE_SECONDS = 120
 
@@ -566,7 +571,10 @@ def resume_manual_action_tasks(session: Session) -> list[Task]:
     resumed: list[Task] = []
     candidates = session.exec(
         select(CanonicalOpportunity).where(
-            CanonicalOpportunity.disposition == Disposition.pending_commander.value,
+            CanonicalOpportunity.disposition.in_([
+                Disposition.pending_commander.value,
+                Disposition.watchlist.value,
+            ]),
             CanonicalOpportunity.commander_response.is_not(None),
         )
     ).all()
@@ -1260,7 +1268,7 @@ def get_monitor_data(session: Session) -> dict:
     recent_attempts = session.exec(select(TaskAttempt)).all()
     by_engine: dict[str, int] = {}
     for a in recent_attempts:
-        if a.started_at and a.started_at >= cutoff:
+        if a.started_at and _as_utc(a.started_at) >= cutoff:
             key = a.engine.value if hasattr(a.engine, "value") else str(a.engine)
             by_engine[key] = by_engine.get(key, 0) + 1
 
@@ -1268,7 +1276,7 @@ def get_monitor_data(session: Session) -> dict:
         t for t in all_tasks
         if t.status == TaskStatus.failed
         and t.failed_at
-        and t.failed_at >= cutoff
+        and _as_utc(t.failed_at) >= cutoff
     ]
     recent_failures.sort(key=lambda t: t.failed_at, reverse=True)
 
@@ -1276,7 +1284,7 @@ def get_monitor_data(session: Session) -> dict:
         t for t in all_tasks
         if t.status == TaskStatus.escalated
         and t.escalated_at
-        and t.escalated_at >= cutoff
+        and _as_utc(t.escalated_at) >= cutoff
     ]
     recent_escalations.sort(key=lambda t: t.escalated_at, reverse=True)
 

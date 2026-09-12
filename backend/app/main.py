@@ -132,6 +132,7 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                 ucp
                 and ucp.commander_response
                 and ucp.disposition not in (Disposition.executed.value, Disposition.rejected.value)
+                and "[MANUAL-ACTION-NEEDED]" not in (ucp.required_commander_checkpoints or "")
             ):
                 business_name = acct.resolve_ucp_business_name_checkpoint(session, ucp)
                 if business_name:

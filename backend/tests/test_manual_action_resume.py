@@ -169,6 +169,34 @@ def test_resume_dispatches_a_fresh_task_once_commander_has_answered():
         assert len(all_tasks_for_source) == 2
 
 
+def test_answer_endpoint_immediately_resumes_manual_action_task():
+    from app.routers.hunter_ledger import answer_commander_checkpoint
+
+    engine = _make_engine()
+    with Session(engine) as session:
+        _seed_candidate(session)
+        original = task_svc.dispatch_task(
+            task_type="government_portal_search",
+            spec_payload={"search_url": "https://example.gov", "business_name": "Murphy Enterprises LLC"},
+            session=session,
+            source_type="canonical_opportunity",
+            source_id="HUNTER-CAND-CAPTCHA",
+        )
+        task_svc.escalate_task(
+            original.task_id, EscalationType.commander_boundary, "hit a CAPTCHA", session,
+        )
+
+        answer_commander_checkpoint(
+            "HUNTER-CAND-CAPTCHA", "try again", session=session
+        )
+
+        tasks = session.exec(
+            select(Task).where(Task.source_id == "HUNTER-CAND-CAPTCHA")
+        ).all()
+        assert len(tasks) == 2
+        assert any(task.status == TaskStatus.dispatched for task in tasks)
+
+
 def test_resume_is_idempotent_for_the_same_answer_timestamp():
     engine = _make_engine()
     with Session(engine) as session:

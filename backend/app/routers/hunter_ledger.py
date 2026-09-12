@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 
 from app.database.config import get_session
 from app.models.hunter_ledger import CanonicalOpportunity, Disposition, FormalGate, GateVerdict
-from app.services import baseline_manifest, execution_accounting as acct, formal_gates, hunter_eod_report
+from app.services import baseline_manifest, execution_accounting as acct, formal_gates, hunter_eod_report, tasks as task_svc
 from app.services.hunter_addendum_seed import seed_addendum_candidates
 from app.services.quota_loop import run_quota_protection_loop
 from app.services.research import engine as research_engine
@@ -70,7 +70,12 @@ def answer_commander_checkpoint(
     directly. `decision` is 'approve', 'decline', or omitted (just
     supplying requested info, e.g. a company name/FEIN)."""
     try:
-        return acct.record_commander_answer(session, canonical_opportunity_id, answer, decision=decision)
+        opportunity = acct.record_commander_answer(
+            session, canonical_opportunity_id, answer, decision=decision
+        )
+        if decision != "decline":
+            task_svc.resume_manual_action_tasks(session)
+        return opportunity
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

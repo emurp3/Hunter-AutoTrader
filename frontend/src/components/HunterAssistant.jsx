@@ -198,7 +198,7 @@ export default function HunterAssistant() {
           <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:10 }}>
             {messages.map((m, i) => (
               m.role === 'decision' ? (
-                <DecisionCard key={i} decision={m.decision} submitting={m.submitting} error={m.error} onAnswer={answerDecision} />
+                <DecisionCard key={m.decision.canonical_opportunity_id} decision={m.decision} submitting={m.submitting} error={m.error} onAnswer={answerDecision} />
               ) : (
                 <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth:'85%' }}>
                   <div style={{
