@@ -45,13 +45,18 @@ class _Page:
 
 
 def test_hidden_captcha_markup_does_not_count_as_a_challenge():
-    page = _Page({"recaptcha": _Locator(count=1, visible=False)}, body_text="Log In to Your Account")
+    page = _Page({"bframe": _Locator(count=1, visible=False)}, body_text="Log In to Your Account")
     assert _has_anti_bot_challenge(page) is False
 
 
 def test_visible_captcha_control_is_detected():
-    page = _Page({"recaptcha": _Locator(count=1, visible=True)})
+    page = _Page({"bframe": _Locator(count=1, visible=True)})
     assert _has_anti_bot_challenge(page) is True
+
+
+def test_passive_recaptcha_badge_text_does_not_count_as_a_challenge():
+    page = _Page({}, body_text="This site is protected by reCAPTCHA and the Google Privacy Policy applies")
+    assert _has_anti_bot_challenge(page) is False
 
 
 def test_claimant_login_is_classified_and_public_cancel_is_used():

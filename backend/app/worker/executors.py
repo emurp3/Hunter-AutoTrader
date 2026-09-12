@@ -1140,8 +1140,11 @@ def _has_anti_bot_challenge(page) -> bool:
     """Conservative CAPTCHA/anti-bot detector. Hunter does not attempt to
     solve or bypass these — if found, the task escalates instead."""
     for selector in (
-        'iframe[src*="recaptcha" i]', '.g-recaptcha', 'iframe[src*="hcaptcha" i]',
-        '[class*="hcaptcha" i]', 'iframe[title*="captcha" i]', '[id*="captcha" i]',
+        # A passive badge/anchor appears on ordinary forms. Only the
+        # interactive challenge frame should block execution.
+        'iframe[src*="recaptcha" i][src*="bframe" i]',
+        'iframe[src*="hcaptcha" i][title*="challenge" i]',
+        'iframe[title*="captcha challenge" i]',
     ):
         try:
             locator = page.locator(selector)
@@ -1155,7 +1158,10 @@ def _has_anti_bot_challenge(page) -> bool:
         body = ""
     return any(
         token in body
-        for token in ("verify you are human", "i'm not a robot", "captcha", "bot detection", "access denied")
+        for token in (
+            "verify you are human", "i'm not a robot", "complete the security check",
+            "bot detection challenge", "access denied",
+        )
     )
 
 
