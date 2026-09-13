@@ -20,6 +20,7 @@ class EventType(str, Enum):
     performance_updated = "performance_updated"
     closed = "closed"
     error = "error"
+    checkpoint_answer = "checkpoint_answer"
 
 
 class OpportunityEvent(SQLModel, table=True):

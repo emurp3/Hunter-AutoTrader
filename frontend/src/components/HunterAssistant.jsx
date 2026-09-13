@@ -4,9 +4,10 @@ import { useAuth } from '../context/AuthContext'
 export default function HunterAssistant() {
   const { user } = useAuth()
   const [open, setOpen]       = useState(false)
-  const [messages, setMsgs]   = useState([
-    { role: 'assistant', content: 'Hunter AI online. I have full visibility into your opportunities, account, and signals. Ask me anything.' }
-  ])
+  const [messages, setMsgs]   = useState([])
+  const [conversationId, setConversationId] = useState(null)
+  const [conversationRestored, setConversationRestored] = useState(false)
+  const [objectiveId, setObjectiveId] = useState(null)
   const [input, setInput]     = useState('')
   const [loading, setLoading] = useState(false)
   const [snapshot, setSnap]   = useState(null)
@@ -19,30 +20,62 @@ export default function HunterAssistant() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
+  useEffect(() => {
+    if (!user || conversationRestored) return
+    const savedId = window.localStorage.getItem('hunter_conversation_id')
+    const params = new URLSearchParams()
+    if (savedId) params.set('conversation_id', savedId)
+    fetch(`/api/assistant/conversations/current?${params}`, { credentials: 'include' })
+      .then(res => {
+        if (!res.ok) throw new Error('conversation restore failed')
+        return res.json()
+      })
+      .then(data => {
+        setConversationId(data.conversation_id)
+        setObjectiveId(data.objective_id || null)
+        window.localStorage.setItem('hunter_conversation_id', data.conversation_id)
+        const restored = Array.isArray(data.messages)
+          ? data.messages.filter(m => m.role === 'user' || m.role === 'assistant')
+          : []
+        setMsgs(restored.length ? restored : [{
+          role: 'assistant',
+          content: 'Hunter AI online. I have full visibility into your opportunities, account, and signals. Ask me anything.',
+        }])
+      })
+      .catch(() => {
+        setMsgs([{ role: 'assistant', content: 'Hunter AI online. Ask me anything.' }])
+      })
+      .finally(() => setConversationRestored(true))
+  }, [user, conversationRestored])
+
   // Hunter asks first: pull open Commander decisions and inject them as
   // Hunter-initiated chat messages the first time the panel opens. This
   // reads directly from the execution ledger — it does not depend on the
   // LLM chat call succeeding.
   useEffect(() => {
-    if (!open || decisionsLoaded) return
+    if (!open || decisionsLoaded || !conversationRestored) return
     setDecisionsLoaded(true)
     fetch('/api/hunter-ops/commander-decisions', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : []))
       .then(decisions => {
         if (!Array.isArray(decisions) || decisions.length === 0) return
-        setMsgs(prev => [
+        setMsgs(prev => {
+          const existingIds = new Set(prev.filter(m => m.role === 'decision').map(m => m.decision.canonical_opportunity_id))
+          const newDecisions = decisions.filter(d => !existingIds.has(d.canonical_opportunity_id))
+          if (!newDecisions.length) return prev
+          return [
           ...prev,
           {
             role: 'assistant',
-            content: decisions.length === 1
+            content: newDecisions.length === 1
               ? "I've got one thing I need from you before I can move further:"
-              : `I've got ${decisions.length} things I need from you before I can move further:`,
+              : `I've got ${newDecisions.length} things I need from you before I can move further:`,
           },
-          ...decisions.map(d => ({ role: 'decision', decision: d })),
-        ])
+          ...newDecisions.map(d => ({ role: 'decision', decision: d })),
+        ]})
       })
       .catch(() => { /* chat still works without this — fail quiet */ })
-  }, [open, decisionsLoaded])
+  }, [open, decisionsLoaded, conversationRestored])
 
   const answerDecision = useCallback((decisionId, answerText, decisionType) => {
     setMsgs(prev => prev.map(m => (
@@ -52,6 +85,7 @@ export default function HunterAssistant() {
     )))
     const params = new URLSearchParams({ answer: answerText })
     if (decisionType) params.set('decision', decisionType)
+    if (conversationId) params.set('conversation_id', conversationId)
     fetch(`/api/hunter-ops/candidates/${encodeURIComponent(decisionId)}/commander-answer?${params}`, {
       method: 'POST',
       credentials: 'include',
@@ -74,7 +108,7 @@ export default function HunterAssistant() {
             : m
         )))
       })
-  }, [])
+  }, [conversationId])
 
   if (!user) return null
 
@@ -91,6 +125,8 @@ export default function HunterAssistant() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
+          conversation_id: conversationId,
+          objective_id: objectiveId,
           history: messages
             .filter(m => m.role === 'user' || m.role === 'assistant')
             .slice(-20)
@@ -99,6 +135,11 @@ export default function HunterAssistant() {
       })
       if (!res.ok) throw new Error(`Hunter server returned ${res.status}`)
       const data = await res.json()
+      if (data.conversation_id) {
+        setConversationId(data.conversation_id)
+        window.localStorage.setItem('hunter_conversation_id', data.conversation_id)
+      }
+      if (data.objective_id) setObjectiveId(data.objective_id)
       setMsgs(prev => [...prev, { role: 'assistant', content: data.response }])
       if (data.context_snapshot) setSnap(data.context_snapshot)
     } catch {

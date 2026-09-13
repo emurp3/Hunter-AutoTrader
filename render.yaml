@@ -65,6 +65,8 @@ services:
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: HUNTER_CHAT_RECENT_MESSAGE_LIMIT
+        value: "20"
       - key: GROK_API_KEY
         sync: false
 

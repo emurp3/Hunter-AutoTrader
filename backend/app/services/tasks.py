@@ -601,9 +601,22 @@ def resume_manual_action_tasks(session: Session) -> list[Task]:
             continue
 
         answered_at = opp.commander_responded_at.isoformat() if opp.commander_responded_at else "unknown"
+        original_spec = json.loads(last_escalated.spec_payload) if last_escalated.spec_payload else {}
+        from app.services import memory as memory_svc
+        # Memory is supplied in a separate context block. Executors may use
+        # it to continue the objective, but it never overwrites authoritative
+        # domain fields or the original task specification.
+        original_spec["durable_memory"] = {
+            "objective_id": opp.canonical_opportunity_id,
+            "resumed_from_task_id": last_escalated.task_id,
+            "checkpoint": checkpoint,
+            "active_facts": memory_svc.fact_context(
+                memory_svc.active_facts(session, opp.canonical_opportunity_id)
+            ),
+        }
         task = dispatch_task(
             task_type=last_escalated.task_type,
-            spec_payload=json.loads(last_escalated.spec_payload) if last_escalated.spec_payload else {},
+            spec_payload=original_spec,
             session=session,
             source_type="canonical_opportunity",
             source_id=opp.canonical_opportunity_id,

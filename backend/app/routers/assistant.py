@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Literal
+from typing import Literal, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -31,12 +31,26 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: Optional[str] = None
+    objective_id: Optional[str] = None
+    task_id: Optional[str] = None
+    facts: list["ExplicitFact"] = Field(default_factory=list)
+    # Retained only for compatibility with older clients. Durable server
+    # history is authoritative whenever it exists.
     history: list[ChatMessage] = Field(default_factory=list)
+
+
+class ExplicitFact(BaseModel):
+    fact_key: str
+    fact_value: str
+    scope: Literal["objective", "general"] = "objective"
 
 
 class ChatResponse(BaseModel):
     response: str
     context_snapshot: dict
+    conversation_id: Optional[str] = None
+    objective_id: Optional[str] = None
     error_code: str | None = None
     provider: str = "deepseek"
     model: str | None = None
@@ -61,8 +75,62 @@ def _provider_error(exc: Exception) -> tuple[str, str]:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, session: Session = Depends(get_session)):
+def chat(
+    payload: ChatRequest,
+    session: Session = Depends(get_session),
+    _user=Depends(require_admin),
+):
+    from app.services import memory as memory_svc
+
+    conversation = None
+    stored_history: list[dict] = []
+    user_message = None
+    try:
+        conversation = memory_svc.resolve_conversation(
+            session, conversation_id=payload.conversation_id, objective_id=payload.objective_id,
+        )
+        user_message = memory_svc.add_message(
+            session, conversation, role="user", content=payload.message,
+            objective_id=payload.objective_id, task_id=payload.task_id, source_type="explicit_user",
+        )
+        supplied_facts = [fact.model_dump() for fact in payload.facts]
+        if not supplied_facts:
+            supplied_facts = memory_svc.extract_explicit_facts(
+                payload.message, payload.objective_id or conversation.objective_id,
+            )
+        for fact in supplied_facts:
+            memory_svc.promote_fact(
+                session, fact_key=fact["fact_key"], fact_value=fact["fact_value"],
+                objective_id=payload.objective_id or conversation.objective_id,
+                scope=fact.get("scope", "objective"), source_message_id=user_message.message_id,
+                source_type="explicit_user",
+            )
+        session.commit()
+        # Exclude the current message; it is appended explicitly below.
+        stored_history = [
+            {"role": row.role, "content": row.content}
+            for row in memory_svc.recent_messages(session, conversation.conversation_id)
+            if row.message_id != user_message.message_id and row.role in {"user", "assistant"}
+        ]
+    except Exception as exc:
+        # Chat availability must not depend on the memory layer. This also
+        # preserves compatibility for isolated tests that pass a stub session.
+        logger.warning("Durable chat memory unavailable: %s", exc)
+        try:
+            session.rollback()
+        except Exception:
+            pass
+
     ctx = _gather_context(session)
+    objective_id = payload.objective_id or (conversation.objective_id if conversation else None)
+    try:
+        facts = memory_svc.active_facts(session, objective_id)
+        ctx["durable_facts"] = [
+            {"key": f.fact_key, "value": f.fact_value, "scope": f.scope, "source_type": f.source_type}
+            for f in facts
+        ]
+    except Exception:
+        ctx["durable_facts"] = []
     system_prompt = _build_system_prompt(ctx)
 
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
@@ -74,7 +142,7 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
             base_url=os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com"),
             timeout=float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "30")),
         )
-        history = [m.model_dump() for m in payload.history[-20:]]
+        history = stored_history or [m.model_dump() for m in payload.history[-memory_svc.recent_message_limit():]]
         completion = client.chat.completions.create(
             model=model,
             messages=[
@@ -93,6 +161,20 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
         logger.error("DeepSeek chat failed code=%s model=%s: %s", error_code, model, exc)
         usage = None
 
+    if conversation is not None:
+        try:
+            memory_svc.add_message(
+                session, conversation, role="assistant", content=response_text,
+                objective_id=objective_id, task_id=payload.task_id, source_type="assistant",
+            )
+            session.commit()
+        except Exception as exc:
+            logger.warning("Could not persist assistant response: %s", exc)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+
     return ChatResponse(
         response=response_text,
         context_snapshot={
@@ -100,10 +182,42 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
             "top_opp_count": len(ctx.get("top_opps", [])),
             "signals_total": ctx.get("signals_total", 0),
         },
+        conversation_id=conversation.conversation_id if conversation else payload.conversation_id,
+        objective_id=objective_id,
         error_code=error_code,
         model=model,
         usage=usage,
     )
+
+
+@router.get("/conversations/current")
+def current_conversation(
+    conversation_id: Optional[str] = None,
+    objective_id: Optional[str] = None,
+    limit: int = 100,
+    session: Session = Depends(get_session),
+    _user=Depends(require_admin),
+):
+    """Resolve the Commander's current conversation and restore its messages."""
+    from app.services import memory as memory_svc
+
+    conversation = memory_svc.resolve_conversation(
+        session, conversation_id=conversation_id, objective_id=objective_id,
+    )
+    session.commit()
+    rows = memory_svc.recent_messages(session, conversation.conversation_id, limit=limit)
+    return {
+        "conversation_id": conversation.conversation_id,
+        "objective_id": conversation.objective_id,
+        "messages": [
+            {
+                "message_id": row.message_id, "role": row.role, "content": row.content,
+                "objective_id": row.objective_id, "task_id": row.task_id,
+                "checkpoint_key": row.checkpoint_key, "created_at": row.created_at,
+            }
+            for row in rows
+        ],
+    }
 
 
 def _gather_context(session: Session) -> dict:
@@ -286,6 +400,11 @@ def _build_system_prompt(ctx: dict) -> str:
     identity_present = ctx.get("identity_fields_present") or {}
     on_file = [field for field, present in identity_present.items() if present]
     identity_text = ", ".join(on_file) if on_file else "none on file"
+    durable_facts = ctx.get("durable_facts") or []
+    durable_facts_text = "\n".join(
+        f"- [{fact['scope']}] {fact['key']}: {fact['value']} (source: {fact['source_type']})"
+        for fact in durable_facts
+    ) or "None recorded for this objective."
 
     prompt = (
         "You are Hunter AI, Hunter's Commander-facing conversational interface. You are not a "
@@ -329,6 +448,8 @@ def _build_system_prompt(ctx: dict) -> str:
         "blocked on YOUR input — credentials, identity, filings, signatures, and similar "
         "regulated/consequential actions are never yours to supply or approve on Commander's "
         "behalf):\n{decisions_text}\n\n"
+        "DURABLE MEMORY FOR THE CURRENT OBJECTIVE (context only; current user instructions and "
+        "the authoritative task/checkpoint/ledger state above take precedence):\n{durable_facts_text}\n\n"
         "If there are open Commander decisions, lead with them — ask for exactly what's needed, "
         "referencing the opportunity by name. Never assume an answer, never invent eligibility or "
         "identity details, and never claim an opportunity executed unless Hunter's own ledger shows "
@@ -338,7 +459,8 @@ def _build_system_prompt(ctx: dict) -> str:
         "above when relevant. Keep responses under 250 words."
     ).format(
         opps_text=opps_text, decisions_text=decisions_text, queue_text=queue_text,
-        quota_text=quota_text, identity_text=identity_text, **ctx,
+        quota_text=quota_text, identity_text=identity_text,
+        durable_facts_text=durable_facts_text, **ctx,
     )
 
     capability_profile = ctx.get("capability_profile")

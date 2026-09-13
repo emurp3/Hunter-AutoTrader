@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.database.config import get_session
+from app.auth.jwt import require_admin
 from app.models.hunter_ledger import CanonicalOpportunity, Disposition, FormalGate, GateVerdict
 from app.services import baseline_manifest, execution_accounting as acct, formal_gates, hunter_eod_report, tasks as task_svc
 from app.services.hunter_addendum_seed import seed_addendum_candidates
@@ -64,14 +65,17 @@ def answer_commander_checkpoint(
     canonical_opportunity_id: str,
     answer: str,
     decision: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     session: Session = Depends(get_session),
+    _user=Depends(require_admin),
 ):
     """Commander's reply to a checkpoint, from the chat widget or the API
     directly. `decision` is 'approve', 'decline', or omitted (just
     supplying requested info, e.g. a company name/FEIN)."""
     try:
         opportunity = acct.record_commander_answer(
-            session, canonical_opportunity_id, answer, decision=decision
+            session, canonical_opportunity_id, answer, decision=decision,
+            conversation_id=conversation_id,
         )
         if decision != "decline":
             task_svc.resume_manual_action_tasks(session)

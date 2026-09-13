@@ -28,6 +28,7 @@ Invariants enforced here (see tests/test_hunter_execution_ledger.py):
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -365,6 +366,8 @@ def record_commander_answer(
     answer: str,
     *,
     decision: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    explicit_facts: Optional[list[dict]] = None,
 ) -> CanonicalOpportunity:
     """Record Commander's reply to a checkpoint an opportunity is waiting
     on (the chat/decisions UI). This is the only path that writes
@@ -383,7 +386,49 @@ def record_commander_answer(
     if not answer or not answer.strip():
         raise ValueError("record_commander_answer() requires non-empty answer text.")
 
+    from app.models.event import OpportunityEvent
+    from app.models.task import Task
+    from app.services import memory as memory_svc
+
     opp = _get_opportunity(session, canonical_opportunity_id, required=True)
+    checkpoint = opp.required_commander_checkpoints or ""
+    latest_task = session.exec(
+        select(Task).where(Task.source_id == canonical_opportunity_id).order_by(Task.id.desc())
+    ).first()
+    conversation = memory_svc.resolve_conversation(
+        session, conversation_id=conversation_id, objective_id=canonical_opportunity_id,
+    )
+    message = memory_svc.add_message(
+        session, conversation, role="user", content=answer.strip(),
+        objective_id=canonical_opportunity_id,
+        task_id=latest_task.task_id if latest_task else None,
+        checkpoint_key=memory_svc.checkpoint_key(canonical_opportunity_id, checkpoint),
+        source_type="checkpoint_answer",
+    )
+    for fact in explicit_facts or memory_svc.checkpoint_facts(answer.strip(), checkpoint):
+        try:
+            memory_svc.promote_fact(
+                session, fact_key=fact["fact_key"], fact_value=fact["fact_value"],
+                objective_id=canonical_opportunity_id, scope=fact.get("scope", "objective"),
+                source_message_id=message.message_id, source_type="checkpoint_answer",
+            )
+        except ValueError:
+            # The answer remains authoritative in the existing domain field;
+            # credential-like or unvalidated values are simply not promoted.
+            pass
+    session.add(OpportunityEvent(
+        source_id=canonical_opportunity_id,
+        event_type="checkpoint_answer",
+        old_state=opp.disposition,
+        new_state=Disposition.rejected.value if decision == "decline" else Disposition.watchlist.value,
+        summary="Commander supplied an explicit checkpoint answer.",
+        metadata_json=json.dumps({
+            "conversation_id": conversation.conversation_id,
+            "message_id": message.message_id,
+            "task_id": latest_task.task_id if latest_task else None,
+            "checkpoint_key": memory_svc.checkpoint_key(canonical_opportunity_id, checkpoint),
+        }),
+    ))
     opp.commander_response = answer.strip()
     opp.commander_responded_at = datetime.now(timezone.utc)
     session.add(opp)
