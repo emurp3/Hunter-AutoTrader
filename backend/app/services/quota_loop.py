@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+import re
 from typing import Callable, Optional
 
 from sqlmodel import Session, select
@@ -118,8 +119,52 @@ def pull_highest_scoring_candidate(session: Session) -> Optional[CanonicalOpport
         )
     ).all()
     if not candidates:
-        return None
+        _promote_inventory_candidates(session)
+        candidates = session.exec(
+            select(CanonicalOpportunity).where(
+                CanonicalOpportunity.disposition == Disposition.pending_research.value
+            )
+        ).all()
+        if not candidates:
+            return None
     return max(candidates, key=lambda o: (o.score if o.score is not None else -1.0, o.canonical_opportunity_id))
+
+
+def _promote_inventory_candidates(session: Session, batch_size: int = 10) -> int:
+    """Feed existing non-trading inventory into the canonical hunting loop."""
+    from app.models.income_source import IncomeSource
+    existing_refs = {
+        row.source_post_refs for row in session.exec(select(CanonicalOpportunity)).all()
+        if row.source_post_refs
+    }
+    rows = session.exec(select(IncomeSource).order_by(IncomeSource.score.desc())).all()
+    created = 0
+    for source in rows:
+        category = str(source.category or "").lower()
+        origin = str(source.origin_module or "").lower()
+        if source.source_id in existing_refs or category in {"trading", "stocks", "options", "crypto", "forex", "futures"} or origin == "autotrader":
+            continue
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", source.source_id)[:72]
+        session.add(CanonicalOpportunity(
+            canonical_opportunity_id=f"HUNTER-INV-{safe_id}",
+            lane=category or origin or "general",
+            source_post_refs=source.source_id,
+            factual_mechanism=source.description,
+            source_provenance=f"IncomeSource:{source.source_id}",
+            freshness_date=(source.created_at or datetime.now(timezone.utc)).date(),
+            eligibility="Pending Hunter research",
+            estimated_value_low=source.estimated_profit,
+            estimated_value_high=source.estimated_profit,
+            score=source.score,
+            next_action=source.next_action,
+            disposition=Disposition.pending_research.value,
+        ))
+        created += 1
+        if created >= batch_size:
+            break
+    if created:
+        session.commit()
+    return created
 
 
 def run_quota_protection_loop(
@@ -134,6 +179,20 @@ def run_quota_protection_loop(
     acct.assert_autonomous_operations_allowed(d)
 
     result = LoopResult(day=d, started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc))
+
+    # A persisted Commander answer satisfies the old checkpoint. Research may
+    # create a new, more specific checkpoint, but must not keep asking for the
+    # information already supplied.
+    answered = session.exec(select(CanonicalOpportunity).where(
+        CanonicalOpportunity.disposition == Disposition.pending_commander.value,
+        CanonicalOpportunity.commander_response.is_not(None),
+    )).all()
+    for candidate in answered:
+        candidate.required_commander_checkpoints = None
+        candidate.disposition = Disposition.watchlist.value
+        session.add(candidate)
+    if answered:
+        session.commit()
 
     iterations = 0
     while result.execution_count < acct.DAILY_EXECUTION_QUOTA and iterations < max_iterations:
@@ -172,10 +231,10 @@ def run_quota_protection_loop(
                 evidence_reference=f"lane={candidate.lane}; no automated executor wired as of {d.isoformat()}",
             )
             acct.set_disposition(
-                session, cid, Disposition.blocked,
-                evidence="No automated executor wired; requires human/browser-driven session with Commander in the loop.",
+                session, cid, Disposition.blocked_infrastructure,
+                evidence="No production executor is wired for this opportunity lane; no Commander action requested.",
             )
-            result.steps.append(LoopStep(cid, "blocked", "no automated executor available"))
+            result.steps.append(LoopStep(cid, "blocked_infrastructure", "no production executor available; continuing"))
             continue
 
         record = acct.record_execution(session, canonical_opportunity_id=cid, **exec_kwargs)

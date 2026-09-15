@@ -1168,7 +1168,7 @@ def _has_anti_bot_challenge(page) -> bool:
         token in body
         for token in (
             "verify you are human", "i'm not a robot", "complete the security check",
-            "bot detection challenge", "access denied",
+            "bot detection challenge", "access denied", "check the recaptcha box",
         )
     )
 

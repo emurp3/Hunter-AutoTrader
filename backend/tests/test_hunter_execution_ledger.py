@@ -379,7 +379,7 @@ def test_loop_blocks_and_opens_replacement_chain_when_no_executor_available():
     opp = session.exec(
         select(CanonicalOpportunity).where(CanonicalOpportunity.canonical_opportunity_id == "LOOP-BLOCKED-1")
     ).first()
-    assert opp.disposition == Disposition.blocked.value
+    assert opp.disposition == Disposition.blocked_infrastructure.value
 
     attempts = session.exec(
         select(RescueAttempt).where(RescueAttempt.canonical_opportunity_id == "LOOP-BLOCKED-1")

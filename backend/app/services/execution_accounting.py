@@ -555,12 +555,18 @@ def _campaign_scoped_receipts(session: Session, start: datetime, end: datetime) 
         )
     ).all()
     receipts: set[str] = set()
+    from app.models.task import Task, TaskStatus
     for r in rows:
         if not r.receipt_reference:
             continue
         opp = _get_opportunity(session, r.canonical_opportunity_id)
         if opp is None or opp.lane not in CAMPAIGN_LANES:
             continue
+        if r.receipt_reference.startswith("task:"):
+            task_id = r.receipt_reference.split(":", 1)[1]
+            task = session.exec(select(Task).where(Task.task_id == task_id)).first()
+            if task is None or task.status != TaskStatus.completed:
+                continue
         receipts.add(r.receipt_reference)
     return receipts
 

@@ -102,7 +102,7 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
 
         from app.database.config import engine
         from app.models.hunter_ledger import CanonicalOpportunity, Disposition
-        from app.models.task import Task, TaskStatus
+        from app.models.task import Task, TaskStatus, VerificationReceipt
         from app.services import commander_identity
         from app.services import execution_accounting as acct
         from app.services import tasks as task_svc
@@ -122,6 +122,37 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                 acct.assert_autonomous_operations_allowed()
             except acct.SundayLockout:
                 return
+
+            # Reconcile historical false positives without deleting their
+            # attempts or receipts. The evidence itself shows an unresolved
+            # reCAPTCHA, so these tasks belong in the verification workflow.
+            suspect_tasks = session.exec(_select(Task).where(
+                Task.task_type == "government_portal_search",
+                Task.status == TaskStatus.completed,
+                Task.outcome.contains("Check the reCAPTCHA box"),
+            )).all()
+            for suspect in suspect_tasks:
+                suspect.status = TaskStatus.awaiting_human_verification
+                suspect.verification_state = "WAITING_FOR_HUMAN"
+                suspect.escalation_reason = "reCAPTCHA prevented verified search completion"
+                session.add(suspect)
+                if not session.exec(_select(VerificationReceipt).where(VerificationReceipt.task_id == suspect.task_id)).first():
+                    session.add(VerificationReceipt(
+                        objective_id=suspect.source_id, task_id=suspect.task_id,
+                        target_site="gaclaims.unclaimedproperty.com",
+                        url="https://gaclaims.unclaimedproperty.com/en/Property/SearchIndex",
+                        challenge_type="recaptcha", current_state="WAITING_FOR_HUMAN",
+                        required_human_action="Complete the portal reCAPTCHA, then Hunter will resume the saved search.",
+                        resume_checkpoint='{"stage":"search_submission"}',
+                    ))
+                if suspect.source_id:
+                    linked = session.exec(_select(CanonicalOpportunity).where(CanonicalOpportunity.canonical_opportunity_id == suspect.source_id)).first()
+                    if linked:
+                        linked.disposition = Disposition.pending_commander.value
+                        linked.required_commander_checkpoints = "[HUMAN-VERIFICATION-REQUIRED] Complete the Georgia portal reCAPTCHA; Hunter then resumes the saved search."
+                        session.add(linked)
+            if suspect_tasks:
+                session.commit()
 
             ucp = session.exec(
                 _select(CanonicalOpportunity).where(
