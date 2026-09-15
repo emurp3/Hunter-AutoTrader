@@ -18,6 +18,7 @@ const SECTIONS = [
 ]
 
 const OCC_LOADERS = {
+  telemetry: { path: '/tasks/telemetry' },
   summary: { path: '/operations/summary' },
   intake: { path: '/autotrader/intake-summary' },
   opportunities: { path: '/autotrader/opportunities?limit=50' },
@@ -369,6 +370,8 @@ export default function OperationsPage({ onBack, onAuthFail }) {
 
 // ── Left Rail Navigation ──────────────────────────────────────────────────────
 function LeftRailNav({ activeSection, onSelect, onBack, onLogout }) {
+  const [telemetry, setTelemetry] = useState(null)
+  useEffect(() => { let live = true; const load = () => fetch('/api/tasks/telemetry', { credentials:'include' }).then(r => r.ok ? r.json() : null).then(d => { if (live) setTelemetry(d) }).catch(() => {}); load(); const id = setInterval(load, 10000); return () => { live = false; clearInterval(id) } }, [])
   return (
     <nav className="occ-rail" aria-label="Hunter navigation">
       <div className="occ-rail-brand">
@@ -401,9 +404,9 @@ function LeftRailNav({ activeSection, onSelect, onBack, onLogout }) {
       </div>
 
       <div className="occ-rail-scan">
-        <div className="occ-rail-scan-orb" aria-hidden="true" />
-        <p className="occ-rail-scan-title">MARKET SCAN</p>
-        <p className="occ-rail-scan-sub">Pipeline scanning 24/7</p>
+        <div className={`occ-rail-scan-orb${telemetry?.status === 'WORKING' ? '' : ' occ-rail-scan-orb--static'}`} aria-hidden="true" />
+        <p className="occ-rail-scan-title">{telemetry?.status || 'UNAVAILABLE'}</p>
+        <p className="occ-rail-scan-sub">{telemetry ? `${telemetry.active_now} active now · ${telemetry.queued} queued` : 'Telemetry unavailable'}</p>
       </div>
 
       <div className="occ-rail-footer">
@@ -531,6 +534,7 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
   const pipeline = endpointData(endpoints.pipeline, {})
   const capitalState = endpointData(endpoints.capitalState, {})
   const diagnostics = endpointData(endpoints.diagnostics, {})
+  const telemetry = endpointData(endpoints.telemetry, null)
   const fastRecycle = capitalState?.fast_recycle || {}
 
   // Real PacketStatus enum: draft, ready, acknowledged, executed
@@ -603,7 +607,7 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
           <span className="occ-mission-label">HUNTER MODE</span>
           <span className="occ-mission-val occ-mission-active">
             <span className="occ-pulse" aria-hidden="true" />
-            ACTIVE
+            {telemetry?.status || 'UNAVAILABLE'}
           </span>
           <div className="occ-mission-controls">
             {anyLoading && <span className="occ-badge occ-badge--loading">Loading</span>}
@@ -624,6 +628,13 @@ function OpportunitiesCommandCenter({ onAuthFail }) {
           <img src="/media/hunter-operator-strip.png" alt="Hunter operator status strip" />
           <div className="occ-hunter-visual-glow" />
         </div>
+      </div>
+      <div className="hunter-runtime-telemetry" role="status" aria-label="Hunter runtime telemetry">
+        <strong>RUNTIME TELEMETRY · {telemetry?.status || 'UNAVAILABLE'}</strong>
+        <span>ACTIVE NOW {telemetry?.active_now ?? 'Unavailable'} · QUEUED {telemetry?.queued ?? 'Unavailable'} · WAITING FOR COMMANDER {telemetry?.waiting_for_commander ?? 'Unavailable'}</span>
+        <span>CURRENT TASK {telemetry?.current_task?.task_id || 'NONE'} · EXECUTOR {telemetry?.current_executor || 'NONE'} · STEP {telemetry?.current_step || 'NONE'}</span>
+        <span>STARTED {telemetry?.started_at || 'NONE'} · LAST HEARTBEAT {telemetry?.last_heartbeat_at || 'NONE'}</span>
+        <span>LAST COMPLETED ACTION {telemetry?.last_completed_action?.action || 'NONE'} · LAST RECEIPT {telemetry?.last_receipt?.receipt_id || 'NONE'} · NEXT SCHEDULED ACTION {telemetry?.next_scheduled_action || 'NONE'}</span>
       </div>
 
       {/* Inline errors */}
@@ -1078,7 +1089,10 @@ function HunterOperatorCard({ compact = false }) {
   )
 }
 
-function RadarScanner({ label = 'MARKET SCAN STATUS', count = '10,000+', sub = 'AI pipeline scanning 24/7' }) {
+function RadarScanner({ telemetry, label = 'MARKET SCAN STATUS' }) {
+  const count = telemetry ? telemetry.active_now : 'Unavailable'
+  const sub = telemetry ? `${telemetry.status} · ${telemetry.active_now} active now` : 'Telemetry unavailable'
+  const working = telemetry?.status === 'WORKING'
   return (
     <div className="hunter-radar">
       <div className="hunter-radar-label">{label}</div>
@@ -1098,7 +1112,7 @@ function RadarScanner({ label = 'MARKET SCAN STATUS', count = '10,000+', sub = '
           <line x1="5" y1="100" x2="195" y2="100" stroke="#FFB300" strokeWidth="0.5" strokeOpacity="0.2" />
           <line x1="33" y1="33" x2="167" y2="167" stroke="#FFB300" strokeWidth="0.3" strokeOpacity="0.1" />
           <line x1="167" y1="33" x2="33" y2="167" stroke="#FFB300" strokeWidth="0.3" strokeOpacity="0.1" />
-          <g className="hunter-radar-sweep">
+          <g className={working ? 'hunter-radar-sweep' : undefined}>
             <line x1="100" y1="100" x2="100" y2="8" stroke="#FFB300" strokeWidth="1.5" strokeOpacity="0.9" />
             <path d="M100 100 L100 8 A92 92 0 0 1 154 24 Z" fill="#FFB300" fillOpacity="0.06" />
           </g>
@@ -1548,7 +1562,7 @@ function ExecutiveSummarySection({ onAuthFail }) {
           </div>
         </div>
         <div className="hunter-exec-hero-right">
-          <RadarScanner />
+          <RadarScanner telemetry={telemetry} />
         </div>
       </div>
 

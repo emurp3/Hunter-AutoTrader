@@ -173,6 +173,10 @@ def monitor(session: Session = Depends(get_session)):
     """
     return task_svc.get_monitor_data(session)
 
+@router.get("/telemetry")
+def telemetry(session: Session = Depends(get_session)):
+    return task_svc.get_runtime_telemetry(session)
+
 
 @router.get("/{task_id}")
 def get_task(task_id: str, session: Session = Depends(get_session)):

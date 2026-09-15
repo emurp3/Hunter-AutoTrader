@@ -3378,6 +3378,7 @@ html, body, #root { height: 100%; background: var(--black); color: var(--text); 
   border: 1px solid rgba(77, 151, 255, 0.3);
   animation: occ-orb-pulse 3s ease-in-out infinite;
 }
+.occ-rail-scan-orb--static { animation: none !important; opacity: .35; }
 
 @keyframes occ-orb-pulse {
   0%, 100% { box-shadow: 0 0 6px rgba(77, 151, 255, 0.3); opacity: 0.8; }

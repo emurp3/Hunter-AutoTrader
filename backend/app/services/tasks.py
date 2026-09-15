@@ -1338,3 +1338,24 @@ def get_monitor_data(session: Session) -> dict:
             for t in recent_escalations[:10]
         ],
     }
+
+def get_runtime_telemetry(session: Session) -> dict:
+    now = datetime.now(timezone.utc)
+    tasks = session.exec(select(Task)).all()
+    active = [t for t in tasks if t.status in {TaskStatus.executing, TaskStatus.resuming} and t.lease_expires_at and _as_utc(t.lease_expires_at) > now]
+    queued = [t for t in tasks if t.status in {TaskStatus.dispatched, TaskStatus.retrying}]
+    waiting = [t for t in tasks if t.status == TaskStatus.awaiting_human_verification]
+    blocked = [t for t in tasks if t.status == TaskStatus.escalated]
+    status = "WORKING" if active else ("WAITING FOR COMMANDER" if waiting else ("BLOCKED" if blocked else "IDLE"))
+    current = max(active, key=lambda t: _as_utc(t.executing_at or t.created_at), default=None)
+    completed = [t for t in tasks if t.status == TaskStatus.completed and t.completed_at]
+    last = max(completed, key=lambda t: _as_utc(t.completed_at), default=None)
+    receipt = session.exec(select(VerificationReceipt).where(VerificationReceipt.task_id == last.task_id).order_by(VerificationReceipt.timestamp.desc())).first() if last else None
+    def iso(v): return v.isoformat() if v else None
+    return {"status": status, "active_now": len(active), "queued": len(queued), "waiting_for_commander": len(waiting),
+            "current_task": ({"task_id": current.task_id, "objective_id": current.source_id, "description": (current.spec_payload or "")[:240]} if current else None),
+            "current_executor": current.worker_id if current else None, "current_step": current.resume_checkpoint_json if current else None,
+            "started_at": iso(current.executing_at) if current else None, "last_heartbeat_at": iso(current.last_heartbeat_at) if current else None,
+            "last_completed_action": ({"task_id": last.task_id, "action": last.outcome_notes or "completed", "timestamp": iso(last.completed_at)} if last else None),
+            "last_receipt": ({"task_id": receipt.task_id, "receipt_id": receipt.id, "status": receipt.current_state, "timestamp": iso(receipt.timestamp)} if receipt else None),
+            "next_scheduled_action": None, "generated_at": now.isoformat()}
