@@ -50,11 +50,16 @@ def reconcile_checkpoint(session: Session, checkpoint: str, *, objective_id: str
     requirements = extract_requirements(checkpoint)
     if not requirements:
         return checkpoint, resolved
+    aliases = {
+        "full legal name": "full_name",
+        "Incognito date range": "date_range",
+    }
     for req in requirements:
         if req.alternatives:
             value = next((sources.get(k) for k in req.alternatives if sources.get(k)), None)
         else:
             value = sources.get(req.label) or sources.get(req.label.replace(" ", "_"))
+            value = value or sources.get(aliases.get(req.label, ""))
         if not value and answer and re.search(re.escape(req.label.split()[0]), answer, re.I):
             value = answer
         if value:
