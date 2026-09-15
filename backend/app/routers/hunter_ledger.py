@@ -46,18 +46,27 @@ def list_commander_decisions(session: Session = Depends(get_session)):
             CanonicalOpportunity.disposition == Disposition.pending_commander.value
         )
     ).all()
-    return [
-        {
+    from app.services.checkpoint_reconciliation import reconcile_checkpoint
+    output = []
+    for o in rows:
+        if o.commander_response is not None:
+            continue
+        remaining, _ = reconcile_checkpoint(
+            session, o.required_commander_checkpoints or "",
+            objective_id=o.canonical_opportunity_id,
+            existing_answer=o.commander_response,
+        )
+        if not remaining:
+            continue
+        output.append({
             "canonical_opportunity_id": o.canonical_opportunity_id,
             "lane": o.lane,
             "factual_mechanism": o.factual_mechanism,
-            "checkpoint": o.required_commander_checkpoints,
+            "checkpoint": remaining,
             "commander_response": o.commander_response,
             "commander_responded_at": o.commander_responded_at,
-        }
-        for o in rows
-        if o.commander_response is None  # already-answered ones drop off the feed
-    ]
+        })
+    return output
 
 
 @router.post("/candidates/{canonical_opportunity_id}/commander-answer")

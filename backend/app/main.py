@@ -163,6 +163,16 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
             _google_specific_ask_marker = "full legal name"
             _google_dead_url_marker = "confirmed unreachable"
             if google and google.disposition != Disposition.executed.value:
+                from app.services.checkpoint_reconciliation import reconcile_checkpoint
+                remaining_checkpoint, _ = reconcile_checkpoint(
+                    session, google.required_commander_checkpoints or "",
+                    objective_id=google.canonical_opportunity_id,
+                    existing_answer=google.commander_response,
+                )
+                if remaining_checkpoint and remaining_checkpoint != google.required_commander_checkpoints:
+                    google.required_commander_checkpoints = remaining_checkpoint
+                    session.add(google)
+                    session.flush()
                 # Reconcile durable profile memory before creating a new
                 # Commander checkpoint.  The profile is intentionally kept
                 # outside the conversation/task database; a restart must not
