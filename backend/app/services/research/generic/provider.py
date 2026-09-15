@@ -133,11 +133,10 @@ def generic_research(client: httpx.Client, opp: CanonicalOpportunity) -> Researc
         jurisdiction=extraction.get("jurisdiction"),
         current_lawful_implementation=extraction.get("current_lawful_implementation"),
         execution_route=url,
-        commander_checkpoint=extraction.get("commander_checkpoint") or (
-            "No explicit Commander checkpoint extracted by the generic "
-            "path — treat any credentials, filings, payments, or "
-            "signatures as requiring Commander approval by default."
-        ),
+        # Only a specific requirement established by research may pause for
+        # Commander.  No extracted checkpoint means execution routing keeps
+        # going; it must not become a blanket human escalation.
+        commander_checkpoint=extraction.get("commander_checkpoint") or None,
         rescue_type="alternate_channel",
         rescue_description=f"Generic research path confirmed a source ({url}) supporting this opportunity.",
         rescue_result="found",

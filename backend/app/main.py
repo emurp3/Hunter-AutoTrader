@@ -1,6 +1,7 @@
 import asyncio
 import os
 import logging
+import re
 
 # Root logger has no handler by default under uvicorn — without this, every
 # logger.info() call in the scheduler tasks (daily_scan_task, recycle_cycle_task,
@@ -194,6 +195,29 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
             _google_specific_ask_marker = "full legal name"
             _google_dead_url_marker = "confirmed unreachable"
             if google and google.disposition != Disposition.executed.value:
+                # Recover an explicit answer that is still present in the
+                # opportunity's audit trail but was cleared when a later
+                # checkpoint was opened.  Route it back through the normal
+                # answer recorder so objective memory and events agree.
+                if not google.commander_response and "date range" in (
+                    google.required_commander_checkpoints or ""
+                ).lower():
+                    prior_answers = re.findall(
+                        r"Commander responded:\s*((?:19|20)\d{2}\s*[-\u2013\u2014]\s*(?:19|20)\d{2})",
+                        google.next_action or "",
+                        flags=re.IGNORECASE,
+                    )
+                    if prior_answers:
+                        google = acct.record_commander_answer(
+                            session,
+                            google.canonical_opportunity_id,
+                            prior_answers[-1],
+                            explicit_facts=[{
+                                "fact_key": "date_range",
+                                "fact_value": prior_answers[-1],
+                                "scope": "objective",
+                            }],
+                        )
                 from app.services.checkpoint_reconciliation import reconcile_checkpoint
                 remaining_checkpoint, _ = reconcile_checkpoint(
                     session, google.required_commander_checkpoints or "",
@@ -216,7 +240,7 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                 already_reopened_with_specific_ask = _google_specific_ask_marker in (
                     google.required_commander_checkpoints or ""
                 )
-                if not already_reopened_with_specific_ask:
+                if not already_reopened_with_specific_ask and not google.commander_response:
                     # Never reopened with the specific ask yet — reopen only
                     # for fields that are genuinely absent from profile,
                     # prior answers, and mission memory.

@@ -60,6 +60,13 @@ def reconcile_checkpoint(session: Session, checkpoint: str, *, objective_id: str
         else:
             value = sources.get(req.label) or sources.get(req.label.replace(" ", "_"))
             value = value or sources.get(aliases.get(req.label, ""))
+        if (
+            not value
+            and answer
+            and req.label == "Incognito date range"
+            and re.search(r"\b(?:19|20)\d{2}\s*[-\u2013\u2014]\s*(?:19|20)\d{2}\b", answer)
+        ):
+            value = answer
         if not value and answer and re.search(re.escape(req.label.split()[0]), answer, re.I):
             value = answer
         if value:
