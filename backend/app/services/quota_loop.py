@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+import hashlib
 import re
 from typing import Callable, Optional
 
@@ -144,9 +145,10 @@ def _promote_inventory_candidates(session: Session, batch_size: int = 10) -> int
         origin = str(source.origin_module or "").lower()
         if source.source_id in existing_refs or category in {"trading", "stocks", "options", "crypto", "forex", "futures"} or origin == "autotrader":
             continue
-        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", source.source_id)[:72]
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", source.source_id)[:55]
+        source_hash = hashlib.sha256(source.source_id.encode("utf-8")).hexdigest()[:12]
         session.add(CanonicalOpportunity(
-            canonical_opportunity_id=f"HUNTER-INV-{safe_id}",
+            canonical_opportunity_id=f"HUNTER-INV-{safe_id}-{source_hash}",
             lane=category or origin or "general",
             source_post_refs=source.source_id,
             factual_mechanism=source.description,
