@@ -163,11 +163,22 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
             _google_specific_ask_marker = "full legal name"
             _google_dead_url_marker = "confirmed unreachable"
             if google and google.disposition != Disposition.executed.value:
+                # Reconcile durable profile memory before creating a new
+                # Commander checkpoint.  The profile is intentionally kept
+                # outside the conversation/task database; a restart must not
+                # turn already-known identity fields into a fresh ask.
+                identity_fields = _available_identity_fields(["full_name", "email", "phone"])
+                has_name_and_contact = bool(
+                    identity_fields.get("full_name")
+                    and (identity_fields.get("email") or identity_fields.get("phone"))
+                )
                 already_reopened_with_specific_ask = _google_specific_ask_marker in (
                     google.required_commander_checkpoints or ""
                 )
                 if not already_reopened_with_specific_ask:
-                    # Never reopened with the specific ask yet — reopen it.
+                    # Never reopened with the specific ask yet — reopen only
+                    # for fields that are genuinely absent from profile,
+                    # prior answers, and mission memory.
                     # Gated on the CHECKPOINT TEXT itself, not disposition,
                     # because answering a checkpoint (record_commander_answer)
                     # moves disposition to WATCHLIST, not back to
@@ -185,15 +196,19 @@ def _bootstrap_hunter_ledger_actions_after_startup() -> None:
                         ),
                         new_checkpoint=(
                             "To submit the Google Incognito privacy-lawsuit intake, we "
-                            "need: (1) your full legal name, (2) an email or phone "
-                            "number the law firm can reach you at, and (3) the "
-                            "approximate date range you used Chrome Incognito/private "
-                            "browsing while signed into a Google account. Hunter will "
-                            "not submit the intake without these."
+                            + ("still need the approximate date range you used Chrome "
+                               "Incognito/private browsing while signed into a Google "
+                               "account. Hunter already has your name and contact "
+                               "details in persistent Commander profile memory."
+                               if has_name_and_contact else
+                               "need: (1) your full legal name, (2) an email or phone "
+                               "number the law firm can reach you at, and (3) the "
+                               "approximate date range you used Chrome Incognito/private "
+                               "browsing while signed into a Google account.")
+                            + " Hunter will not submit the intake without these."
                         ),
                     )
                 elif google.commander_response:
-                    identity_fields = _available_identity_fields(["full_name", "email", "phone"])
                     if identity_fields.get("full_name") and (
                         identity_fields.get("email") or identity_fields.get("phone")
                     ):

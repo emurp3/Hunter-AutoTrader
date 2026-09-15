@@ -160,6 +160,29 @@ def test_google_checkpoint_reopened_with_specific_personal_data_ask(monkeypatch)
         assert google.commander_response is None
 
 
+def test_google_checkpoint_does_not_reask_identity_already_in_profile(monkeypatch):
+    """A restart may still need the mission-specific date range, but must
+    not ask again for name/contact fields already present in durable profile
+    memory."""
+    _clear_identity_env(monkeypatch)
+    monkeypatch.setenv("HUNTER_COMMANDER_FULL_NAME", "Eddie Murphy Jr.")
+    monkeypatch.setenv("HUNTER_COMMANDER_EMAIL", "eddie@example.com")
+    engine = _make_engine()
+    _seed(engine)
+    _run_bootstrap(engine, monkeypatch)
+
+    with Session(engine) as session:
+        google = session.exec(
+            select(CanonicalOpportunity).where(
+                CanonicalOpportunity.canonical_opportunity_id ==
+                "HUNTER-CAND-2026-09-08-02-GOOGLE"
+            )
+        ).first()
+        assert "date range" in google.required_commander_checkpoints
+        assert "full legal name" not in google.required_commander_checkpoints
+        assert "email or phone" not in google.required_commander_checkpoints
+
+
 def test_google_reopen_does_not_repeat_once_already_reopened(monkeypatch):
     """Regression test for a real bug found live: answering a checkpoint
     moves disposition to WATCHLIST (via record_commander_answer), not
